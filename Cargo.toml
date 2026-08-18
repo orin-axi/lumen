@@ -1,0 +1,92 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lumen-model",
+    "crates/lumen-session",
+    "crates/lumen-analysis",
+    "crates/lumen-pattern",
+    "crates/lumen-store",
+    "crates/lumen-fixtures",
+    "crates/lumen-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+authors = ["Gabriel Castro (Orin DX)"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/orin-dx/lumen"
+
+[workspace.dependencies]
+# Internal workspace crates
+lumen-model = { path = "crates/lumen-model" }
+lumen-session = { path = "crates/lumen-session" }
+lumen-analysis = { path = "crates/lumen-analysis" }
+lumen-pattern = { path = "crates/lumen-pattern" }
+lumen-store = { path = "crates/lumen-store" }
+lumen-fixtures = { path = "crates/lumen-fixtures" }
+
+# Database & Storage
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+camino = { version = "1.1", features = ["serde1"] }
+tempfile = "3.13"
+proptest = "1.6"
+insta = { version = "1.41", features = ["json", "yaml", "redactions"] }
+rstest = "0.23"
+pretty_assertions = "1.4"
+
+
+
+
+# Data structures & serialization
+compact_str = { version = "0.8", features = ["serde"] }
+smallvec = { version = "1.13", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+simd-json = "0.14"
+
+# Graph and parallel processing
+petgraph = "0.6"
+rayon = "1.10"
+memmap2 = "0.9"
+
+# Error handling & CLI
+thiserror = "2.0"
+miette = { version = "7.4", features = ["fancy"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+comfy-table = "7.1"
+anstream = "0.6"
+anstyle = "1.0"
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+let_underscore_drop = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "allow"
+expect_used = "allow"
+let_underscore_must_use = "deny"
+let_underscore_untyped = "deny"
+map_err_ignore = "deny"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+
+
+

@@ -1,0 +1,23 @@
+[package]
+name = "lumen-pattern"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "FSL-1.1-MIT"
+description = "Petgraph-backed Trajectory DAG and Tarjan SCC cycle detector for Lumen"
+
+[dependencies]
+lumen-model = { workspace = true }
+compact_str = { workspace = true }
+smallvec = { workspace = true }
+serde = { workspace = true }
+petgraph = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+
+

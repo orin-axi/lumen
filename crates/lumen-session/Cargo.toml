@@ -1,0 +1,31 @@
+[package]
+name = "lumen-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Zero-copy streaming ingestion and multi-orchestrator adapters for Lumen"
+
+[dependencies]
+lumen-model = { workspace = true }
+compact_str = { workspace = true }
+smallvec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+simd-json = { workspace = true }
+thiserror = { workspace = true }
+memmap2 = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rstest = { workspace = true }
+insta = { workspace = true }
+lumen-fixtures = { workspace = true }
+
+
+[lints]
+workspace = true
+
+

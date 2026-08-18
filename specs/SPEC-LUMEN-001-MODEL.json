@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-001-MODEL",
+  "purpose": "Defines the canonical domain primitives, token economics, pricing matrix, and intermediate representation (IR) types for the Lumen session intelligence and Prism evaluation platforms.",
+  "scope": "Covers crates/lumen-model: CanonicalTranscript, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage, ModelPricing, TokenEconomics, ModelTokenSummary, ExecutionTiming, TrajectoryAnomaly, and SchemaCitation.",
+  "non_goals": [
+    "Log file ingestion, disk I/O, or format parsing (delegated to lumen-session).",
+    "Stateful metric accumulation or anomaly detection algorithms (delegated to lumen-analysis and lumen-pattern).",
+    "Evaluation assertion grading or test execution (delegated to prism-grader)."
+  ],
+  "api_surface": [
+    {
+      "name": "CanonicalTranscript",
+      "signature": "pub struct CanonicalTranscript { pub session_id: CompactString, pub parent_session_id: Option<CompactString>, pub orchestrator: OrchestratorKind, pub model_family: CompactString, pub timing: ExecutionTiming, pub economics: TokenEconomics, pub turns: Vec<CanonicalTurn>, pub subagents: Vec<CanonicalTranscript>, pub extracted_schemas: SmallVec<[SchemaCitation; 4]>, pub detected_anomalies: SmallVec<[TrajectoryAnomaly; 4]> }",
+      "description": "Universal normalized transcript representation holding the complete conversation tree, subagent hierarchy, token economics, and extracted schema artifacts.",
+      "error_conditions": [
+        "Deserialization error if JSON payload violates field types"
+      ]
+    },
+    {
+      "name": "CanonicalTurn",
+      "signature": "pub struct CanonicalTurn { pub turn_index: usize, pub role: TurnRole, pub timestamp: DateTime<Utc>, pub latency_ms: u64, pub text: Option<String>, pub tool_calls: SmallVec<[CanonicalToolCall; 2]>, pub tool_results: SmallVec<[CanonicalToolResult; 2]>, pub usage: Option<TurnTokenUsage> }",
+      "description": "Normalized user, assistant, system, or tool execution turn.",
+      "error_conditions": []
+    },
+    {
+      "name": "ModelPricing",
+      "signature": "pub struct ModelPricing { pub input_base_per_m: f64, pub cache_write_per_m: f64, pub cache_read_per_m: f64, pub output_per_m: f64 }; impl ModelPricing { pub const CLAUDE_3_5_SONNET: Self; pub const CLAUDE_3_5_HAIKU: Self; pub const CLAUDE_OPUS: Self; pub const GPT_4O: Self; pub const DEEPSEEK_R1: Self; pub const QWEN_2_5_CODER: Self; pub const KIMI_K1_5: Self; pub const GLM_4_PLUS: Self; pub const GEMINI_2_0_FLASH: Self; pub const GEMINI_2_0_PRO: Self; pub fn from_model_name(name: &str) -> Self; pub fn compute_cost(&self, usage: &TurnTokenUsage) -> f64; pub fn compute_baseline_cost(&self, usage: &TurnTokenUsage) -> f64; }",
+      "description": "Pricing rate matrix computing exact USD costs per turn and cold-cache baseline costs across major commercial LLM model families.",
+      "error_conditions": [
+        "Defaults to CLAUDE_3_5_SONNET rates if model string is unrecognized"
+      ]
+    },
+    {
+      "name": "TokenEconomics",
+      "signature": "pub struct TokenEconomics { pub input_tokens: u64, pub output_tokens: u64, pub cache_creation_tokens: u64, pub cache_read_tokens: u64, pub ephemeral_5m_tokens: u64, pub ephemeral_1h_tokens: u64, pub cache_hit_ratio: f32, pub total_cost_usd: f64, pub baseline_cost_no_cache_usd: f64, pub net_savings_usd: f64, pub efficiency_multiplier: f32, pub per_model: HashMap<CompactString, ModelTokenSummary> }; impl TokenEconomics { pub fn calculate(input_tokens: u64, output_tokens: u64, cache_creation_tokens: u64, cache_read_tokens: u64, model_name: &str) -> Self; }",
+      "description": "Aggregated session economics calculating exact financial costs, prompt cache hit ratios, net USD savings, and financial efficiency multipliers.",
+      "error_conditions": [
+        "Sets cache_hit_ratio to 0.0 and efficiency_multiplier to 1.0 if total prompt tokens is zero"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-001",
+      "criterion": "WHEN CanonicalTranscript is serialized to JSON and deserialized back to Rust, THE SYSTEM SHALL preserve identical struct equality with zero data loss.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-002",
+      "criterion": "WHEN computing Claude 3.5 Sonnet costs, THE SYSTEM SHALL bill uncached inputs at $3.00/M, cache creation writes at $3.75/M (1.25x), cache reads at $0.30/M (0.10x), and output tokens at $15.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-003",
+      "criterion": "WHEN computing Claude 3.5 Haiku costs, THE SYSTEM SHALL bill uncached inputs at $0.80/M, cache creation writes at $1.00/M (1.25x), cache reads at $0.08/M (0.10x), and output tokens at $4.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-004",
+      "criterion": "WHEN computing Qwen 2.5 Coder costs, THE SYSTEM SHALL bill uncached inputs at $0.20/M, cache reads at $0.05/M, and output tokens at $0.60/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-005",
+      "criterion": "WHEN computing prompt cache hit ratio H, THE SYSTEM SHALL calculate H = (cache_read_tokens / (input_tokens + cache_creation_tokens + cache_read_tokens)) * 100.0.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-006",
+      "criterion": "WHEN computing financial efficiency multiplier eta, THE SYSTEM SHALL calculate eta = baseline_cost_no_cache_usd / total_cost_usd.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-007",
+      "criterion": "IF total prompt tokens is zero, THE SYSTEM SHALL return cache_hit_ratio of 0.0 and efficiency_multiplier of 1.0 without dividing by zero.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-008",
+      "criterion": "WHEN an unrecognized model string is passed to ModelPricing::from_model_name, THE SYSTEM SHALL default to Claude 3.5 Sonnet pricing rates.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-009",
+      "criterion": "WHEN calculating net USD savings, THE SYSTEM SHALL ensure net_savings_usd is clamped to a minimum of 0.0.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-010",
+      "criterion": "WHEN TurnTokenUsage calculates prompt_tokens, THE SYSTEM SHALL return the sum of input_tokens, cache_creation_tokens, and cache_read_tokens.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-001",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-001-MODEL.json",
+  "reasoning": "Establishes the foundational type system, token accounting formulas, and expanded pricing matrices (Sonnet, Haiku, Opus, GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini) required for downstream analysis."
+}

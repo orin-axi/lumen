@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-002-SESSION",
+  "purpose": "Defines the zero-copy streaming ingestion engine, auto-fingerprinting detector, and orchestrator adapters for parsing Claude Code, Antigravity (AGY), Codex, and OpenCode session logs into CanonicalTranscript representations.",
+  "scope": "Covers crates/lumen-session: SessionAdapter trait, AdapterCapabilities, fingerprint detection, ClaudeCodeAdapter, AgyAdapter, CodexAdapter, OpenCodeAdapter, PreCompact snapshot merge, and IngestionError.",
+  "non_goals": [
+    "Database persistence, schema migrations, or queue supervisors (delegated to session-daemon).",
+    "Evaluation assertion grading or pass/fail decisions (delegated to prism-grader)."
+  ],
+  "api_surface": [
+    {
+      "name": "SessionAdapter",
+      "signature": "pub trait SessionAdapter: Send + Sync { fn name(&self) -> &'static str; fn matches_fingerprint(&self, sample: &str) -> bool; fn capabilities(&self) -> AdapterCapabilities; fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError>; }",
+      "description": "Streaming parser trait implemented by orchestrator adapters to project newline-delimited logs into CanonicalTranscript.",
+      "error_conditions": [
+        "IngestionError::MalformedJson if JSON line fails to parse",
+        "IngestionError::UnrecognizedFormat if log sample does not match known orchestrators"
+      ]
+    },
+    {
+      "name": "AdapterCapabilities",
+      "signature": "pub struct AdapterCapabilities { pub has_token_usage: bool, pub has_tool_results: bool, pub has_shell_commands: bool, pub has_file_events: bool, pub has_lifecycle_hooks: bool, pub supports_incremental_offsets: bool, pub supports_cost_estimation: bool }",
+      "description": "Observability declaration exposing what telemetric capabilities are supported by the target orchestrator.",
+      "error_conditions": []
+    },
+    {
+      "name": "detect_orchestrator",
+      "signature": "pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind>",
+      "description": "Sub-millisecond fingerprint detector inspecting the first 2048 bytes of a session log to identify Claude Code, AGY, Codex, or OpenCode.",
+      "error_conditions": [
+        "Returns None if byte sample contains insufficient or ambiguous headers"
+      ]
+    },
+    {
+      "name": "merge_precompact_snapshots",
+      "signature": "pub fn merge_precompact_snapshots(final_transcript: CanonicalTranscript, snapshots: &[TurnTokenUsage]) -> CanonicalTranscript",
+      "description": "Applies the max() cumulative token merge invariant across pre-compaction snapshots to prevent double-counting on compacted sessions.",
+      "error_conditions": []
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-020",
+      "criterion": "WHEN a session file starts with Claude Code permission or mode headers, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::ClaudeCode in under 1 millisecond.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-021",
+      "criterion": "WHEN a session file starts with AGY step_index and source headers, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::Antigravity in under 1 millisecond.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-022",
+      "criterion": "WHEN ClaudeCodeAdapter parses an assistant message containing tool_use blocks, THE SYSTEM SHALL extract tool_name, call_id, and typed ToolIntent in the CanonicalTurn.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-023",
+      "criterion": "WHEN ClaudeCodeAdapter parses message.usage, THE SYSTEM SHALL extract input_tokens, output_tokens, cache_creation_input_tokens, and cache_read_input_tokens.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-024",
+      "criterion": "WHEN merging pre-compaction snapshots, THE SYSTEM SHALL compute input_tokens = max(final_input, max(snapshot_inputs)) and cache_read_tokens = max(final_cache_read, max(snapshot_cache_reads)).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-025",
+      "criterion": "IF a JSONL log contains corrupted, truncated, or non-UTF8 lines, THE SYSTEM SHALL skip the malformed line, record a warning, and continue parsing without panicking.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-026",
+      "criterion": "WHEN subagent metadata files (*.meta.json) exist in the subagents/ directory, THE SYSTEM SHALL link each child subagent transcript to its parent tool_use_id and record its spawnDepth.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-027",
+      "criterion": "WHEN AgyAdapter parses a PLANNER_RESPONSE step containing thinking blocks, THE SYSTEM SHALL extract the reasoning text into CanonicalTurn.text.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-028",
+      "criterion": "IF an empty session file is supplied, THE SYSTEM SHALL return a valid CanonicalTranscript with 0 turns and 0 token usage without erroring.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-029",
+      "criterion": "WHEN memory-mapped file parsing is requested on a 50MB session file, THE SYSTEM SHALL parse all turns in under 35 milliseconds.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-002",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-002-SESSION.json",
+  "reasoning": "Establishes zero-copy streaming ingestion across multi-orchestrator log formats with snapshot merging and subagent tree resolution."
+}

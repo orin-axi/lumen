@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-007-INSIGHTS",
+  "purpose": "Defines the workflow classification engine, bimodal interaction modeling, dynamic category discovery, and RTK modern CLI missed-savings rules for Lumen.",
+  "scope": "Covers crates/lumen-insights: WorkflowClassifier, CategoryDetector, RtkOpportunityRule, FindingGenerator, BimodalClassifier, and RollupEngine.",
+  "non_goals": [
+    "Raw SQLite database table management (handled by lumen-store).",
+    "Active code execution or test running (handled by prism-core)."
+  ],
+  "api_surface": [
+    {
+      "name": "WorkflowClassifier",
+      "signature": "pub struct WorkflowClassifier; impl WorkflowClassifier { pub fn classify_seed(transcript: &CanonicalTranscript) -> Vec<CategoryScore>; pub fn discover_fingerprint(transcript: &CanonicalTranscript) -> Option<DiscoveredCategory>; pub fn classify_bimodal(transcript: &CanonicalTranscript) -> BimodalMode; }",
+      "description": "Classifies session transcripts into seed categories (feature_dev, bug_hunt, refactoring, test_authoring, eval) and discovers new category clusters.",
+      "error_conditions": []
+    },
+    {
+      "name": "RtkOpportunityRule",
+      "signature": "pub struct RtkOpportunityRule; impl RtkOpportunityRule { pub fn evaluate(commands: &[CommandEventRecord]) -> Vec<StructuredFinding>; }",
+      "description": "Evaluates command event sequences to detect legacy POSIX tool invocations (grep, find, cat, cd) and generate actionable modern CLI recommendations.",
+      "error_conditions": []
+    },
+    {
+      "name": "FindingGenerator",
+      "signature": "pub struct FindingGenerator; impl FindingGenerator { pub fn generate_findings(transcript: &CanonicalTranscript, loop_anomalies: &[CycleAnomaly]) -> Vec<StructuredFinding>; }",
+      "description": "Synthesizes structured findings containing severity, confidence, rule version, evidence JSON, and remediation recommendations.",
+      "error_conditions": []
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-080",
+      "criterion": "WHEN a session contains high tool mutation density and low search turn count, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Acceleration.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-081",
+      "criterion": "WHEN a session contains high search tool density and high turn count, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Exploration.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-082",
+      "criterion": "WHEN a command event sequence contains grep or egrep invocations, THE SYSTEM SHALL emit an RTK opportunity finding recommending ripgrep (rg) with an estimated speedup metric.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-083",
+      "criterion": "WHEN a command event sequence contains find invocations, THE SYSTEM SHALL emit an RTK opportunity finding recommending fd to prevent traversing ignored build directories.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-084",
+      "criterion": "WHEN structured findings are generated, THE SYSTEM SHALL populate evidence_json, confidence score in [0.0, 1.0], rule_or_model_version, and actionable recommendation text.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-085",
+      "criterion": "WHEN computing periodic rollups, THE SYSTEM SHALL aggregate session count, total cost USD, active wall time, and finding counts by repository, category, and weekly period start.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-007",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-007-INSIGHTS.json",
+  "reasoning": "Establishes workflow categorization, bimodal theory modeling, RTK missed savings coaching, and structured finding generation."
+}

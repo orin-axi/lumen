@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-003-STORE",
+  "purpose": "Defines the local-first SQLite persistence layer, WAL concurrency mode, database migrations, connection pooling, repository APIs, and typed read models for Lumen session intelligence.",
+  "scope": "Covers crates/lumen-store: SqliteStore, MigrationManager, QueueRepository, SessionRepository, ToolCallRepository, CommandEventRepository, FindingsRepository, RollupRepository, and typed read models.",
+  "non_goals": [
+    "Hook process interception or daemon async scheduling (handled by lumen-daemon).",
+    "Log file parsing or stream transformation (handled by lumen-session).",
+    "Direct network I/O or remote cloud sync."
+  ],
+  "api_surface": [
+    {
+      "name": "SqliteStore",
+      "signature": "pub struct SqliteStore { pool: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, is_read_only: bool }; impl SqliteStore { pub fn open(path: &Utf8Path) -> Result<Self, StoreError>; pub fn open_read_only(path: &Utf8Path) -> Result<Self, StoreError>; pub fn run_migrations(&self) -> Result<usize, StoreError>; pub fn connection(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, StoreError>; }",
+      "description": "Connection pool manager configuring SQLite in WAL mode with PRAGMA foreign_keys = ON and query_only flags for concurrent multi-reader access.",
+      "error_conditions": [
+        "StoreError::MigrationFailed if forward schema migration encounters SQL error",
+        "StoreError::ReadOnlyViolation if write query is attempted on read-only pool"
+      ]
+    },
+    {
+      "name": "QueueRepository",
+      "signature": "pub struct QueueRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> QueueRepository<'a> { pub fn enqueue(&self, provider: &str, session_id: &str, source_path: &str, source_hash: u64) -> Result<i64, StoreError>; pub fn fetch_pending(&self, limit: usize) -> Result<Vec<QueuedSessionRow>, StoreError>; pub fn mark_completed(&self, id: i64) -> Result<(), StoreError>; pub fn mark_failed(&self, id: i64, error: &str) -> Result<(), StoreError>; }",
+      "description": "Repository managing the ingestion_queue table with exponential retry scheduling and dead-letter classification after 3 failures.",
+      "error_conditions": []
+    },
+    {
+      "name": "SessionRepository",
+      "signature": "pub struct SessionRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> SessionRepository<'a> { pub fn upsert_session(&self, record: &SessionFactRecord) -> Result<(), StoreError>; pub fn get_session(&self, id: &str) -> Result<Option<SessionDetailReadModel>, StoreError>; pub fn list_recent(&self, filter: &SessionFilter) -> Result<Vec<SessionSummaryReadModel>, StoreError>; }",
+      "description": "Repository for normalized session facts, supporting idempotent upserts keyed on (provider, provider_session_id) and typed read models.",
+      "error_conditions": []
+    },
+    {
+      "name": "FindingsRepository",
+      "signature": "pub struct FindingsRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> FindingsRepository<'a> { pub fn insert_findings(&self, session_id: &str, findings: &[FindingFactRecord]) -> Result<(), StoreError>; pub fn list_top_findings(&self, limit: usize) -> Result<Vec<FindingReadModel>, StoreError>; }",
+      "description": "Repository storing structured findings with confidence scores, evidence JSON payloads, and rule versions.",
+      "error_conditions": []
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-030",
+      "criterion": "WHEN SqliteStore opens a database file, THE SYSTEM SHALL configure PRAGMA journal_mode = WAL and PRAGMA foreign_keys = ON.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-031",
+      "criterion": "WHEN open_read_only is called, THE SYSTEM SHALL configure PRAGMA query_only = ON and disallow any INSERT, UPDATE, or DELETE operations.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-032",
+      "criterion": "WHEN migrations are executed on a fresh database, THE SYSTEM SHALL apply all migrations from V1 to V5 and create ingestion_queue, session_snapshots, pipeline_runs, sessions, tool_calls, command_events, token_usage, session_category_scores, findings, rollups, and discovered_categories tables.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-033",
+      "criterion": "WHEN upsert_session is called multiple times with identical (provider, provider_session_id), THE SYSTEM SHALL perform an idempotent update without creating duplicate rows.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-034",
+      "criterion": "WHEN mark_failed is invoked on an ingestion queue item whose retry_count reaches 3, THE SYSTEM SHALL transition its status to 'dead_letter' and record the last error string.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-035",
+      "criterion": "IF a database migration script fails during execution, THE SYSTEM SHALL roll back the transaction and return StoreError::MigrationFailed without modifying database state.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-036",
+      "criterion": "WHEN list_recent is executed with limit = 50, THE SYSTEM SHALL return typed SessionSummaryReadModel structs in under 2 milliseconds.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-037",
+      "criterion": "WHEN command events are inserted, THE SYSTEM SHALL store command_base and redacted argument patterns, ensuring zero raw private arguments are persisted.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-038",
+      "criterion": "WHEN serializing read models to JSON, THE SYSTEM SHALL produce byte-identical JSON matching the Mac app and CLI read contracts with BTreeMap ordering.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-039",
+      "criterion": "IF a database is locked by a concurrent reader, THE SYSTEM SHALL retry with busy_timeout = 5000ms before returning an error.",
+      "is_error_case": true,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-003",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-003-STORE.json",
+  "reasoning": "Establishes the durable, local-first SQLite WAL storage engine, migration manager, repository boundaries, and typed read models."
+}

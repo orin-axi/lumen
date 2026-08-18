@@ -1,0 +1,51 @@
+use chrono::{DateTime, Utc};
+use compact_str::CompactString;
+use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+
+use crate::economics::TokenEconomics;
+use crate::schema::SchemaCitation;
+use crate::turn::CanonicalTurn;
+
+/// Universal canonical intermediate representation (IR) for an agent session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CanonicalTranscript {
+    pub session_id: CompactString,
+    pub parent_session_id: Option<CompactString>,
+    pub orchestrator: OrchestratorKind,
+    pub model_family: CompactString,
+    pub timing: ExecutionTiming,
+    pub economics: TokenEconomics,
+    pub turns: Vec<CanonicalTurn>,
+    pub subagents: Vec<CanonicalTranscript>,
+    pub extracted_schemas: SmallVec<[SchemaCitation; 4]>,
+    pub detected_anomalies: SmallVec<[TrajectoryAnomaly; 4]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OrchestratorKind {
+    ClaudeCode,
+    Antigravity,
+    Codex,
+    OpenCode,
+    Kimi,
+    GenericOtel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionTiming {
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub wall_duration_ms: u64,
+    pub active_duration_ms: u64,
+    pub idle_duration_ms: u64,
+    pub idle_gap_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrajectoryAnomaly {
+    CircularLoop { symbol: CompactString, cycle_depth: usize },
+    ContextFlood { turns: usize, uncompressed_tokens: u64 },
+    GateStall { agent_pair: CompactString, observed_rounds: usize },
+    UngroundedDrafting { missing_symbol: CompactString, target_file: CompactString },
+}

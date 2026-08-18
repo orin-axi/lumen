@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-005-ANALYSIS",
+  "purpose": "Defines the 22 single-pass streaming accumulators and telemetry analytics engine for computing behavioral, economic, and operational metrics across agent transcripts in O(N) linear time.",
+  "scope": "Covers crates/lumen-analysis: RawMessageAccumulator and EntryAccumulator traits, 22 accumulators (token_usage, circuit_breaker, mcp_affinity, flow, turn_duration, tool_inventory, context_growth, permission_mode, hook_activity, api_health, pr_link, fuzzy_tools, attribution, self_correction, autonomy, schema_extractor, stats, timeline, artifacts, otel_correlation, span_mapping, trajectory_dag), and subagent attribution.",
+  "non_goals": [
+    "Log file format parsing or I/O streaming (handled by lumen-session).",
+    "Tarjan SCC cycle graph algorithms (handled by lumen-pattern).",
+    "Writing to disk or external databases (pure computation engine)."
+  ],
+  "api_surface": [
+    {
+      "name": "RawMessageAccumulator",
+      "signature": "pub trait RawMessageAccumulator { type Output: Serialize + Send; fn update_raw(&mut self, message: &serde_json::Value); fn finalize(self) -> Self::Output; }",
+      "description": "Lifecycle contract for single-pass stream accumulators operating on raw JSON frames.",
+      "error_conditions": [
+        "Must handle missing keys without panicking"
+      ]
+    },
+    {
+      "name": "EntryAccumulator",
+      "signature": "pub trait EntryAccumulator { type Output: Serialize + Send; fn update(&mut self, entry: &CanonicalTurn); fn finalize(self) -> Self::Output; }",
+      "description": "Lifecycle contract for single-pass stream accumulators operating on semantic CanonicalTurn structs.",
+      "error_conditions": []
+    },
+    {
+      "name": "TokenUsageAccumulator",
+      "signature": "pub struct TokenUsageAccumulator { pub input_tokens: u64, pub output_tokens: u64, pub cache_creation_tokens: u64, pub cache_read_tokens: u64, pub per_model: BTreeMap<CompactString, ModelTokenSummary>, pub turns: u64 }; impl TokenUsageAccumulator { pub fn update_raw(&mut self, message: &serde_json::Value); pub fn finalize(self) -> TokenEconomics; }",
+      "description": "Single-pass token accountant tracking ephemeral 5m/1h cache writes, cache reads, and exact USD costs.",
+      "error_conditions": []
+    },
+    {
+      "name": "CircuitBreakerAccumulator",
+      "signature": "pub struct CircuitBreakerAccumulator { pub max_observed_rounds: usize, pub stalls: Vec<CircuitStallEvent> }; impl CircuitBreakerAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> CircuitBreakerReport; }",
+      "description": "Tracks multi-agent consensus iterations (e.g. Drafter and Auditor) and detects review stalls exceeding 2 rounds.",
+      "error_conditions": []
+    },
+    {
+      "name": "SchemaExtractorAccumulator",
+      "signature": "pub struct SchemaExtractorAccumulator { pub extracted: Vec<SchemaCitation> }; impl SchemaExtractorAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> Vec<SchemaCitation>; }",
+      "description": "Extracts and validates embedded JSON schema artifacts (spec@1, plan@1, changeset@1, eval-report@1) against Draft-07 schemas.",
+      "error_conditions": [
+        "Flags is_valid = false if extracted JSON violates schema"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-060",
+      "criterion": "WHEN processing a session stream, THE SYSTEM SHALL execute all 22 accumulators in a single linear pass over the messages in O(N) time with zero heap allocations in the inner loop.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-061",
+      "criterion": "WHEN TokenUsageAccumulator processes an assistant message with usage, THE SYSTEM SHALL add input_tokens, output_tokens, cache_creation_input_tokens, and cache_read_input_tokens to running totals.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-062",
+      "criterion": "WHEN CircuitBreakerAccumulator detects consecutive review handoffs between the same agent pair, THE SYSTEM SHALL increment the round counter and flag a CircuitStallEvent if rounds exceed 2.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-063",
+      "criterion": "WHEN SchemaExtractorAccumulator encounters an embedded JSON block matching a known schema ID, THE SYSTEM SHALL validate the payload against Draft-07 and record a SchemaCitation.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-064",
+      "criterion": "WHEN TurnDurationAccumulator processes message timestamps, THE SYSTEM SHALL compute p50, p95, and average turn latency across all assistant completions.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-065",
+      "criterion": "WHEN ApiHealthAccumulator encounters a 429 rate limit or 5xx server error, THE SYSTEM SHALL record the error code, retry count, and retry latency in milliseconds.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-066",
+      "criterion": "WHEN McpAffinityAccumulator audits tool invocations, THE SYSTEM SHALL calculate the ratio of structured MCP queries versus fallback raw shell commands.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-067",
+      "criterion": "WHEN SelfCorrectionAccumulator observes a tool failure followed immediately by an adjusted parameter retry, THE SYSTEM SHALL record a tool_retry self-correction event.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-068",
+      "criterion": "IF a transcript contains synthetic model strings (starting with <synthetic>), THE SYSTEM SHALL silently exclude them from ModelTokenSummary billing.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-069",
+      "criterion": "WHEN subagent transcripts are processed, THE SYSTEM SHALL aggregate token spend by subagent role and compute the hierarchical economics breakdown.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-005",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-005-ANALYSIS.json",
+  "reasoning": "Specifies the complete 22-accumulator analytics engine for extracting behavioral telemetry, circuit breaker dynamics, and token economics in a single pass."
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-004-DAEMON",
+  "purpose": "Defines the single-writer background daemon service, fast sub-10ms hook handlers, worker pipeline loop, and macOS LaunchAgent lifecycle management for Lumen.",
+  "scope": "Covers crates/lumen-daemon: DaemonServer, HookHandler, WorkerPipeline, LaunchAgentManager, and DaemonConfig.",
+  "non_goals": [
+    "Terminal TUI presentation or user command line interfaces (handled by lumen-cli).",
+    "Evaluation sandboxing or grading execution (handled by prism-core)."
+  ],
+  "api_surface": [
+    {
+      "name": "DaemonServer",
+      "signature": "pub struct DaemonServer { store: Arc<SqliteStore>, config: DaemonConfig, socket_path: Utf8PathBuf }; impl DaemonServer { pub async fn run(&self) -> Result<(), DaemonError>; pub fn start_background() -> Result<u32, DaemonError>; pub fn stop() -> Result<(), DaemonError>; }",
+      "description": "Background service owning the single SQLite WAL write connection, listening on a local Unix domain socket, and driving the worker queue loop.",
+      "error_conditions": [
+        "DaemonError::SocketBindFailed if local Unix domain socket is in use or inaccessible",
+        "DaemonError::AlreadyRunning if daemon PID lockfile exists and process is live"
+      ]
+    },
+    {
+      "name": "HookHandler",
+      "signature": "pub struct HookHandler; impl HookHandler { pub fn handle_enqueue(provider: &str, session_id: &str, path: &str) -> Result<(), DaemonError>; pub fn handle_snapshot(provider: &str, session_id: &str, data: &[u8]) -> Result<(), DaemonError>; }",
+      "description": "Fast-path hook entrypoints invoked by Claude Code PreCompact/Stop hooks or AGY lifecycle triggers.",
+      "error_conditions": []
+    },
+    {
+      "name": "LaunchAgentManager",
+      "signature": "pub struct LaunchAgentManager; impl LaunchAgentManager { pub fn install() -> Result<(), DaemonError>; pub fn uninstall() -> Result<(), DaemonError>; pub fn is_installed() -> bool; pub fn status() -> Result<ServiceStatus, DaemonError>; }",
+      "description": "Manages the macOS LaunchAgent plist (~/Library/LaunchAgents/dev.techworx.lumen.daemon.plist) and maintains compatibility with the stubhub-ai-telemetry binary alias.",
+      "error_conditions": [
+        "DaemonError::PlistWriteFailed if LaunchAgents directory is not writable"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-050",
+      "criterion": "WHEN lumen daemon enqueue is invoked by a Stop hook, THE SYSTEM SHALL record the session row into the ingestion queue in under 10 milliseconds p95 without performing transcript parsing.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-051",
+      "criterion": "WHEN lumen daemon snapshot is invoked by a PreCompact hook, THE SYSTEM SHALL save the pre-compaction BLOB into session_snapshots in under 50 milliseconds p95.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-052",
+      "criterion": "WHEN the daemon starts up, THE SYSTEM SHALL acquire an exclusive PID lockfile and refuse to start if another instance is already running.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-053",
+      "criterion": "WHEN the worker loop processes a queued session, THE SYSTEM SHALL run adapter normalization, execute the 22 accumulators, insert fact rows, and mark the queue item completed in a single SQLite transaction.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-054",
+      "criterion": "IF a transcript is corrupted or unparseable, THE SYSTEM SHALL catch the error, increment retry_count, schedule exponential backoff, and avoid crashing the daemon process.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-055",
+      "criterion": "WHEN lumen daemon install is executed on macOS, THE SYSTEM SHALL generate and load a LaunchAgent plist configured for RunAtLoad and KeepAlive.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-056",
+      "criterion": "WHEN lumen daemon uninstall is executed, THE SYSTEM SHALL unload the LaunchAgent service, delete the plist file, and clean up socket artifacts.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-057",
+      "criterion": "WHEN SIGINT or SIGTERM is received, THE SYSTEM SHALL complete any in-flight SQLite transaction and gracefully shut down within 500 milliseconds.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-004",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-004-DAEMON.json",
+  "reasoning": "Establishes the single-writer daemon service, sub-10ms hook budgets, worker queue execution, and LaunchAgent lifecycle management."
+}

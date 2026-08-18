@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-008-CLI",
+  "purpose": "Defines the developer terminal experience, interactive TUI explorer, subcommands, diagnostic doctor checks, and multi-format outputs (Human, JSON, and TOON) for Lumen.",
+  "scope": "Covers crates/lumen-cli: CLI entrypoints (status, refresh, sessions, session, categories, insights, weekly, export, doctor, daemon), TUI renderer, and formatters.",
+  "non_goals": [
+    "Database write locks or background worker execution (delegated to lumen-daemon).",
+    "Active test suite running (delegated to prism-cli)."
+  ],
+  "api_surface": [
+    {
+      "name": "CliApp",
+      "signature": "pub struct CliApp; impl CliApp { pub async fn run(args: CliArgs) -> Result<(), CliError>; }",
+      "description": "Top-level command line router executing read-only SQLite queries or issuing IPC triggers to lumen-daemon.",
+      "error_conditions": [
+        "CliError::DaemonNotRunning if IPC commands fail to reach daemon socket",
+        "CliError::DatabaseNotFound if SQLite database has not been initialized"
+      ]
+    },
+    {
+      "name": "DoctorEngine",
+      "signature": "pub struct DoctorEngine; impl DoctorEngine { pub fn run_checks(fix: bool) -> DoctorReport; }",
+      "description": "Runs diagnostic self-checks verifying SQLite WAL health, daemon PID status, LaunchAgent registration, hook installations, and provider directory permissions.",
+      "error_conditions": []
+    },
+    {
+      "name": "ToonFormatter",
+      "signature": "pub struct ToonFormatter; impl ToonFormatter { pub fn format_sessions(sessions: &[SessionSummaryReadModel]) -> String; pub fn format_findings(findings: &[FindingReadModel]) -> String; }",
+      "description": "Formats session and finding lists as Token-Optimized Object Notation (TOON) using michi-toon to cut token consumption by 60% for agent consumption.",
+      "error_conditions": []
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-090",
+      "criterion": "WHEN lumen status is executed, THE SYSTEM SHALL display daemon state, queue depth, SQLite DB size, total spend, and cache hit ratio in under 5 milliseconds.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-091",
+      "criterion": "WHEN lumen refresh is executed, THE SYSTEM SHALL send an IPC trigger to the daemon and wait synchronously until all queued sessions are ingested.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-092",
+      "criterion": "WHEN any view command is executed with --json, THE SYSTEM SHALL output valid JSON conforming byte-for-byte to the shared read model schema.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-093",
+      "criterion": "WHEN any view command is executed with --toon, THE SYSTEM SHALL render tabular data in Token-Optimized Object Notation via michi-toon.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-094",
+      "criterion": "WHEN lumen session <id> is executed, THE SYSTEM SHALL display session metadata, 4-tier token balance sheet, turn latency waterfall, and loop anomaly alerts.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-095",
+      "criterion": "WHEN lumen weekly is executed, THE SYSTEM SHALL display a 7-day rollup of sessions, active coding time, token spend, and git commits grouped by repository.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-096",
+      "criterion": "WHEN lumen doctor is executed, THE SYSTEM SHALL evaluate daemon health, SQLite integrity, hook registrations, and provider directory permissions, returning pass/fail indicators for each check.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-097",
+      "criterion": "WHEN lumen doctor --fix is executed, THE SYSTEM SHALL automatically correct broken hook symlinks and repair database permissions without user intervention.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-098",
+      "criterion": "IF the SQLite database file does not exist when a view command runs, THE SYSTEM SHALL display a helpful onboarding error instructing the user to run lumen daemon install.",
+      "is_error_case": true,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-008",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-008-CLI.json",
+  "reasoning": "Establishes the developer CLI experience, diagnostic doctor engine, and multi-format outputs (Human, JSON, TOON)."
+}

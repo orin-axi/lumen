@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spec@1",
+  "id": "SPEC-LUMEN-006-PATTERN",
+  "purpose": "Defines the graph-theoretical trajectory modeling, Tarjan SCC cycle loop detection, argument grounding scoring, and resolution monotonicity algorithms for Lumen.",
+  "scope": "Covers crates/lumen-pattern: TrajectoryGraph, TrajectoryNode, TrajectoryEdge, TarjanCycleDetector, compute_grounding_score, and calculate_monotonicity.",
+  "non_goals": [
+    "Raw token pricing or financial accounting (delegated to lumen-model).",
+    "Database persistence or query filtering (delegated to lumen-store)."
+  ],
+  "api_surface": [
+    {
+      "name": "TrajectoryGraph",
+      "signature": "pub struct TrajectoryGraph { graph: petgraph::graph::DiGraph<TrajectoryNode, TrajectoryEdge> }; impl TrajectoryGraph { pub fn from_transcript(transcript: &CanonicalTranscript) -> Self; pub fn detect_cycles(&self) -> Vec<Vec<usize>>; pub fn calculate_monotonicity(&self) -> f32; pub fn compute_grounding_score(&self) -> f32; }",
+      "description": "Directed acyclic/cyclic graph representation of agent execution paths, tool dependencies, and state transitions.",
+      "error_conditions": []
+    },
+    {
+      "name": "TarjanCycleDetector",
+      "signature": "pub struct TarjanCycleDetector; impl TarjanCycleDetector { pub fn find_scc_cycles(graph: &TrajectoryGraph) -> Vec<CycleAnomaly>; }",
+      "description": "Executes Tarjan's strongly connected components algorithm to find cyclic tool loops and redundant file exploration.",
+      "error_conditions": []
+    },
+    {
+      "name": "calculate_monotonicity",
+      "signature": "pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32",
+      "description": "Computes the monotonicity coefficient M in [0.0, 1.0] measuring whether each turn moves monotonically closer to task resolution.",
+      "error_conditions": []
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "CRIT-LUMEN-070",
+      "criterion": "WHEN a transcript contains 3 identical view_file invocations on the same path without interleaving mutations, THE SYSTEM SHALL identify a Tarjan SCC cyclic loop and emit a CycleAnomaly.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-071",
+      "criterion": "WHEN computing resolution monotonicity M on a linear pass transcript with zero backtracking, THE SYSTEM SHALL return M = 1.0.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-072",
+      "criterion": "WHEN an agent encounters compiler errors and corrects them on the next turn, THE SYSTEM SHALL compute Error Recovery Index R = 1.0.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-073",
+      "criterion": "WHEN compute_grounding_score is executed, THE SYSTEM SHALL compute the ratio of tool argument values grounded in prior user or tool outputs versus hallucinated values.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-074",
+      "criterion": "IF a transcript has 0 or 1 turns, THE SYSTEM SHALL return monotonicity M = 1.0 and grounding score = 1.0 without dividing by zero.",
+      "is_error_case": true,
+      "judgment_call": false
+    }
+  ],
+  "linked_requirement": "REQ-LUMEN-006",
+  "linked_research": "RES-LUMEN-001",
+  "spec_file_path": "specs/SPEC-LUMEN-006-PATTERN.json",
+  "reasoning": "Establishes graph-theoretical trajectory modeling, Tarjan SCC cycle detection, and mathematical quality indicators."
+}

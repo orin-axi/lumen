@@ -1,0 +1,26 @@
+[package]
+name = "lumen-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "FSL-1.1-MIT"
+description = "22 Single-pass streaming accumulators and telemetry analytics for Lumen"
+
+[dependencies]
+lumen-model = { workspace = true }
+compact_str = { workspace = true }
+smallvec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+rayon = { workspace = true }
+memmap2 = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+
+
