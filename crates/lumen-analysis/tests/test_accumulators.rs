@@ -757,3 +757,70 @@ fn test_artifacts_accumulator_dedup_and_skip_empty() {
     // must be counted exactly once in total_unique_files.
     assert_eq!(metrics.total_unique_files, 2);
 }
+
+#[test]
+fn test_autonomy_streak_flush_and_index() {
+    // CRIT-LUMEN-128/129: Assistant and ToolResult both extend the streak, System
+    // is a no-op that neither breaks nor extends it, User flushes the open streak
+    // into streak_lengths and resets it, and finalize flushes any trailing open
+    // streak before computing max/avg/total_streaks and a full-role autonomy_index.
+    let mut aut = AutonomyAccumulator::default();
+
+    let make_turn = |turn_index: usize, role: TurnRole| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    aut.update(&make_turn(0, TurnRole::User));
+
+    aut.update(&make_turn(1, TurnRole::Assistant));
+    assert_eq!(aut.current_streak, 1);
+    assert_eq!(aut.assistant_turns, 1);
+
+    // A System turn sandwiched between two Assistant turns must neither break
+    // nor extend the streak on its own.
+    aut.update(&make_turn(2, TurnRole::System));
+    assert_eq!(aut.current_streak, 1, "System turn must not reset current_streak");
+
+    aut.update(&make_turn(3, TurnRole::Assistant));
+    assert_eq!(
+        aut.current_streak, 2,
+        "streak must extend across the intervening System turn, proving it was a true no-op"
+    );
+
+    // TurnRole::ToolResult must extend current_streak and increment assistant_turns
+    // identically to TurnRole::Assistant (both share one match arm in autonomy.rs).
+    aut.update(&make_turn(4, TurnRole::ToolResult));
+    assert_eq!(aut.current_streak, 3, "ToolResult must extend current_streak exactly like Assistant");
+    assert_eq!(aut.assistant_turns, 3, "ToolResult must increment assistant_turns exactly like Assistant");
+    assert_eq!(aut.max_streak, 3);
+
+    // A User turn flushes the non-zero open streak into streak_lengths and resets it.
+    aut.update(&make_turn(5, TurnRole::User));
+    assert_eq!(aut.current_streak, 0, "User turn must reset current_streak to 0");
+    assert_eq!(aut.streak_lengths, vec![3], "User turn must flush the open streak into streak_lengths");
+
+    // One more Assistant turn opens a second, trailing streak that is still open
+    // when finalize() is called.
+    aut.update(&make_turn(6, TurnRole::Assistant));
+
+    let metrics = aut.finalize();
+
+    // finalize() must flush the trailing open streak (length 1) before computing
+    // aggregates, yielding streak_lengths == [3, 1].
+    assert_eq!(metrics.max_autonomous_streak, 3);
+    assert_eq!(metrics.total_streaks, 2);
+    assert!((metrics.avg_autonomous_streak - 2.0).abs() < f32::EPSILON);
+
+    // autonomy_index = assistant_turns / total_turns computed over ALL roles
+    // (User, Assistant, System, ToolResult): 4 assistant/tool-result turns out of
+    // 7 total turns (indices 0..=6).
+    assert!((metrics.autonomy_index - (4.0 / 7.0)).abs() < f32::EPSILON);
+}
