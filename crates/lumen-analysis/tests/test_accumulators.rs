@@ -113,6 +113,35 @@ fn test_turn_duration_p50_p95_percentiles() {
 }
 
 #[test]
+fn test_turn_duration_excludes_non_assistant_roles() {
+    // CRIT-LUMEN-064: p50/p95/avg turn latency must be computed "across all
+    // assistant completions" -- non-assistant turns (User, System, ToolResult)
+    // must not contribute even if they carry a nonzero latency_ms.
+    let mut td = TurnDurationAccumulator::default();
+
+    let make_turn = |turn_index: usize, role: TurnRole, latency_ms: u64| CanonicalTurn {
+        turn_index,
+        role,
+        timestamp: Utc::now(),
+        latency_ms,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    td.update(&make_turn(0, TurnRole::Assistant, 100));
+    td.update(&make_turn(1, TurnRole::User, 99999));
+    td.update(&make_turn(2, TurnRole::Assistant, 300));
+
+    let metrics = td.finalize();
+    assert_eq!(metrics.total_turns, 2, "User turn latency must not be counted");
+    assert_eq!(metrics.avg_ms, 200, "User turn's 99999ms latency must not skew the average");
+    assert_eq!(metrics.p50_ms, 300);
+    assert_eq!(metrics.p95_ms, 300);
+}
+
+#[test]
 fn test_context_growth_and_autonomy_accumulators() {
     let mut cg = ContextGrowthAccumulator::default();
     let mut aut = AutonomyAccumulator::default();

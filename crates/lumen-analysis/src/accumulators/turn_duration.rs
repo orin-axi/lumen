@@ -1,4 +1,4 @@
-use lumen_model::CanonicalTurn;
+use lumen_model::{CanonicalTurn, TurnRole};
 use serde::{Deserialize, Serialize};
 
 use crate::traits::EntryAccumulator;
@@ -20,7 +20,7 @@ impl EntryAccumulator for TurnDurationAccumulator {
     type Output = TurnDurationMetrics;
 
     fn update(&mut self, entry: &CanonicalTurn) {
-        if entry.latency_ms > 0 {
+        if entry.role == TurnRole::Assistant && entry.latency_ms > 0 {
             self.latencies.push(entry.latency_ms);
         }
     }
