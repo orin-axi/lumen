@@ -7,10 +7,11 @@ use crate::accumulators::{
     ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AttributionAccumulator,
     AttributionMetrics, AutonomyAccumulator, AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport,
     ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, FuzzyToolsAccumulator,
-    FuzzyToolsMetrics, McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator,
-    PrLinkAccumulator, PrLinkMetrics, SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics,
-    StatsAccumulator, StatsMetrics, TimelineAccumulator, ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode,
-    TrajectoryDagAccumulator, TurnDurationAccumulator, TurnDurationMetrics,
+    FuzzyToolsMetrics, McpAffinityAccumulator, McpAffinityMetrics, OtelCorrelationAccumulator, OtelCorrelationReport,
+    PermissionMetrics, PermissionModeAccumulator, PrLinkAccumulator, PrLinkMetrics, SchemaExtractorAccumulator,
+    SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics, TimelineAccumulator,
+    ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode, TrajectoryDagAccumulator, TurnDurationAccumulator,
+    TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -36,6 +37,7 @@ pub struct AnalysisReport {
     pub by_subagent: BTreeMap<CompactString, AttributionMetrics>,
     pub trajectory_dag: Vec<ToolNode>,
     pub timeline: TimelineAccumulator,
+    pub otel_correlation: OtelCorrelationReport,
 }
 
 pub struct AnalyticsEngine {
@@ -139,6 +141,7 @@ impl AnalyticsEngine {
             by_subagent,
             trajectory_dag: self.trajectory_dag.finalize(),
             timeline: self.timeline.finalize(),
+            otel_correlation: OtelCorrelationAccumulator::finalize(transcript),
         }
     }
 }

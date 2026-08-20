@@ -1490,3 +1490,38 @@ fn test_timeline_accumulator_assistant_streaks_and_idle_gaps() {
     assert_eq!(report.total_idle_ms, expected_gap_ms);
     assert_eq!(report.longest_idle_gap_ms, expected_gap_ms);
 }
+
+#[test]
+fn test_otel_correlation_reads_transcript_field() {
+    // CRIT-LUMEN-152: OtelCorrelationAccumulator reads the parse-time-populated
+    // otel_request_ids field directly (no raw JSON re-scan) and dedupes it
+    // order-preserving, not sorted.
+    let fixed_ts = Utc::now();
+
+    let transcript = CanonicalTranscript {
+        session_id: CompactString::new("sess-abc"),
+        parent_session_id: None,
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: CompactString::new("claude-3-5-sonnet-20241022"),
+        timing: ExecutionTiming {
+            started_at: fixed_ts,
+            ended_at: fixed_ts,
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        turns: vec![],
+        subagents: vec![],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+        otel_request_ids: smallvec!["req-1".into(), "req-2".into(), "req-1".into()],
+    };
+
+    let report = OtelCorrelationAccumulator::finalize(&transcript);
+
+    assert_eq!(report.session_id, "sess-abc");
+    assert_eq!(report.request_ids, vec![CompactString::from("req-1"), CompactString::from("req-2")]);
+    assert_eq!(report.request_id_count, 2);
+}
