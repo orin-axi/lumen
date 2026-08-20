@@ -9,9 +9,9 @@ use crate::accumulators::{
     ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, FuzzyToolsAccumulator,
     FuzzyToolsMetrics, McpAffinityAccumulator, McpAffinityMetrics, OtelCorrelationAccumulator, OtelCorrelationReport,
     PermissionMetrics, PermissionModeAccumulator, PrLinkAccumulator, PrLinkMetrics, SchemaExtractorAccumulator,
-    SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics, TimelineAccumulator,
-    ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode, TrajectoryDagAccumulator, TurnDurationAccumulator,
-    TurnDurationMetrics,
+    SelfCorrectionAccumulator, SelfCorrectionMetrics, SpanMappingAccumulator, StatsAccumulator, StatsMetrics,
+    TimelineAccumulator, ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode, TrajectoryDagAccumulator,
+    TurnDurationAccumulator, TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -38,6 +38,7 @@ pub struct AnalysisReport {
     pub trajectory_dag: Vec<ToolNode>,
     pub timeline: TimelineAccumulator,
     pub otel_correlation: OtelCorrelationReport,
+    pub span_mapping: SpanMappingAccumulator,
 }
 
 pub struct AnalyticsEngine {
@@ -59,6 +60,7 @@ pub struct AnalyticsEngine {
     attribution: AttributionAccumulator,
     trajectory_dag: TrajectoryDagAccumulator,
     timeline: TimelineAccumulator,
+    span_mapping: SpanMappingAccumulator,
 }
 
 impl Default for AnalyticsEngine {
@@ -88,6 +90,7 @@ impl AnalyticsEngine {
             attribution: AttributionAccumulator::default(),
             trajectory_dag: TrajectoryDagAccumulator::default(),
             timeline: TimelineAccumulator::default(),
+            span_mapping: SpanMappingAccumulator::default(),
         }
     }
 
@@ -112,6 +115,7 @@ impl AnalyticsEngine {
             self.attribution.update(turn);
             self.trajectory_dag.update(turn);
             self.timeline.update(turn);
+            self.span_mapping.update(turn);
         }
 
         let mut by_subagent = BTreeMap::new();
@@ -142,6 +146,7 @@ impl AnalyticsEngine {
             trajectory_dag: self.trajectory_dag.finalize(),
             timeline: self.timeline.finalize(),
             otel_correlation: OtelCorrelationAccumulator::finalize(transcript),
+            span_mapping: self.span_mapping.finalize(),
         }
     }
 }

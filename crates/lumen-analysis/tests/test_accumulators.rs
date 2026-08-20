@@ -1534,3 +1534,50 @@ fn test_otel_correlation_reads_transcript_field() {
     assert_eq!(report.request_ids, vec![CompactString::from("req-1"), CompactString::from("req-2")]);
     assert_eq!(report.request_id_count, 2);
 }
+
+#[test]
+fn test_span_mapping_accumulator_mapped_vs_unmapped() {
+    // CRIT-LUMEN-153: a tool_result with Some(otel_span_id) is inserted into
+    // mapped keyed by call_id; a tool_result with None otel_span_id instead
+    // increments unmapped_tool_use_count and is NOT inserted into mapped.
+    let mut sm = SpanMappingAccumulator::default();
+
+    let turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![
+            CanonicalToolResult {
+                call_id: "c1".into(),
+                output_bytes: 0,
+                line_count: 0,
+                is_error: false,
+                error_class: None,
+                truncated_output: None,
+                otel_span_id: Some("span-1".into()),
+            },
+            CanonicalToolResult {
+                call_id: "c2".into(),
+                output_bytes: 0,
+                line_count: 0,
+                is_error: false,
+                error_class: None,
+                truncated_output: None,
+                otel_span_id: None,
+            },
+        ],
+        usage: None,
+    };
+    sm.update(&turn);
+
+    let report = sm.finalize();
+
+    let expected: std::collections::BTreeMap<CompactString, CompactString> =
+        [(CompactString::new("c1"), CompactString::new("span-1"))].into_iter().collect();
+    assert_eq!(report.mapped, expected);
+    assert_eq!(report.unmapped_tool_use_count, 1);
+}
