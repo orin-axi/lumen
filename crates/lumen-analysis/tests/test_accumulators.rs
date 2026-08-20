@@ -974,3 +974,105 @@ fn test_stats_mutually_exclusive_roles_and_byte_length() {
         "total_text_characters must sum UTF-8 byte lengths, not char counts, and skip None text"
     );
 }
+
+#[test]
+fn test_tool_inventory_last_call_wins_and_running_error_key() {
+    // CRIT-LUMEN-135: last_tool_name must reflect the last call in a turn's
+    // tool_calls list, not the first -- even when multiple calls occur in one turn.
+    // CRIT-LUMEN-136: an is_error result is attributed to the accumulator's running
+    // last_tool_name (not any per-result identifier like call_id), and an error
+    // observed before any tool_call has ever run (last_tool_name still None) is
+    // dropped without incrementing any errors_by_tool entry.
+    let mut inv = ToolInventoryAccumulator::default();
+
+    let make_call = |call_id: &str, tool_name: &str| CanonicalToolCall {
+        call_id: call_id.into(),
+        tool_name: tool_name.into(),
+        intent: ToolIntent::Other { raw_name: tool_name.into() },
+        raw_arguments: serde_json::json!({}),
+    };
+
+    let make_result = |call_id: &str, is_error: bool| CanonicalToolResult {
+        call_id: call_id.into(),
+        output_bytes: 0,
+        line_count: 0,
+        is_error,
+        error_class: None,
+        truncated_output: None,
+    };
+
+    // Turn 0: an error result arrives before any tool_call has ever run.
+    // last_tool_name is still None, so this error must be dropped entirely.
+    let t0 = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::ToolResult,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![make_result("orphan_call", true)],
+        usage: None,
+    };
+    inv.update(&t0);
+    assert!(
+        inv.last_tool_name.is_none(),
+        "no tool_call has run yet, so last_tool_name must remain None"
+    );
+    assert!(
+        inv.errors_by_tool.is_empty(),
+        "an error observed before any tool_call must be dropped, not recorded under a None key"
+    );
+
+    // Turn 1: multiple tool_calls in one turn -- last_tool_name must end up as
+    // the *last* call's tool_name ("edit_file"), not the first ("read_file").
+    // A trailing error result must then be keyed by that running last_tool_name,
+    // and specifically NOT by its own call_id ("call_b"), which is not a tool name.
+    let t1 = CanonicalTurn {
+        attribution: None,
+        turn_index: 1,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![make_call("call_a", "read_file"), make_call("call_b", "edit_file")],
+        tool_results: smallvec![make_result("call_b", true)],
+        usage: None,
+    };
+    inv.update(&t1);
+
+    assert_eq!(
+        inv.last_tool_name.as_deref(),
+        Some("edit_file"),
+        "last_tool_name must reflect the final call in list order, not the first"
+    );
+    assert_eq!(
+        inv.invocations_by_tool.get("read_file").copied(),
+        Some(1),
+        "invocations_by_tool must still count the earlier call in the turn"
+    );
+    assert_eq!(
+        inv.invocations_by_tool.get("edit_file").copied(),
+        Some(1),
+        "invocations_by_tool must count the final call in the turn"
+    );
+    assert_eq!(
+        inv.errors_by_tool.get("edit_file").copied(),
+        Some(1),
+        "the error must be keyed by the running last_tool_name (edit_file), not by call_id"
+    );
+    assert!(
+        inv.errors_by_tool.get("call_b").is_none(),
+        "the error must never be keyed by the result's own call_id"
+    );
+    assert_eq!(
+        inv.errors_by_tool.len(),
+        1,
+        "only one tool must have an error entry after this turn"
+    );
+
+    let metrics = inv.finalize();
+    assert_eq!(metrics.total_invocations, 2);
+    assert_eq!(metrics.distinct_tools_count, 2);
+    assert_eq!(metrics.errors_by_tool.get("edit_file").copied(), Some(1));
+}
