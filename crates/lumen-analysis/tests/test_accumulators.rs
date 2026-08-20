@@ -393,3 +393,94 @@ fn test_schema_extractor_citations() {
     assert_eq!(citations[0].schema_id, "spec@1");
     assert!(citations[0].is_valid);
 }
+
+#[test]
+fn test_schema_extractor_plan_citation_valid_and_invalid() {
+    let mut ext = SchemaExtractorAccumulator::default();
+
+    // CRIT-LUMEN-063: plan@1 cited alongside an embedded JSON block is a valid citation.
+    let valid_turn = CanonicalTurn {
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 500,
+        text: Some(
+            "Here is the plan:\n```json\n{\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"id\": \"plan@1\"}\n```"
+                .into(),
+        ),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    ext.update(&valid_turn);
+
+    // CRIT-LUMEN-063: plan@1 referenced in prose with no embedded JSON payload must still be
+    // recorded as a citation, but marked invalid.
+    let invalid_turn = CanonicalTurn {
+        turn_index: 1,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 500,
+        text: Some("We should follow the plan@1 format for this next.".into()),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    ext.update(&invalid_turn);
+
+    let citations = ext.finalize();
+    assert_eq!(citations.len(), 2);
+
+    let valid = citations.iter().find(|c| c.turn_index == 0).expect("valid citation missing");
+    assert_eq!(valid.schema_id, "plan@1");
+    assert!(valid.is_valid);
+
+    let invalid = citations.iter().find(|c| c.turn_index == 1).expect("invalid citation missing");
+    assert_eq!(invalid.schema_id, "plan@1");
+    assert!(!invalid.is_valid);
+}
+
+#[test]
+fn test_schema_extractor_wired_into_analysis_report() {
+    let engine = AnalyticsEngine::new();
+
+    let turn = CanonicalTurn {
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 500,
+        text: Some(
+            "```json\n{\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"id\": \"spec@1\"}\n```".into(),
+        ),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    let transcript = CanonicalTranscript {
+        session_id: "s1".into(),
+        parent_session_id: None,
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: "claude-3-5-sonnet-20241022".into(),
+        timing: ExecutionTiming {
+            started_at: Utc::now(),
+            ended_at: Utc::now(),
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        turns: vec![turn],
+        subagents: vec![],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+    };
+
+    // CRIT-LUMEN-063: SchemaExtractorAccumulator must be wired into AnalyticsEngine's
+    // per-turn loop and its citations surfaced on AnalysisReport.
+    let report = engine.process_transcript(&transcript);
+    assert_eq!(report.schema_extractor.len(), 1);
+    assert_eq!(report.schema_extractor[0].schema_id, "spec@1");
+    assert!(report.schema_extractor[0].is_valid);
+}

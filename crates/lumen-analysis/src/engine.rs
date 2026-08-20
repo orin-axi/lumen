@@ -1,12 +1,12 @@
-use lumen_model::CanonicalTranscript;
+use lumen_model::{CanonicalTranscript, SchemaCitation};
 use serde::{Deserialize, Serialize};
 
 use crate::accumulators::{
     ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AutonomyAccumulator,
     AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport, ContextGrowthAccumulator, ContextGrowthMetrics,
     McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator,
-    SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics, ToolInventoryAccumulator,
-    ToolInventoryMetrics, TurnDurationAccumulator, TurnDurationMetrics,
+    SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics,
+    ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator, TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -24,6 +24,7 @@ pub struct AnalysisReport {
     pub permission_mode: PermissionMetrics,
     pub artifacts: ArtifactMetrics,
     pub stats: StatsMetrics,
+    pub schema_extractor: Vec<SchemaCitation>,
 }
 
 pub struct AnalyticsEngine {
@@ -38,6 +39,7 @@ pub struct AnalyticsEngine {
     permission_mode: PermissionModeAccumulator,
     artifacts: ArtifactsAccumulator,
     stats: StatsAccumulator,
+    schema_extractor: SchemaExtractorAccumulator,
 }
 
 impl Default for AnalyticsEngine {
@@ -60,6 +62,7 @@ impl AnalyticsEngine {
             permission_mode: PermissionModeAccumulator::default(),
             artifacts: ArtifactsAccumulator::default(),
             stats: StatsAccumulator::default(),
+            schema_extractor: SchemaExtractorAccumulator::default(),
         }
     }
 
@@ -77,6 +80,7 @@ impl AnalyticsEngine {
             self.permission_mode.update(turn);
             self.artifacts.update(turn);
             self.stats.update(turn);
+            self.schema_extractor.update(turn);
         }
 
         AnalysisReport {
@@ -92,6 +96,7 @@ impl AnalyticsEngine {
             permission_mode: self.permission_mode.finalize(),
             artifacts: self.artifacts.finalize(),
             stats: self.stats.finalize(),
+            schema_extractor: self.schema_extractor.finalize(),
         }
     }
 }
