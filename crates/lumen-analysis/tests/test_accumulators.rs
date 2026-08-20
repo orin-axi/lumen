@@ -920,3 +920,57 @@ fn test_autonomy_streak_flush_and_index() {
     // 7 total turns (indices 0..=6).
     assert!((metrics.autonomy_index - (4.0 / 7.0)).abs() < f32::EPSILON);
 }
+
+#[test]
+fn test_stats_mutually_exclusive_roles_and_byte_length() {
+    // CRIT-LUMEN-133: exactly one of user_turns/assistant_turns/tool_result_turns/
+    // system_turns increments per turn (matching entry.role), while total_turns
+    // increments for every turn regardless of role.
+    // CRIT-LUMEN-134: total_text_characters accumulates text.len() -- UTF-8 BYTE
+    // length, not char count -- for Some(text) turns, and adds nothing for None.
+    let mut stats = StatsAccumulator::default();
+
+    let make_turn = |turn_index: usize, role: TurnRole, text: Option<&str>| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: text.map(|s| s.to_string()),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    // "héllo 👍" is 7 chars but 11 UTF-8 bytes (é = 2 bytes, 👍 = 4 bytes).
+    // If the implementation used text.chars().count() instead of text.len(),
+    // this turn alone would under-count total_text_characters by 4.
+    let multibyte = "héllo 👍";
+    assert_eq!(multibyte.chars().count(), 7);
+    assert_eq!(multibyte.len(), 11);
+
+    stats.update(&make_turn(0, TurnRole::User, Some(multibyte)));
+    stats.update(&make_turn(1, TurnRole::Assistant, None));
+    stats.update(&make_turn(2, TurnRole::ToolResult, Some("ok")));
+    stats.update(&make_turn(3, TurnRole::System, Some("hi")));
+
+    let metrics = stats.finalize();
+
+    assert_eq!(metrics.total_turns, 4, "total_turns must increment for every turn regardless of role");
+    assert_eq!(metrics.user_turns, 1, "exactly one User turn was processed");
+    assert_eq!(metrics.assistant_turns, 1, "exactly one Assistant turn was processed");
+    assert_eq!(metrics.tool_result_turns, 1, "exactly one ToolResult turn was processed");
+    assert_eq!(metrics.system_turns, 1, "exactly one System turn was processed");
+    assert_eq!(
+        metrics.user_turns + metrics.assistant_turns + metrics.tool_result_turns + metrics.system_turns,
+        metrics.total_turns,
+        "per-role counters must be mutually exclusive and sum to total_turns"
+    );
+
+    // 11 (multibyte, byte length) + 0 (None) + 2 ("ok") + 2 ("hi") = 15.
+    // A char-count implementation would instead yield 7 + 0 + 2 + 2 = 11.
+    assert_eq!(
+        metrics.total_text_characters, 15,
+        "total_text_characters must sum UTF-8 byte lengths, not char counts, and skip None text"
+    );
+}
