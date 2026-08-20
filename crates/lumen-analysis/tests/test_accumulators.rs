@@ -1342,3 +1342,83 @@ fn test_fuzzy_tools_clustering_and_typo_rate() {
     assert_eq!(metrics.typo_call_count, 2);
     assert_eq!(metrics.typo_rate, 2.0 / 12.0);
 }
+
+#[test]
+fn test_trajectory_dag_intent_mapping_and_had_error() {
+    // CRIT-LUMEN-145/146: intent-to-node mapping and had_error joined from tool_results
+    // by matching call_id within the same turn.
+    let mut td = TrajectoryDagAccumulator::default();
+
+    let turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![
+            CanonicalToolCall {
+                call_id: "call_edit".into(),
+                tool_name: "edit_file".into(),
+                intent: ToolIntent::FileEdit { path: "a.rs".into(), lines_added: 1, lines_removed: 1 },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "call_search".into(),
+                tool_name: "grep".into(),
+                intent: ToolIntent::CodeSearch { tool: "ripgrep".into(), query: "foo".into(), is_ast: false },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "call_commit".into(),
+                tool_name: "git".into(),
+                intent: ToolIntent::VersionControl { action: "commit".into() },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "call_status".into(),
+                tool_name: "git".into(),
+                intent: ToolIntent::VersionControl { action: "status".into() },
+                raw_arguments: serde_json::json!({}),
+            },
+        ],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: "call_edit".into(),
+            output_bytes: 0,
+            line_count: 0,
+            is_error: true,
+            error_class: Some("edit_failed".into()),
+            truncated_output: None,
+        }],
+        usage: None,
+    };
+
+    td.update(&turn);
+
+    let nodes = td.finalize();
+    assert_eq!(nodes.len(), 4);
+
+    let edit_node = nodes.iter().find(|n| n.call_id.as_str() == "call_edit").unwrap();
+    assert_eq!(edit_node.target_file.as_deref(), Some("a.rs"));
+    assert_eq!(edit_node.target_symbol, None);
+    assert!(edit_node.is_mutation);
+    assert!(edit_node.had_error, "matching tool_result has is_error=true");
+
+    let search_node = nodes.iter().find(|n| n.call_id.as_str() == "call_search").unwrap();
+    assert_eq!(search_node.target_file, None);
+    assert_eq!(search_node.target_symbol.as_deref(), Some("foo"));
+    assert!(!search_node.is_mutation);
+    assert!(!search_node.had_error, "no matching tool_result defaults had_error to false");
+
+    let commit_node = nodes.iter().find(|n| n.call_id.as_str() == "call_commit").unwrap();
+    assert_eq!(commit_node.target_file, None);
+    assert_eq!(commit_node.target_symbol, None);
+    assert!(commit_node.is_mutation);
+    assert!(!commit_node.had_error);
+
+    let status_node = nodes.iter().find(|n| n.call_id.as_str() == "call_status").unwrap();
+    assert_eq!(status_node.target_file, None);
+    assert_eq!(status_node.target_symbol, None);
+    assert!(!status_node.is_mutation);
+    assert!(!status_node.had_error);
+}

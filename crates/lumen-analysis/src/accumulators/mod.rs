@@ -15,6 +15,7 @@ pub mod self_correction;
 pub mod stats;
 pub mod token_usage;
 pub mod tool_inventory;
+pub mod trajectory_dag;
 pub mod turn_duration;
 
 pub use api_health::{ApiHealthAccumulator, ApiHealthMetrics};
@@ -34,4 +35,5 @@ pub use self_correction::{SelfCorrectionAccumulator, SelfCorrectionMetrics};
 pub use stats::{StatsAccumulator, StatsMetrics};
 pub use token_usage::TokenUsageAccumulator;
 pub use tool_inventory::{ToolInventoryAccumulator, ToolInventoryMetrics};
+pub use trajectory_dag::{ToolNode, TrajectoryDagAccumulator};
 pub use turn_duration::{TurnDurationAccumulator, TurnDurationMetrics};
