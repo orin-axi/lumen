@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346",
+  "checkpoint_id": "01M0FA2EKP0ZSVT7W3SZNKX21G",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 80,
+  "files_touched": [
+    "specs/SPEC-LUMEN-005-ANALYSIS.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 506,
+    "cache_creation_tokens": 1224287,
+    "cache_read_tokens": 107287002,
+    "output_tokens": 294788,
+    "api_call_count": 253,
+    "subagent_tokens": {
+      "input_tokens": 310,
+      "cache_creation_tokens": 589748,
+      "cache_read_tokens": 44715704,
+      "output_tokens": 165954,
+      "api_call_count": 155
+    }
+  }
+}

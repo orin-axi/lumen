@@ -1,0 +1,759 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346",
+  "checkpoint_id": "01M0FA2EKP0ZSVT7W3SZNKX21G",
+  "session_id": "36644eef-36d9-4e53-b672-5ddcebfc54f0",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-20T10:04:39.632649Z",
+  "branch": "main",
+  "checkpoints_count": 80,
+  "save_step_count": 80,
+  "files_touched": [
+    "specs/SPEC-LUMEN-005-ANALYSIS.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "59f26648a635",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 506,
+    "cache_creation_tokens": 1224287,
+    "cache_read_tokens": 107287002,
+    "output_tokens": 294788,
+    "api_call_count": 253,
+    "subagent_tokens": {
+      "input_tokens": 310,
+      "cache_creation_tokens": 589748,
+      "cache_read_tokens": 44715704,
+      "output_tokens": 165954,
+      "api_call_count": 155
+    }
+  },
+  "session_metrics": {
+    "turn_count": 80
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-20T10:04:39.369649Z",
+    "agent_lines": 7,
+    "agent_removed": 5,
+    "human_added": 229,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 236,
+    "total_lines_changed": 253,
+    "agent_percentage": 4.743083003952568,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9320,
+      "user_lines_removed": 6,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".clippy.toml": 12,
+        ".moon/cache/CACHEDIR.TAG": 3,
+        ".moon/cache/hashes/1ac6bbb305d92b152bc8a2e217ec837e1dd0a471fef329bca98c838a4c589023.json": 1,
+        ".moon/cache/hashes/29c38fb1142b1234a58c6e411b12bba95c7d7c3570f857bf53b58b173da4ae29.json": 1,
+        ".moon/cache/hashes/3204ceef5a6cb3baa9af38ed5ddb47b33827afb41ca05fa25ab72732654af7c4.json": 1,
+        ".moon/cache/hashes/76a9ee8e401e54a249c91f7437ab96be34141e5557ebd87370294326d0b9bb67.json": 1,
+        ".moon/cache/hashes/91869fed7c45ab7c2e5ea7c55c8a20828dc5c16bd24aa60775bcb5783838c407.json": 1,
+        ".moon/cache/hashes/98c0e2eea843e140a67998624a2cc674b410672f4722c54adfc9b3e1473f19f1.json": 1,
+        ".moon/cache/hashes/9fc5516bd71752ad8296ed771c5003841d5b52ca5f84ac39921d8f92e8039760.json": 1,
+        ".moon/cache/hashes/b7a0293b13a6d9a6e72311b5383874f9efd3a0e581550077507ed751984c8842.json": 1,
+        ".moon/cache/hashes/c28f4493042ebdfba13e73fe39756b6de2ac6552863d5564782d912a877e8cd8.json": 1,
+        ".moon/cache/hashes/dd2c7095fe6550c5b12959c7ed282da8f4846ad169e45aa39326f8ed89eb04be.json": 1,
+        ".moon/cache/hashes/e32bc9b884dedab67c51afeabd6abe36df1a7345d67b21edab39ffdd808a5c3f.json": 1,
+        ".moon/cache/hashes/f76f94e626e2aab533c23ef8ede6c02f294ebb8af8a6a15f747fbc58259dd38f.json": 1,
+        ".moon/cache/hashes/f7c60b4e54d8b78f282b85205c5c79e33764bcb8626a4969efff594d91e2a33c.json": 1,
+        ".moon/cache/runReport.json": 1,
+        ".moon/cache/schemas/extensions.json": 77,
+        ".moon/cache/schemas/project.json": 2358,
+        ".moon/cache/schemas/tasks.json": 1883,
+        ".moon/cache/schemas/template-frontmatter.json": 34,
+        ".moon/cache/schemas/template.json": 575,
+        ".moon/cache/schemas/toolchains.json": 345,
+        ".moon/cache/schemas/workspace.json": 1130,
+        ".moon/cache/states/lumen-analysis/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-analysis/snapshot.json": 1,
+        ".moon/cache/states/lumen-cli/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-cli/snapshot.json": 1,
+        ".moon/cache/states/lumen-fixtures/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-fixtures/snapshot.json": 1,
+        ".moon/cache/states/lumen-model/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-model/snapshot.json": 1,
+        ".moon/cache/states/lumen-pattern/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-pattern/snapshot.json": 1,
+        ".moon/cache/states/lumen-session/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-session/snapshot.json": 1,
+        ".moon/cache/states/lumen-store/build/lastRun.json": 1,
+        ".moon/cache/states/lumen-store/snapshot.json": 1,
+        ".moon/cache/states/moonVersionCheck.json": 1,
+        ".moon/cache/states/workspaceGraph.json": 1,
+        ".moon/cache/states/workspaceGraphStateV1.json": 1,
+        ".moon/tasks/rust.yml": 56,
+        ".moon/toolchains.yml": 2,
+        ".moon/workspace.yml": 10,
+        ".prototools": 12,
+        ".rustfmt.toml": 3,
+        "AGENTS.md": 56,
+        "crates/lumen-analysis/Cargo.toml": 5,
+        "crates/lumen-analysis/src/accumulators/artifacts.rs": 56,
+        "crates/lumen-analysis/src/accumulators/autonomy.rs": 66,
+        "crates/lumen-analysis/src/accumulators/context_growth.rs": 61,
+        "crates/lumen-analysis/src/accumulators/permission_mode.rs": 45,
+        "crates/lumen-analysis/src/accumulators/stats.rs": 62,
+        "crates/lumen-analysis/src/accumulators/tool_inventory.rs": 52,
+        "crates/lumen-analysis/tests/test_analysis_pipeline.rs": 75,
+        "crates/lumen-fixtures/Cargo.toml": 18,
+        "crates/lumen-fixtures/src/corpus/antigravity.rs": 9,
+        "crates/lumen-fixtures/src/corpus/claude.rs": 18,
+        "crates/lumen-fixtures/src/corpus/corrupted.rs": 10,
+        "crates/lumen-fixtures/src/corpus/mod.rs": 9,
+        "crates/lumen-fixtures/src/corpus/opencode.rs": 10,
+        "crates/lumen-fixtures/src/db.rs": 19,
+        "crates/lumen-fixtures/src/lib.rs": 29,
+        "crates/lumen-model/tests/test_model_proptests.proptest-regressions": 7,
+        "crates/lumen-model/tests/test_model_proptests.rs": 121,
+        "crates/lumen-pattern/tests/test_graph_topology.rs": 135,
+        "crates/lumen-session/src/adapters/opencode.rs": 242,
+        "crates/lumen-session/src/fingerprint.rs": 14,
+        "crates/lumen-session/tests/test_agy.rs": 39,
+        "crates/lumen-session/tests/test_claude.rs": 79,
+        "crates/lumen-session/tests/test_fixtures_snapshots.rs": 83,
+        "crates/lumen-session/tests/test_opencode.rs": 28,
+        "crates/lumen-session/tests/test_snapshot_merge.rs": 51,
+        "crates/lumen-session/tests/test_stream_fuzzing.rs": 74,
+        "crates/lumen-store/Cargo.toml": 30,
+        "crates/lumen-store/src/error.rs": 22,
+        "crates/lumen-store/src/lib.rs": 11,
+        "crates/lumen-store/src/migrations.rs": 187,
+        "crates/lumen-store/src/models.rs": 80,
+        "crates/lumen-store/src/repositories/findings.rs": 65,
+        "crates/lumen-store/src/repositories/mod.rs": 7,
+        "crates/lumen-store/src/repositories/queue.rs": 99,
+        "crates/lumen-store/src/repositories/session.rs": 170,
+        "crates/lumen-store/src/store.rs": 81,
+        "crates/lumen-store/tests/test_store.rs": 169,
+        "crates/lumen-store/tests/test_store_concurrency.rs": 116,
+        "justfile": 47,
+        "moon.yml": 41,
+        "rust-toolchain.toml": 7,
+        "specs/PLAN-LUMEN-001-MODEL.json": 68,
+        "specs/PLAN-LUMEN-002-SESSION.json": 68,
+        "specs/PLAN-LUMEN-005-ANALYSIS.json": 48
+      },
+      "user_removed_per_file": {
+        "crates/lumen-session/src/fingerprint.rs": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9320,
+      "agent_lines_removed": 6
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 111,
+      "user_lines_removed": 14,
+      "agent_lines_added": 9364,
+      "agent_lines_removed": 7,
+      "user_added_per_file": {
+        "specs/SPEC-LUMEN-002-SESSION.json": 77,
+        "specs/SPEC-LUMEN-006-PATTERN.json": 34
+      },
+      "user_removed_per_file": {
+        "specs/SPEC-LUMEN-002-SESSION.json": 4,
+        "specs/SPEC-LUMEN-006-PATTERN.json": 10
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9475,
+      "agent_lines_removed": 21
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 77,
+      "user_lines_removed": 8,
+      "agent_lines_added": 9475,
+      "agent_lines_removed": 21,
+      "user_added_per_file": {
+        "specs/SPEC-LUMEN-003-STORE.json": 39,
+        "specs/SPEC-LUMEN-007-INSIGHTS.json": 38
+      },
+      "user_removed_per_file": {
+        "specs/SPEC-LUMEN-003-STORE.json": 1,
+        "specs/SPEC-LUMEN-007-INSIGHTS.json": 7
+      }
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 286,
+      "user_lines_removed": 5,
+      "agent_lines_added": 9552,
+      "agent_lines_removed": 29,
+      "user_added_per_file": {
+        "specs/SPEC-LUMEN-003-STORE.json": 58,
+        "specs/SPEC-LUMEN-004-DAEMON.json": 12,
+        "specs/SPEC-LUMEN-005-ANALYSIS.json": 216
+      },
+      "user_removed_per_file": {
+        "specs/SPEC-LUMEN-003-STORE.json": 2,
+        "specs/SPEC-LUMEN-004-DAEMON.json": 3
+      }
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 255,
+      "user_lines_removed": 26,
+      "agent_lines_added": 9895,
+      "agent_lines_removed": 28,
+      "user_added_per_file": {
+        "ARCHITECTURE.md": 1,
+        "Cargo.toml": 1,
+        "README.md": 12,
+        "crates/lumen-analysis/Cargo.toml": 4,
+        "crates/lumen-analysis/benches/accumulator_bench.rs": 68,
+        "crates/lumen-pattern/Cargo.toml": 5,
+        "crates/lumen-pattern/benches/tarjan_bench.rs": 32,
+        "crates/lumen-session/Cargo.toml": 4,
+        "crates/lumen-session/benches/fingerprint_bench.rs": 18,
+        "docs/07-data-presentation-and-ui-design-standard.md": 2,
+        "docs/08-lumen-mac-swift-native-app-blueprint.md": 2,
+        "docs/09-enterprise-adoption-and-commercial-strategy.md": 19,
+        "docs/10-the-six-generational-leaps.md": 2,
+        "specs/PLAN-LUMEN-001-MODEL.json": 23,
+        "specs/PLAN-LUMEN-002-SESSION.json": 60,
+        "specs/SPEC-LUMEN-002-SESSION.json": 2
+      },
+      "user_removed_per_file": {
+        "ARCHITECTURE.md": 1,
+        "README.md": 12,
+        "docs/09-enterprise-adoption-and-commercial-strategy.md": 11,
+        "specs/SPEC-LUMEN-002-SESSION.json": 2
+      }
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10148,
+      "agent_lines_removed": 52
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10148,
+      "agent_lines_removed": 52
+    },
+    {
+      "checkpoint_number": 17,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10148,
+      "agent_lines_removed": 52
+    },
+    {
+      "checkpoint_number": 18,
+      "user_lines_added": 65,
+      "user_lines_removed": 7,
+      "agent_lines_added": 10323,
+      "agent_lines_removed": 57,
+      "user_added_per_file": {
+        "crates/lumen-session/src/adapters/codex.rs": 65
+      },
+      "user_removed_per_file": {
+        "crates/lumen-session/src/adapters/codex.rs": 7
+      }
+    },
+    {
+      "checkpoint_number": 19,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10388,
+      "agent_lines_removed": 64
+    },
+    {
+      "checkpoint_number": 20,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 21,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 22,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10552,
+      "agent_lines_removed": 64
+    },
+    {
+      "checkpoint_number": 23,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10552,
+      "agent_lines_removed": 64
+    },
+    {
+      "checkpoint_number": 24,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 25,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 26,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 27,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 28,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 29,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 30,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 31,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 32,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 33,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 34,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10735,
+      "agent_lines_removed": 66
+    },
+    {
+      "checkpoint_number": 35,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 36,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 37,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 38,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 39,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 40,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 41,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 42,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 43,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 44,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 45,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 46,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 47,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 48,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 49,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 50,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 51,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 52,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 53,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 54,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 55,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 56,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 57,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 58,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 59,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 60,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 61,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 62,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 63,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 64,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 65,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 66,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 67,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 68,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 69,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 70,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 71,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 72,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 73,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 74,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 75,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 76,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 77,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 78,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 79,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 80,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

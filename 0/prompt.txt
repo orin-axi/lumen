@@ -1,0 +1,379 @@
+Please take a look at the lumen specs and docs to understand what we're building here
+
+---
+
+These docs were put together from a combination of research from Claude and Antigravity with a Gemini model and might need a round of analysis and deep research to validate that we're going in the right direction and we've thought things through.
+
+---
+
+<task-notification>
+<task-id>a58be22f5ee69a0db</task-id>
+<tool-use-id>toolu_01PrPCsZ4qjpDpjKs7dij9nJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a58be22f5ee69a0db.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate CLI/store/daemon docs vs code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Directive: audit docs 05 (CLI) and 06 (SQLite/daemon) against actual code in `lumen-cli`, `lumen-store`, and cross-check against SPEC-003/004/008.
+
+**1. CLI (doc 05 / SPEC-008) — MISMATCH, large gap**
+`lumen-cli/src/main.rs` only implements `trace`, `audit`, `scan` (matches README, matches doc 05's first 3 bullets). CONFIRMED: comfy-table UTF8 tables used throughout; `miette::Result`/`into_diagnostic()` used for errors (satisfies AGENTS.md rule 5). But `anstream` and `indicatif` are NOT imported/used anywhere in main.rs — doc 05's ANSI-styling/spinner claims are UNIMPLEMENTED. `lumen insights` (doc 05 bullet 4) is UNIMPLEMENTED — no such subcommand. SPEC-008-CLI describes an entirely different CLI surface (`status`, `refresh`, `sessions`, `session`, `categories`, `insights`, `weekly`, `export`, `doctor`, `daemon`, `--toon` output, `DoctorEngine`, `ToonFormatter`, IPC-to-daemon) — none of it exists. SPEC-008 is ~90% fiction relative to current code.
+
+**2. Daemon — UNIMPLEMENTED, total vaporware**
+`grep -rli "daemon"` across all `.rs`/`.toml` files returned zero hits. No `lumen-daemon` crate exists (not in `crates/`, not in workspace `Cargo.toml` members implied by the crate listing). SPEC-004-DAEMON's entire API surface (`DaemonServer`, `HookHandler`, `LaunchAgentManager`) and all 8 acceptance criteria (CRIT-LUMEN-050 through 057) are pure fiction — zero corresponding code anywhere. Doc 06's Unix-socket/hook-latency architecture is 100% design-doc, 0% implementation.
+
+**3. lumen-store WAL / single-writer — PARTIALLY CONFIRMED**
+CONFIRMED: `store.rs:23` sets `PRAGMA journal_mode = WAL` on the writer pool; `open_read_only` (store.rs:47-50) sets `PRAGMA query_only = ON`. This matches CRIT-LUMEN-030/031 exactly. MISMATCH: "single-writer" is asserted only by convention (a second process could still call `SqliteStore::open()` and get a writable pool — nothing in code enforces daemon-exclusivity, no PID lockfile, no socket gating). The single-writer invariant in doc 06 is a daemon-layer promise that has no enforcing code because the daemon doesn't exist.
+
+**4. Spec-vs-code schema/API drift**
+`migrations.rs` implements V1-V5 with **11 tables**, matching CRIT-LUMEN-032's table list, and matches SPEC-003's `SqliteStore`/`QueueRepository`/`SessionRepository`/`FindingsRepository` signatures closely (repositories/session.rs, queue.rs, findings.rs all confirmed present with matching method signatures). However doc 06's SQL schema (§3) is a **different, richer schema** than migrations.rs actually creates — e.g. doc 06's `sessions` table has `id TEXT PRIMARY KEY`, `repo_name`, `repo_org`, `branch`, `bimodal_mode`, `pipeline_version`; actual migrations.rs `sessions` table (line 49) has `id INTEGER PRIMARY KEY AUTOINCREMENT` and none of those columns. Doc 06 also references `rtk_observed`, `byte_offset` in `session_snapshots`/`command_events` — none present in actual migrations. `CommandEventRepository`, `RollupRepository` from SPEC-003's scope line are UNIMPLEMENTED (no files for them under repositories/). CRIT-LUMEN-034 (dead-letter after 3 retries) — `queue.rs mark_failed` exists but not verified for the retry_count=3→dead_letter transition logic (would need line-level read to confirm; flagging as unverified, not confirmed).
+
+**5. Layering/licensing — omission, not violation**
+`lumen-store/Cargo.toml` depends only on `lumen-model` (Layer 1) plus infra crates (rusqlite, r2d2, camino) — no dependency on `lumen-analysis`/`lumen-pattern`/`lumen-cli`, so it does NOT violate the AGENTS.md Layer 1/1.5→2/4 boundary rule. But `ARCHITECTURE.md`'s layer diagram (read earlier in context) omits `lumen-store` entirely — it isn't placed in any layer. Given it only depends on L1 and is licensed FSL-1.1-MIT (matching L2/L4 crates, not L1's MIT/Apache-2.0), it likely belongs as its own layer between 1.5 and 2, or folded into L2. This is a doc omission that needs fixing, not a code violation.
+
+**Bottom line:** store layer is real and roughly spec-aligned (schema details drift from doc 06 though); daemon layer is 100% aspirational with zero code; CLI implements a small fraction of what SPEC-008 and doc 05 describe.</result>
+<usage><subagent_tokens>104189</subagent_tokens><tool_uses>12</tool_uses><duration_ms>33620</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a748671db7ec94290</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a748671db7ec94290.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate core docs against code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Good, this confirms spec explicitly names all 22 accumulators including 11 that don't exist. Enough evidence gathered — writing the report.
+
+**Directive**: Audit docs 01-04 + specs 001/002/005/006 vs. actual code in lumen-model/session/analysis/pattern.
+
+**1. Pricing/economics (doc 01, ARCHITECTURE.md) — MISMATCH**
+- "4-tier" (uncached, 5m write, 1h write, read, output) is really 3 tiers in code. `ModelPricing` (pricing.rs:5-10) has no `cache_write_1h_per_m` field — only one `cache_write_per_m`. `TokenEconomics::calculate` (economics.rs:37-85) hardcodes `ephemeral_1h_tokens: 0` (line 77) — the 1h tier is never computed from real data, just zeroed.
+- Formula itself (compute_cost, pricing.rs:75-82) matches doc's Cost(t) formula for the 3 tiers it does track. No division-by-zero: `cache_hit_ratio` (economics.rs:46) and `efficiency_multiplier` (line 56) both guard denominator == 0 — CONFIRMED safe.
+- Doc 01's "Official Rates Matrix" (Sonnet/Haiku/Opus) matches pricing.rs constants exactly — CONFIRMED. But pricing.rs also silently includes GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini constants not mentioned in doc 01 at all — doc is incomplete, not wrong.
+
+**2. "22 accumulators" (doc 03, README, SPEC-005) — MISMATCH, significant**
+SPEC-LUMEN-005 scope line explicitly names 22: token_usage, circuit_breaker, mcp_affinity, flow, turn_duration, tool_inventory, context_growth, permission_mode, hook_activity, api_health, pr_link, fuzzy_tools, attribution, self_correction, autonomy, schema_extractor, stats, timeline, artifacts, otel_correlation, span_mapping, trajectory_dag. Only **11 files exist** in `crates/lumen-analysis/src/accumulators/`: api_health, artifacts, autonomy, circuit_breaker, context_growth, mcp_affinity, schema_extractor, self_correction, stats, tool_inventory, turn_duration. Missing entirely: flow, hook_activity, pr_link, fuzzy_tools, attribution, timeline, otel_correlation, span_mapping, trajectory_dag (9 of 22 don't exist as files). `engine.rs` (`AnalysisReport`/`AnalyticsEngine`) wires only 11 accumulators — `schema_extractor.rs` exists as a file but is **not** wired into the engine at all (missing from both the struct and `process_transcript`), so it's effectively dead code, dropping real coverage to 10/22 in the actual report output.
+
+**3. Tarjan SCC (doc 04, AGENTS.md rule 4) — CONFIRMED core algorithm, but ASPIRATIONAL in the convenience path**
+`detect_circular_loops` (lib.rs:64-82) correctly checks `component.len() &gt;= 3` and requires identical `target_symbol` + `!is_mutation` across all nodes — matches the stated invariant exactly. However, `calculate_monotonicity()` free function (lib.rs:168-185), the only public convenience entry point besides the raw `TrajectoryGraph`, builds every `ToolNode` with `target_symbol: None` (line 179). Since `detect_circular_loops` only records an anomaly when `first_symbol` is `Some(...)` (line 78), this path can **never** detect a loop — the feature is implemented but unreachable via the documented convenience API. No caller in the workspace currently populates `target_symbol`, so the SCC detector is effectively dormant end-to-end right now.
+
+**4. Adapters/fingerprint (doc 02, ARCHITECTURE.md) — CONFIRMED, doc oversimplified**
+All four adapters exist as real files (claude.rs 13K, agy.rs 6K, opencode.rs 10.1K, codex.rs 1.8K) — not stubs. `fingerprint.rs` detection logic is real and tested (2 unit tests) but is considerably richer than ARCHITECTURE.md's one-liner heuristics table — e.g. ClaudeCode checks 7 different substrings, not just `"sessionId"`; Codex checks `"choices"`/`"prompt_tokens"`/`"thread_id"`, not `"prompt_tokens"` alone. Not wrong, just under-documented.
+
+**5. Test coverage** — real tests exist (966 lines across 7 test files: test_accumulators.rs, test_analysis_pipeline.rs, test_pricing.rs, test_transcript.rs, test_model_proptests.rs, test_graph_topology.rs, test_pattern.rs), backing the 11 implemented accumulators and pricing math. No tests reference the 9 missing accumulators (they can't — the types don't exist).
+
+**Net assessment**: pricing/economics doc is basically accurate for what exists but overclaims a 4th tier that's stubbed at zero. The "22 accumulators" claim, repeated in README, doc 03, and SPEC-005's scope, is the biggest doc/code gap — only half are built. Tarjan cycle detection is real but currently inert because nothing populates `target_symbol`.</result>
+<usage><subagent_tokens>92696</subagent_tokens><tool_uses>10</tool_uses><duration_ms>43955</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a949850b9bcc44956</task-id>
+<tool-use-id>toolu_017zX3JbUncxX1ct6tG4m35b</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a949850b9bcc44956.output</output-file>
+<status>completed</status>
+<summary>Agent "Scrutinize speculative docs and marketing claims" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task: assess docs 07–10 and README's benchmark/comparative claims for hype, inconsistency, and reality gaps.
+
+**README benchmarks/comparative matrix — fabricated.** No `bench/` directory, no `criterion` dependency anywhere in the workspace, no benchmark harness of any kind. The "1.5 GB/s SIMD parser," "31.4ms/50MB," "0.4ms Tarjan SCC on 500-node DAG," "&lt;0.08ms fingerprint," and the entire comparative matrix against OpenTelemetry GenAI/Arize Phoenix/LangSmith are unmeasured numbers presented as measured results. These are marketing copy, not benchmarks, and should be labeled "target" or removed until real `criterion` benches exist.
+
+**Doc 08 (Swift Mac app) — architecturally sound but entirely unbuilt, and one FFI claim is currently false.** It correctly avoids FFI by having `lumen-daemon` write SQLite and Swift read it via GRDB — no bindings needed, consistent with the "Zero-Bridge" framing. But: no `apps/` directory, no Swift files, no Xcode project exist. More importantly, it depends on `lumen-daemon`, which **does not exist as a crate** — only `SPEC-LUMEN-004-DAEMON.json` exists, no implementation, no plan file. The doc presents a dependency on vaporware as if it were a given.
+
+**Doc 09 (commercial strategy) — license table doesn't match the actual LICENSE file.** LICENSE (root) covers only `lumen-cli`/`lumen-analysis`/`lumen-pattern` under FSL-1.1-MIT per AGENTS.md's layer table, with `lumen-model`/`lumen-session` MIT/Apache-2.0. Doc 09's table adds four crates that don't exist yet (`lumen-store` as FSL, `lumen-daemon`, `lumen-insights`, and re-lists `lumen-cli`) and asserts `lumen-store` is "Free for devs; forbids competitor SaaS" — different wording/carve-out than the actual FSL grant, which has one Excluded Purpose clause, not a per-crate one. No per-crate LICENSE files exist to back any of this — it's aspirational licensing architecture, not implemented. The FSL mechanics (2-year MIT conversion, competing-SaaS exclusion) are represented correctly in isolation, but the doc's 3-tier enterprise roadmap (OTLP export, fleet PII redaction) has zero grounding: no `opentelemetry`/`otlp` dependency anywhere in the workspace, and no code path touches redaction.
+
+**Doc 10 (six generational leaps) — almost entirely disconnected from the spec backlog.** Cross-checking against `specs/`: only 8 specs exist (001–008: model, session, store, daemon, analysis, pattern, insights, CLI). Doc 10 invents capabilities with **no spec at all**: `lumen distill` (golden trace → skill compilation), `lumen cache inspect` (KV-cache heatmap), `lumen-mcp` (MCP memory server), `lumen replay` (Prism/APFS CoW sandbox replay), and in-daemon "flight controller" turn injection. None of `distill`, `replay`, `cache inspect`, `lumen-mcp`, or "flight controller" appear anywhere in `crates/` (grep for prism/distill/replay/flight-controller returns only an unrelated `Cargo.toml` metadata hit and a stray string in a test file). This doc is pure aspiration layered on top of a backlog it doesn't reference.
+
+**Doc 07 (UI design standard) — substantially ahead of the implemented CLI.** `crates/lumen-cli/src/main.rs` only implements `trace`/`audit`/`scan` with plain `comfy-table` tables and a few `Color::Green/Cyan/Yellow` cells — no sparklines, no bullet graphs, no `--toon` flag, no `michi-toon` dependency (confirmed absent from all `Cargo.toml`s). Doc 07 describes a fully-realized design system (Tufte/Few/Shneiderman-grounded palette, Unicode sparklines, bullet-graph cache-health bars, TOON compact output) none of which exists in code yet.
+
+**Bottom line:** docs 07–10 read as a product vision/pitch deck, not documentation of the system. Every one of them describes capabilities, crates, or measurements that don't exist in the repo — the gap is total, not partial, for daemon, insights, store-as-FSL, distill, replay, cache-inspect, mcp-memory, Swift app, and all benchmark numbers. Scope: not a Rust-vs-non-Rust conflict (doc 08's architecture is fine) — the conflict is "described as if built" vs. "0% implemented."</result>
+<usage><subagent_tokens>90839</subagent_tokens><tool_uses>8</tool_uses><duration_ms>35908</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a49d2d0f3603260f5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a49d2d0f3603260f5.output</output-file>
+<status>completed</status>
+<summary>Agent "Adversarial audit of all 8 specs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Audit all 8 Lumen specs + 3 plans for testability, ambiguity, error coverage, scope conflicts, and plannability.
+
+## Verdicts
+
+**SPEC-001-MODEL — PASS (minor gap).** Criteria are precise, formula-based, testable. Gap: `api_surface` lists 10 `ModelPricing` constants (Sonnet, Haiku, Opus, GPT_4O, DEEPSEEK_R1, QWEN_2_5_CODER, KIMI_K1_5, GLM_4_PLUS, GEMINI_2_0_FLASH, GEMINI_2_0_PRO) but only 3 (Sonnet, Haiku, Qwen) have acceptance criteria. The other 6 pricing tables are unverifiable — nothing stops them from being wrong or unimplemented. Plan check: all 10 criteria are covered by PLAN-001 tasks, no orphans.
+
+**SPEC-002-SESSION — FAIL (adapter coverage gap).** Scope names four adapters (Claude Code, AGY, Codex, OpenCode) but **CodexAdapter and OpenCodeAdapter have zero acceptance criteria** — only Claude Code and AGY are specified. Two of four "multi-orchestrator" adapters are unfalsifiable. `CRIT-LUMEN-029` ("50MB file in under 35ms") requires a 50MB fixture not yet defined anywhere. Plan check: PLAN-002 covers all 10 existing criteria, no orphans — but inherits the missing-adapter gap.
+
+**SPEC-003-STORE — FAIL (blocks planning).** `CRIT-LUMEN-038`: "byte-identical JSON matching the **Mac app** and CLI read contracts" references a contract owned by a separate, not-yet-built Swift app (per `docs/08-...swift-native-app-blueprint.md`) with no schema artifact in this repo to test against — unplannable as written. `ToolCallRepository` and `RollupRepository` are named in scope but have zero method signatures or criteria; `CommandEventRepository` only partially covered (CRIT-037).
+
+**SPEC-004-DAEMON — FAIL (blocks planning).** `CRIT-LUMEN-053` requires the daemon to "insert fact rows" via `SqliteStore`, but SPEC-003's `api_surface` only defines `upsert_session`, queue methods, and findings insert — no insert methods for tool_calls, command_events, or token_usage tables. A planner has no signatures to implement against. This is a downstream consequence of SPEC-003's gaps.
+
+**SPEC-005-ANALYSIS — FAIL (largest gap in the set).** Scope claims "22 single-pass streaming accumulators" but only **8 of 22 have any acceptance criterion** (token_usage, circuit_breaker, schema_extractor, turn_duration, api_health, mcp_affinity, self_correction, plus synthetic-model exclusion). `flow`, `tool_inventory`, `context_growth`, `permission_mode`, `hook_activity`, `pr_link`, `fuzzy_tools`, `attribution`, `stats`, `timeline`, `artifacts`, `otel_correlation`, `span_mapping`, `trajectory_dag` — 14 accumulators — are named but have zero defined behavior. Plan check: **PLAN-005 orphans CRIT-060, 062, 064, and 069** (O(N)/zero-alloc invariant, circuit breaker, turn duration, subagent attribution) — none appear in any task's `covers_criteria`, despite being in the spec.
+
+**SPEC-006-PATTERN — FAIL (undefined symbol).** `CRIT-LUMEN-072` references "Error Recovery Index R" — no `compute_error_recovery_index` (or equivalent) appears anywhere in `api_surface`. A planner has no function to target.
+
+**SPEC-007-INSIGHTS — FAIL (untestable thresholds).** `CRIT-080`/`081`: "high tool mutation density and **low** search turn count" / "**high** search tool density and **high** turn count" — no numeric thresholds defined; two valid, contradictory implementations could both claim compliance. `discover_fingerprint`'s clustering algorithm is in `api_surface` with no criteria at all.
+
+**SPEC-008-CLI — PASS (chain risk only).** Locally testable; risk is inherited from STORE/DAEMON gaps upstream, not local defects.
+
+## Bottom line
+3 of 8 specs (001, 002, 008) are sound with minor coverage gaps. 5 (003, 004, 005, 006, 007) have real blockers — which explains why none of them have plans yet. SPEC-005's 14-of-22 undefined accumulators and PLAN-005's 4 orphaned criteria are the most urgent fixes.</result>
+<usage><subagent_tokens>103110</subagent_tokens><tool_uses>12</tool_uses><duration_ms>57062</duration_ms></usage>
+</task-notification>
+
+---
+
+Let's implement everything that is needed for prism
+
+---
+
+<task-notification>
+<task-id>a748671db7ec94290</task-id>
+<tool-use-id>toolu_01MvnqhamNsMQ3bMwapaevv5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a748671db7ec94290.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate core docs against code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I got a message from another Claude session (`a20e1bb59274b53a5`) claiming I'm producing a "STORE amendment" for `SPEC-LUMEN-003-STORE` and asking me to add repository methods (`SnapshotRepository`, `CommandEventRepository`, etc.) to keep in sync with their DAEMON spec work.
+
+I checked before acting on it: this session has no such amendment in progress — I've only been auditing docs/specs against the actual code (the fork report on the 22-accumulators/pricing/Tarjan gaps just came back, and I'll get its full findings shortly). `git status` and `specs/` confirm no STORE amendment exists anywhere in this workspace. I also tried replying to flag the mismatch, but the send failed — `a20e1bb59274b53a5` isn't a resumable session I (or `ListAgents`) can see, so the message may be stale, misdirected, or from a session that's already gone.
+
+**Bottom line for you:** if you do have another Claude session working a STORE/DAEMON spec amendment, it's expecting a STORE-side counterpart that isn't being produced anywhere I can find — worth checking that session directly. I'm not going to fabricate repository method signatures to satisfy it since that's not work this session actually did.
+
+---
+
+Back to your actual ask — the core-technical-audit fork just returned results on docs 01–04 vs. code. Headline findings:
+
+- **Pricing/economics**: mostly accurate, but the "4-tier" claim is really 3 tiers — `ephemeral_1h_tokens` is hardcoded to `0` in `economics.rs`, never computed.
+- **"22 accumulators"**: only **11 exist** as files, and only **10 are actually wired into the engine** (`schema_extractor.rs` exists but isn't hooked into `AnalyticsEngine`). 9 of the 22 named in SPEC-005 and the README table (`flow`, `hook_activity`, `pr_link`, `fuzzy_tools`, `attribution`, `timeline`, `otel_correlation`, `span_mapping`, `trajectory_dag`) don't exist at all.
+- **Tarjan SCC cycle detection**: correctly implemented per the stated invariant (depth ≥3, identical target symbol, zero mutation) — but the only public convenience function (`calculate_monotonicity`) builds nodes with `target_symbol: None`, so it can never actually flag a loop in practice. The algorithm is real but currently dead end-to-end.
+- **Adapters**: all four (Claude Code, Antigravity, Codex, OpenCode) are real, non-stub implementations — doc just oversimplifies the fingerprint heuristics.
+
+Want me to keep going with a second fork pass over docs 05–10 (CLI/TUI, SQLite store/daemon, UI design standard, the Swift app blueprint, and the "six generational leaps" doc) and the remaining specs (003-STORE, 004-DAEMON, 007-INSIGHTS, 008-CLI), or dig deeper into fixing the two concrete bugs just found (the dormant Tarjan path and the 22-vs-11 accumulator gap) first?</result>
+<usage><subagent_tokens>87373</subagent_tokens><tool_uses>4</tool_uses><duration_ms>58070</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>w1dezfdf9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/w1dezfdf9.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Research and close acceptance-criteria/doc gaps across Lumen specs" completed</summary>
+<result>{"a":{"lane":"lane-a","spec_id":"SPEC-LUMEN-001-MODEL","research":"## Researched Pricing (per 1M tokens, USD)\n\n**GPT-4o** — Input $2.50 / Cached input $1.25 / Output $10.00. Confirmed live on OpenAI's official pricing page. [developers.openai.com/api/docs/pricing](https://developers.openai.com/api/docs/pricing)\n\n**DeepSeek R1/V3** — Historical (pre-Apr 2026) standard rate: Input(miss) $0.55 / Cache-hit $0.14 / Output $2.19. DeepSeek has since replaced these models with V4-Flash/V4-Pro and moved to peak/off-peak billing (V4-Flash off-peak: $0.22/$0.007/$0.66). [api-docs.deepseek.com](https://api-docs.deepseek.com/quick_start/pricing), [cloudzero.com/blog/deepseek-pricing](https://www.cloudzero.com/blog/deepseek-pricing/)\n\n**Qwen2.5-Coder-32B** — DashScope/Model Studio no longer lists this legacy model on its current pricing page (only qwen3.x shown); third-party aggregators cite ~$0.05 input/$0.10 output. Not independently confirmed against an official archived rate card. [cloudprice.net](https://cloudprice.net/models/alibaba-qwen2-5-coder-32b-instruct)\n\n**Kimi/Moonshot** — moonshot-v1-128k: Input $2.00 / Output $5.00, **no cache discount**; platform sunsets Aug 31, 2026. [platform.kimi.ai/docs/pricing](https://platform.kimi.ai/docs/pricing)\n\n**GLM-4-Plus** — One source cites ~$1.25/M; Zhipu's live bigmodel.cn/pricing page didn't render pricing tables via fetch (JS-rendered), so this is not independently confirmed. [model.aibase.com](https://model.aibase.com/llm/details/1924354249064497154)\n\n**Gemini 2.0 Flash** — Input $0.10 / Output $0.40 / Cache (context) $0.025 / storage $1.00/M-token-hour. Now shut down (June 1, 2026) but this was the confirmed live rate. [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)\n\n**Gemini 2.0 Pro** — No official GA per-token pricing was ever published; \"2.0 Pro\" only shipped as a free experimental AI Studio model. Google's pricing docs have no such SKU.\n\n## Code vs. reality (`pricing.rs`)\n- **GPT_4O**: exact match (2.50/1.25/10.00).\n- **DEEPSEEK_R1**: exact match to DeepSeek's pre-April-2026 rate — accurate historically, now stale (DeepSeek moved to V4 + peak/off-peak).\n- **QWEN_2_5_CODER** (0.20/0.05/0.60): does not match the ~0.05/0.10 figure found; unconfirmed against an official source either way.\n- **KIMI_K1_5** (0.50/0.10/2.00): does not match current moonshot-v1-128k (2.00/—/5.00, no cache discount) — mismatch or referencing an unverified different SKU.\n- **GLM_4_PLUS** (1.40 flat/0.20/1.40): roughly in the ballpark of one third-party figure ($1.25) but unconfirmed against Zhipu's own page.\n- **GEMINI_2_0_FLASH**: exact match.\n- **GEMINI_2_0_PRO** (1.25/0.30/5.00): almost certainly mislabeled — these numbers match **Gemini 1.5 Pro** (≤128k) pricing, not any published \"2.0 Pro\" rate, since none exists.\n\n## economics.rs confirmed\n`TokenEconomics::calculate` (line 77) hardcodes `ephemeral_1h_tokens: 0` unconditionally, and `ModelPricing` has only a single `cache_write_per_m` field with no 5m/1h split. The \"4-tier\" pricing claim in the docs is not implemented — only 3 real tiers exist (uncached input, cache write, cache read) plus output; the 1h tier is dead schema.\n\n## Recommendation\n**(b) Scope out via explicit `non_goal`.** None of these 6 non-Anthropic providers publish a selectable-TTL 1h cache price point — caching here is auto-discount-only (GPT-4o, DeepSeek, Gemini) or absent (Kimi). A 1h-tier acceptance criterion would have no real rates to bind to for 5 of 6 models and would just invent numbers. If 1h caching matters, it's an Anthropic-specific criterion (Claude's real extended-TTL cache) — scope that separately rather than folding it into this multi-provider matrix.","draft":{"api_surface_additions":[],"new_acceptance_criteria":[{"id":"CRIT-LUMEN-011","criterion":"WHEN computing Claude Opus costs, THE SYSTEM SHALL bill uncached inputs at $15.00/M, cache creation writes at $18.75/M (1.25x), cache reads at $1.50/M (0.10x), and output tokens at $75.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-012","criterion":"WHEN computing GPT-4o costs, THE SYSTEM SHALL bill uncached inputs at $2.50/M, cache reads at $1.25/M, and output tokens at $10.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-013","criterion":"WHEN computing DeepSeek R1 costs, THE SYSTEM SHALL bill uncached inputs at $0.55/M, cache reads at $0.14/M, and output tokens at $2.19/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-014","criterion":"WHEN computing Kimi K1.5 costs, THE SYSTEM SHALL bill uncached inputs at $0.50/M, cache reads at $0.10/M, and output tokens at $2.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-015","criterion":"WHEN computing GLM-4-Plus costs, THE SYSTEM SHALL bill uncached inputs at $1.40/M, cache reads at $0.20/M, and output tokens at $1.40/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-016","criterion":"WHEN computing Gemini 2.0 Flash costs, THE SYSTEM SHALL bill uncached inputs at $0.10/M, cache reads at $0.025/M, and output tokens at $0.40/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-017","criterion":"WHEN computing Gemini 2.0 Pro costs, THE SYSTEM SHALL bill uncached inputs at $1.25/M, cache reads at $0.30/M, and output tokens at $5.00/M.","is_error_case":false,"judgment_call":false}],"non_goals_additions":["Extended-TTL (1-hour) prompt cache pricing tiers for the six non-Anthropic providers (GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini), none of which publish a selectable 1h-cache rate; ephemeral_1h_tokens is dead schema reserved for a future Anthropic-specific 1h-cache criterion, scoped separately."],"other_field_changes":"No changes to api_surface, linked_requirement, linked_research, spec_file_path, or reasoning. Only additions: 7 new acceptance_criteria entries (CRIT-LUMEN-011 through CRIT-LUMEN-017, continuing the existing max id CRIT-LUMEN-010) covering the previously-uncovered ModelPricing constants (CLAUDE_OPUS, GPT_4O, DEEPSEEK_R1, KIMI_K1_5, GLM_4_PLUS, GEMINI_2_0_FLASH, GEMINI_2_0_PRO), and 1 new non_goals entry resolving the 1h-cache-tier question per the research recommendation (option b: scope out).","spec_id":"SPEC-LUMEN-001-MODEL","summary":"Drafted 7 missing acceptance criteria (CRIT-LUMEN-011 to CRIT-LUMEN-017) for the previously-uncovered ModelPricing constants, each stating the exact rates as implemented in crates/lumen-model/src/pricing.rs (verified by direct read) in the same 'WHEN computing X costs, THE SYSTEM SHALL bill...' style as CRIT-LUMEN-002/003/004 — omitting the cache-creation-write clause for models where cache_write_per_m equals input_base_per_m (GPT-4o, DeepSeek R1, Kimi K1.5, GLM-4-Plus, Gemini 2.0 Flash, Gemini 2.0 Pro), matching the precedent set by CRIT-LUMEN-004 (Qwen). CLAUDE_OPUS keeps the full four-clause form with (1.25x)/(0.10x) multiplier annotations like Sonnet/Haiku since its cache write/read rates genuinely diverge from its base rate. Added one non_goals entry resolving the 1h-cache-tier question per the research's recommendation (b): scoped out, since none of the six non-Anthropic providers publish a selectable 1h-cache rate, leaving ephemeral_1h_tokens as dead schema pending a future Anthropic-specific criterion. Criteria describe current pricing.rs code values (not the research's flagged real-world corrections/staleness for DeepSeek, Kimi, Qwen, GLM, or the Gemini 2.0 Pro mislabeling) since the task scope was filling acceptance-criteria coverage gaps against the existing implementation, not remediating pricing accuracy — that discrepancy should be raised as a separate follow-up."},"audit":{"pass":false,"issues":[{"target_id":"non_goals_additions","issue":"The amendment's justification cites 'per the research recommendation (option b: scope out)' and references 'the research's flagged real-world corrections/staleness for DeepSeek, Kimi, Qwen, GLM, or the Gemini 2.0 Pro mislabel
+... (truncated 134012 chars, full result in /private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/w1dezfdf9.output)</result>
+<diagnostics>Per-agent results: /Users/gabe/.claude/projects/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/subagents/workflows/wf_a1e87149-833/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/Users/gabe/.claude/projects/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/workflows/scripts/lumen-spec-gap-fill-wf_a1e87149-833.js', resumeFromRunId: 'wf_a1e87149-833'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>26</agent_count><agents_done>26</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1031564</subagent_tokens><tool_uses>184</tool_uses><duration_ms>619848</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af11bb009bbb7bea9</task-id>
+<tool-use-id>toolu_01W6owMwWfgLW11QRdgeMLZY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/af11bb009bbb7bea9.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-002-SESSION amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Lane B directive: reconcile the SPEC-LUMEN-002-SESSION audit findings into the real spec file.
+
+Read the actual `fingerprint.rs`, `adapters/opencode.rs`, `adapters/codex.rs`, and the current spec. Confirmed the audit's core finding was real: `detect_orchestrator`'s OpenCode branch checks `"action":"read"` (unspaced) as its 4th condition, but `OpenCodeAdapter::matches_fingerprint` checks `"action":"message"` instead — a genuine drift bug, not a documentation error. Also confirmed `CodexAdapter::parse_stream` is a literal no-op stub (ignores its `_reader` param, always returns an empty transcript), and that `memmap2` is a declared-but-unused dependency in `lumen-session` — the existing CRIT-LUMEN-029's "memory-mapped" framing is itself aspirational.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-002-SESSION.json`:
+- Added CRIT-LUMEN-030 through 040 (11 criteria) for Codex/OpenCode fingerprinting and parsing, grounded in the real code.
+- Fixed CRIT-031 to state `detect_orchestrator`'s true branch set (not the adapter's divergent one), and annotated CRIT-032 with the specific bidirectional failure case the drift causes — makes the bug testable rather than papered over.
+- CRIT-033/034 now specify exact field mapping (`choices[i].message.role`/`.content`) and accumulation semantics (sum, not overwrite), both marked `judgment_call: true` since they require the Codex stub to actually be implemented.
+- CRIT-040 benchmarks `parse_stream`'s real buffered-reader path and explicitly notes CRIT-029's mmap claim is unimplemented, rather than silently going along with it.
+- Added `synthetic_50mb_session` to `api_surface`, with a non_goal disclaiming a checked-in binary fixture.
+- Fixed a duplication bug I introduced mid-edit (accidentally wrote a second top-level `non_goals` key, which would have silently dropped the original two entries on parse) — merged back to one array, all 3 entries preserved.
+
+Confirmed valid JSON via `python3 -m json.tool` after all edits. No other files touched.</result>
+<usage><subagent_tokens>288322</subagent_tokens><tool_uses>11</tool_uses><duration_ms>133102</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae77510d57e1f26d1</task-id>
+<tool-use-id>toolu_0158xszaKjmtoqsUux5JgRE8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/ae77510d57e1f26d1.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-006-PATTERN amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Lane E applied.** Changes to `SPEC-LUMEN-006-PATTERN.json`:
+
+1. **CRIT-LUMEN-072** rewritten in place to bind it to the real `compute_recovery_index` function (`lumen-pattern/src/lib.rs:141-166`) — the formula was already correctly implemented, only the spec entry and testable wording were missing.
+2. **`api_surface` fully corrected** — the old entries were stale/fictional (`TrajectoryGraph::detect_cycles` doesn't exist; `TarjanCycleDetector` as a separate struct doesn't exist; `compute_grounding_score` was undeclared as a function despite being referenced by CRIT-073). Replaced with the real types/signatures: `ToolNode`, `CircularLoopAnomaly`, corrected `TrajectoryGraph` (real inherent methods), `compute_grounding_score`, `compute_recovery_index`, `calculate_monotonicity`.
+3. **New CRIT-LUMEN-075** added, but rewritten from the draft to fix a factual error the audit caught: the draft claimed populating `target_symbol`/`target_file` alone would make cycle detection fire. I verified against the real code and the existing test (`test_3_node_cycles_on_identical_symbols`) — `push_tool` only ever adds a single forward edge, so the graph is always a linear chain with no possible cycle regardless of field content. The final criterion is now purely black-box (`calculate_monotonicity` must return `M &lt; 1.0` for a 3-node repeated-read pattern), and the `reasoning` field explicitly documents that **two** code changes are needed — field grounding *and* back-edge construction — so a future implementer won't ship a half-fix.
+4. This criterion is intentionally currently-failing (documented in `reasoning`), not a spec error.
+
+Valid JSON confirmed.</result>
+<usage><subagent_tokens>278266</subagent_tokens><tool_uses>9</tool_uses><duration_ms>105188</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad02da517568fd2f6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/ad02da517568fd2f6.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-007-INSIGHTS amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>JSON valid. Reporting per fork protocol and stopping here.
+
+**Task**: Reconcile and apply the audited SPEC-LUMEN-007-INSIGHTS amendment.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-007-INSIGHTS.json`:
+- Resolved the `discover_fingerprint` architectural disconnect by changing its signature to `discover_fingerprint(transcript, corpus)` (stateless, consistent with `WorkflowClassifier`'s unit-struct design) and adding `discover_fingerprint_corpus(corpus) -&gt; Vec&lt;DiscoveredCategory&gt;`.
+- Added `BimodalMode` (enum: Acceleration/Exploration/Balanced) and `DiscoveredCategory` (struct with `member_count`, `member_session_ids`, `tool_bigram_fingerprint`) as new `api_surface` entries — previously undefined.
+- Edited CRIT-LUMEN-080/081 in place: replaced "high/low" with quantified thresholds (mutation_density &gt;= 0.60, search_turn_count &lt;= 2 for Acceleration; search_turn_count &gt;= 6 AND turn_count &gt;= 15 for Exploration), and closed the "mutating"/"search-intent" ambiguity by binding them to concrete `ToolIntent` variants (`FileEdit`/`FileCreate` for mutating, `CodeSearch`/`FileDiscovery` for search-intent), explicitly excluding `VersionControl` with a documented reason.
+- Added CRIT-LUMEN-086 (clustering success case, complete-linkage clique rule with deterministic tie-breaking), CRIT-LUMEN-087 (no-cluster error case), CRIT-LUMEN-088 (the previously-unhandled dead-zone default → `BimodalMode::Balanced`).
+- Added a non_goals entry disclaiming cross-restart cluster persistence.
+
+File validated as well-formed JSON via `python3 -m json.tool`. All 6 audit issues addressed.</result>
+<usage><subagent_tokens>285421</subagent_tokens><tool_uses>12</tool_uses><duration_ms>178756</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a60d8e59e242790cf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a60d8e59e242790cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled STORE+DAEMON amendments" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Apply reconciled STORE+DAEMON spec amendments per lane_c.json's draft+audit (both pass:false, 5 STORE issues + 8 DAEMON issues).
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-003-STORE.json`:
+- Added 6 api_surface entries: `ToolCallRepository`, `RollupRepository` (from the original draft), plus `CommandEventRepository`, `SnapshotRepository`, `TokenUsageRepository`, `ReadContractEnvelope&lt;T&gt;` (new, closing gaps the audit found).
+- Added CRIT-LUMEN-040 through 048 (9 new criteria): tool-call insert, split count-semantics (041) from get_session wiring (042) per audit fix, rollup idempotency now correctly naming a new V6 migration + `CREATE UNIQUE INDEX` instead of editing already-applied V5, get_rollup/list_rollups, command-event insert, snapshot save/get, token-usage insert reusing real `TokenEconomics`/`ModelTokenSummary` types (no invented record type).
+- Rewrote CRIT-LUMEN-038 in place: dropped the unverifiable "byte-identical...Mac app" language and the unimplementable JSON-Schema key-ordering claim; now references an in-repo `schemas/read-contracts/v1.schema.json` (type/required/additionalProperties only) plus `ReadContractEnvelope`'s `contract_version` field, with key-ordering deferred to a golden-file test.
+- Added 2 non_goals entries (Mac-app-as-consumer, category-score deferral to lumen-insights).
+- Updated scope line to list all 6 new/existing repository names.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-004-DAEMON.json`:
+- Added `WorkerPipeline` to api_surface (was named in scope, never defined).
+- Edited CRIT-LUMEN-051 and CRIT-LUMEN-053 **in place** (not duplicated — they already existed) to bind to real store methods (`SnapshotRepository::save_snapshot`, and `WorkerPipeline::run_once` enumerating `ToolCallRepository`/`CommandEventRepository`/`TokenUsageRepository`/`FindingsRepository` inserts + `QueueRepository::mark_completed`), with all "not satisfiable until X exists" hedging stripped — the referenced methods now genuinely exist since I added them to STORE in the same pass.
+- Removed the invented `CategoryScoreRepository` dependency from CRIT-053 (no accumulator produces category scores; that's lumen-insights' job, not named in DAEMON's scope) and added a non_goals entry making the deferral explicit instead.
+- Left CRIT-050/052/054/055/056/057 untouched (audit found no issues with them).
+
+Both files validated as well-formed JSON (`python3 -m json.tool`). Did not touch `migrations.rs` or any other Rust source — the V6 migration is described in the spec as a future implementation task, not applied as code.</result>
+<usage><subagent_tokens>308077</subagent_tokens><tool_uses>22</tool_uses><duration_ms>277983</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a198b453636bde528</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a198b453636bde528.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-005-ANALYSIS amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All work is applied and verified. Here's the full picture.
+
+## What changed
+
+**All 7 specs with acceptance-criteria gaps are now closed and validated** (research → draft → adversarial audit → reconciliation for every one):
+
+| Spec | Criteria before → after | Key fixes |
+|---|---|---|
+| 001-MODEL | 10 → 17 | Added the 6 missing pricing constants + Opus; scoped out the 1h-cache tier via an explicit non_goal (no provider publishes a real rate for it) |
+| 002-SESSION | 10 → 21 | Added CodexAdapter/OpenCodeAdapter criteria; **honestly documents** an actual `matches_fingerprint` vs `detect_orchestrator` drift bug rather than pretending it's fixed |
+| 003-STORE | ~10 → 19 | Added `ToolCallRepository`/`RollupRepository`/`CommandEventRepository`; replaced the unplannable "Mac app contract" reference with an in-repo versioned JSON schema; fixed a criterion that would've corrupted an already-applied migration |
+| 004-DAEMON | 8 → 8 (rewritten) | Criteria now reference store methods that actually exist; added the missing `WorkerPipeline` type |
+| 005-ANALYSIS | 10 → 39 | The big one — wrote grounded, falsifiable criteria for all 14 previously-uncovered accumulators (5 built-untested + 9 unbuilt) |
+| 006-PATTERN | ~4 → 6 | Gave "Error Recovery Index" a real formula; added a criterion that documents the Tarjan dormant-path bug as an intentionally-failing spec (honest, not swept under the rug) |
+| 007-INSIGHTS | ~5 → 9 | Concrete numeric thresholds replacing "high"/"low"; fixed `discover_fingerprint`'s signature |
+
+**3 plans fixed** — PLAN-001, PLAN-002, and PLAN-005 no longer orphan any of their spec's *pre-existing* criteria (verified by re-running the same orphan check the original audit used).
+
+**Docs 07/08/09/10** now carry explicit "Vision/Roadmap" banners distinguishing them from the implemented-system docs, and doc 09's license table matches the real `LICENSE` file instead of asserting licenses for crates that don't exist.
+
+**README/ARCHITECTURE benchmarks are now real.** Added 3 `criterion` bench suites and ran them: fingerprint detection measured at 112–385ns (vs. the fabricated "&lt;0.08ms"), 11-accumulator single pass at ~294µs for 10k turns, Tarjan SCC at ~11µs for 500 nodes. The competitor comparison matrix and the two unmeasurable claims (SIMD throughput, directory scan) are caveated/removed rather than left fabricated.
+
+## Two things worth knowing
+
+1. **I caught and reverted an out-of-scope change.** One of the reconciliation agents modified real detection logic in `fingerprint.rs` — outside the plan's "specs/docs only" boundary. I reverted it, then fixed the spec text it had drifted from to match reality.
+2. **That revert re-exposed a genuine pre-existing bug**, unrelated to any of today's work: `real_claude_session_dump()` (an existing fixture) contains none of the substrings `detect_orchestrator`'s ClaudeCode branch requires, so 2 tests fail. This isn't a regression — it predates this session. I left it as a documented, known gap rather than sneaking in an unreviewed fix; it's a good next task.
+
+Workspace builds clean; **139 of 141 tests pass** (the 2 failures are that pre-existing bug). All 10 spec JSON files validate. 26 of SPEC-005's 29 newly-added criteria still need a follow-up planning pass to get task coverage — flagged explicitly rather than silently left orphaned, consistent with the plan's stated boundary of not doing full implementation planning in this pass.</result>
+<usage><subagent_tokens>400093</subagent_tokens><tool_uses>91</tool_uses><duration_ms>947229</duration_ms></usage>
+</task-notification>
+
+---
+
+Everything validated and ready to start work?
+
+---
+
+What's a good prompt to start with a fresh session that gives it a starting point from zero context?
+
+---
+
+Can we address the open items?? PRism should be planned and implemented separately in its own context and repo
+
+---
+
+<task-notification>
+<task-id>a1cf62c0646e44b91</task-id>
+<tool-use-id>toolu_01JJnB1JmHu5eNxFxvZt8FNU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a1cf62c0646e44b91.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix CRIT-LUMEN-108 fingerprint drift" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fixed the OpenCode fingerprint drift bug (CRIT-LUMEN-108) — added the missing `"action": "run"` (spaced) and `"action":"message"` conditions to `detect_orchestrator`'s OpenCode branch in `crates/lumen-session/src/fingerprint.rs`, matching `OpenCodeAdapter::matches_fingerprint`'s existing 4-condition check.
+
+**Diff**: added 2 new tests (`test_detect_opencode_spaced_action_run`, `test_detect_opencode_action_message`) to `fingerprint.rs`'s test module; confirmed both failed against the original code (red); extended the `detect_orchestrator` OpenCode branch's condition from 2 to 4 checks (green). `OpenCodeAdapter::matches_fingerprint` and the spec file were left untouched.
+
+**Test output** (`cargo test -p lumen-session --no-fail-fast`): fingerprint module 5/5 passed (my 2 new + 3 existing). Full crate: 20 passed, 4 failed. Of those 4 failures: 2 are the known pre-existing `test_table_driven_fingerprint_detection` case_1/case_2 (unrelated ClaudeCode fixture bug, untouched by me, confirmed still exactly 2). The other 2 (`test_codex_adapter_parses_thread_id_choices_and_cumulative_usage`, `test_codex_adapter_skips_malformed_lines`) are **not mine** — they belong to a different in-flight fix (CodexAdapter implementation) touching `adapters/codex.rs`, running concurrently in this same crate; my change didn't touch that file. My change adds zero new failures beyond the 2 known ones.</result>
+<usage><subagent_tokens>396813</subagent_tokens><tool_uses>5</tool_uses><duration_ms>52373</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3b0b2ea7a3f7f896</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a3b0b2ea7a3f7f896.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement CodexAdapter per CRIT-LUMEN-109/110" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Directive**: Implement CodexAdapter::parse_stream for real per CRIT-LUMEN-109/110. Complete.
+
+**Diff**: `crates/lumen-session/src/adapters/codex.rs` — replaced the stub with real line-by-line JSONL parsing: `session_id` set from `thread_id`, one `CanonicalTurn` per `choices[]` element (role from `message.role`, text from `message.content`), and cumulative (not overwriting) summation of `usage.prompt_tokens`/`completion_tokens` into `TokenEconomics`. Malformed/empty lines are skipped, matching the established adapter convention (CRIT-LUMEN-025). Added `crates/lumen-session/tests/test_codex.rs` (2 tests, written first, confirmed failing against the stub before implementing).
+
+**Test output**:
+```
+test test_codex_adapter_skips_malformed_lines ... ok
+test test_codex_adapter_parses_thread_id_choices_and_cumulative_usage ... ok
+test result: ok. 2 passed; 0 failed
+```
+
+**Full `cargo test -p lumen-session --no-fail-fast`**: all suites pass except `test_fixtures_snapshots.rs` (`test_table_driven_fingerprint_detection::case_1`/`case_2`) — confirmed still exactly 2 pre-existing failures, unrelated to this change, not touched. No new regressions.
+
+No spec file modified. No commit made.</result>
+<usage><subagent_tokens>399591</subagent_tokens><tool_uses>8</tool_uses><duration_ms>48966</duration_ms></usage>
+</task-notification>
+
+---
+
+What is tarjan?
+
+---
+
+Are we now ready to start implementing then?
+
+---
+
+Pickup the interrupted work
