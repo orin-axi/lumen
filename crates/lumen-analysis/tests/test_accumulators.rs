@@ -671,3 +671,89 @@ fn test_subagent_and_plugin_skill_attribution() {
 
     assert_eq!(report.by_subagent.get("reviewer").map(|m| m.by_plugin.get("reviewer-tool").copied()), Some(Some(40)));
 }
+
+#[test]
+fn test_artifacts_accumulator_dedup_and_skip_empty() {
+    // CRIT-LUMEN-126: non-empty FileRead/FileCreate/FileEdit paths land in their
+    // respective sets, while empty-path variants and non-file ToolIntent variants
+    // (CodeSearch, McpCall) are silently skipped.
+    let mut art = ArtifactsAccumulator::default();
+
+    let turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![
+            CanonicalToolCall {
+                call_id: "c1".into(),
+                tool_name: "view_file".into(),
+                intent: ToolIntent::FileRead { path: "src/lib.rs".into(), line_range: None },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "c2".into(),
+                tool_name: "view_file".into(),
+                intent: ToolIntent::FileRead { path: "".into(), line_range: None },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "c3".into(),
+                tool_name: "create_file".into(),
+                intent: ToolIntent::FileCreate { path: "src/new.rs".into() },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "c4".into(),
+                tool_name: "create_file".into(),
+                intent: ToolIntent::FileCreate { path: "".into() },
+                raw_arguments: serde_json::json!({}),
+            },
+            // A path that also appears in files_read -- must be deduped in
+            // total_unique_files while remaining present in both category sets.
+            CanonicalToolCall {
+                call_id: "c5".into(),
+                tool_name: "replace_file_content".into(),
+                intent: ToolIntent::FileEdit { path: "src/lib.rs".into(), lines_added: 1, lines_removed: 1 },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "c6".into(),
+                tool_name: "replace_file_content".into(),
+                intent: ToolIntent::FileEdit { path: "".into(), lines_added: 0, lines_removed: 0 },
+                raw_arguments: serde_json::json!({}),
+            },
+            // Non-file ToolIntent variants must not leak into any category set.
+            CanonicalToolCall {
+                call_id: "c7".into(),
+                tool_name: "grep".into(),
+                intent: ToolIntent::CodeSearch { tool: "ripgrep".into(), query: "foo".into(), is_ast: false },
+                raw_arguments: serde_json::json!({}),
+            },
+            CanonicalToolCall {
+                call_id: "c8".into(),
+                tool_name: "mcp__github__get_issue".into(),
+                intent: ToolIntent::McpCall { server: "github".into(), method: "get_issue".into() },
+                raw_arguments: serde_json::json!({}),
+            },
+        ],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    art.update(&turn);
+
+    let metrics = art.finalize();
+
+    assert_eq!(metrics.files_read.len(), 1);
+    assert!(metrics.files_read.contains("src/lib.rs"));
+    assert_eq!(metrics.files_created.len(), 1);
+    assert!(metrics.files_created.contains("src/new.rs"));
+    assert_eq!(metrics.files_edited.len(), 1);
+    assert!(metrics.files_edited.contains("src/lib.rs"));
+
+    // CRIT-LUMEN-127: "src/lib.rs" appears in both files_read and files_edited but
+    // must be counted exactly once in total_unique_files.
+    assert_eq!(metrics.total_unique_files, 2);
+}
