@@ -62,6 +62,7 @@ pub struct CanonicalToolResult {
     pub is_error: bool,
     pub error_class: Option<CompactString>,
     pub truncated_output: Option<CompactString>,
+    pub otel_span_id: Option<CompactString>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

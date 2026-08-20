@@ -188,6 +188,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                                     is_error,
                                     error_class: if is_error { Some(CompactString::new("ToolError")) } else { None },
                                     truncated_output: None,
+                                    otel_span_id: None,
                                 });
                             } else if block_type == "text" {
                                 if let Some(txt) = b.get("text").and_then(|t| t.as_str()) {

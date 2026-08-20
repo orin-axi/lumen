@@ -364,6 +364,7 @@ fn test_api_health_and_mcp_affinity_accumulators() {
             is_error: true,
             error_class: Some("429_rate_limit".into()),
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -392,6 +393,7 @@ fn test_api_health_and_mcp_affinity_accumulators() {
             is_error: false,
             error_class: None,
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -442,6 +444,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
             is_error: true,
             error_class: Some("rate_limit_429".into()),
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -471,6 +474,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
             is_error: true,
             error_class: Some("503_service_unavailable".into()),
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -500,6 +504,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
             is_error: false,
             error_class: None,
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -1002,6 +1007,7 @@ fn test_tool_inventory_last_call_wins_and_running_error_key() {
         is_error,
         error_class: None,
         truncated_output: None,
+        otel_span_id: None,
     };
 
     // Turn 0: an error result arrives before any tool_call has ever run.
@@ -1121,6 +1127,7 @@ fn test_flow_accumulator_permission_break_and_ratio() {
         is_error: true,
         error_class: Some("Permission_Denied".into()),
         truncated_output: None,
+        otel_span_id: None,
     }];
     flow.update(&make_turn(3, 1, perm_result));
 
@@ -1210,6 +1217,7 @@ fn test_pr_link_accumulator_vcs_vs_text_source() {
             truncated_output: Some(CompactString::new(
                 "Created https://github.com/acme/widgets/pull/42 successfully"
             )),
+            otel_span_id: None,
         }],
         usage: None,
     };
@@ -1392,6 +1400,7 @@ fn test_trajectory_dag_intent_mapping_and_had_error() {
             is_error: true,
             error_class: Some("edit_failed".into()),
             truncated_output: None,
+            otel_span_id: None,
         }],
         usage: None,
     };

@@ -122,6 +122,7 @@ impl SessionAdapter for AgyAdapter {
                     is_error,
                     error_class: if is_error { Some(CompactString::new("ToolError")) } else { None },
                     truncated_output: None,
+                    otel_span_id: None,
                 });
 
                 turns.push(CanonicalTurn {

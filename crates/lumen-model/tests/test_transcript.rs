@@ -174,6 +174,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
                     is_error: false,
                     error_class: None,
                     truncated_output: None,
+                    otel_span_id: None,
                 }],
                 usage: None,
             },
