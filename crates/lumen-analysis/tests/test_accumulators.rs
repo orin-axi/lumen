@@ -37,6 +37,57 @@ fn test_circuit_breaker_trips_on_3_rounds() {
 }
 
 #[test]
+fn test_circuit_breaker_round_counter_boundary_and_pair_change_reset() {
+    // CRIT-LUMEN-062: consecutive review handoffs between the same agent pair
+    // increment the round counter, and a CircuitStallEvent is only flagged once
+    // rounds exceed 2 -- not at exactly 2. Handing off to a *different* agent
+    // pair resets the counter rather than continuing the streak.
+    let mut cb = CircuitBreakerAccumulator::default();
+
+    let spawn_turn = |turn_index: usize, agent_type: &str| CanonicalTurn {
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: CompactString::new(format!("call_{turn_index}")),
+            tool_name: CompactString::new("invoke_subagent"),
+            intent: ToolIntent::SubagentSpawn {
+                agent_type: CompactString::new(agent_type),
+                description: CompactString::new("review this"),
+            },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    // Round 1 and round 2 with "auditor" -- must not exceed the threshold yet.
+    cb.update(&spawn_turn(0, "auditor"));
+    cb.update(&spawn_turn(1, "auditor"));
+    assert_eq!(cb.consecutive_rounds, 2);
+    assert!(cb.stalls.is_empty(), "2 consecutive rounds must not flag a stall (threshold is >2)");
+
+    // Handoff to a different agent pair resets the streak back to round 1.
+    cb.update(&spawn_turn(2, "reviewer"));
+    assert_eq!(cb.consecutive_rounds, 1);
+    assert!(cb.stalls.is_empty());
+
+    // "reviewer" continues for 2 more consecutive rounds, crossing the threshold on round 3.
+    cb.update(&spawn_turn(3, "reviewer"));
+    cb.update(&spawn_turn(4, "reviewer"));
+
+    let report = cb.finalize();
+    assert_eq!(report.max_observed_rounds, 3);
+    assert!(report.tripped);
+    assert_eq!(report.stalls.len(), 1);
+    assert_eq!(report.stalls[0].agent_pair.as_str(), "parent->reviewer");
+    assert_eq!(report.stalls[0].observed_rounds, 3);
+    assert_eq!(report.stalls[0].turn_index, 4);
+}
+
+#[test]
 fn test_turn_duration_p50_p95_percentiles() {
     let mut td = TurnDurationAccumulator::default();
 
