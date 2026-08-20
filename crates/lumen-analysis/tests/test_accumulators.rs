@@ -242,6 +242,102 @@ fn test_context_growth_and_autonomy_accumulators() {
 }
 
 #[test]
+fn test_context_growth_skips_missing_usage_and_zero_growth_floor() {
+    // CRIT-LUMEN-130: a turn with usage=None must be excluded from turn_count
+    // entirely and must not set/overwrite initial_prompt_tokens.
+    // CRIT-LUMEN-131: the first usage-bearing turn (previous_prompt_tokens
+    // starts at 0) contributes zero growth even with a positive prompt_tokens,
+    // and a later usage turn whose prompt_tokens does not exceed the prior
+    // usage turn's also contributes zero growth. A None-usage turn interleaved
+    // between usage turns must not disturb the previous-usage-turn tracking.
+    // CRIT-LUMEN-132: avg_growth_per_turn == total_growth / (turn_count - 1),
+    // or 0.0 when turn_count <= 1.
+    let mut cg = ContextGrowthAccumulator::default();
+
+    let usage_turn = |turn_index: usize, prompt_tokens: u64| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: Some(TurnTokenUsage {
+            input_tokens: prompt_tokens,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        }),
+    };
+
+    let no_usage_turn = |turn_index: usize| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    // Turn 0: no usage -- must be skipped entirely, must not set
+    // initial_prompt_tokens or increment turn_count.
+    cg.update(&no_usage_turn(0));
+
+    // Turn 1: first usage-bearing turn. previous_prompt_tokens is still 0, so
+    // even though prompt_tokens (500) is positive, it must contribute zero
+    // growth. This also sets initial_prompt_tokens to 500 -- proving the
+    // earlier None-usage turn did not already set it (e.g. to 0).
+    cg.update(&usage_turn(1, 500));
+    assert_eq!(cg.turn_count, 1, "None-usage turn 0 must not increment turn_count");
+    assert_eq!(cg.initial_prompt_tokens, Some(500));
+    assert_eq!(cg.total_growth, 0, "first usage turn must not count its own prompt_tokens as growth");
+
+    // Turn 2: usage-bearing, prompt_tokens (400) does not exceed the prior
+    // usage turn's (500) -- must contribute zero growth, not a negative jump.
+    cg.update(&usage_turn(2, 400));
+    assert_eq!(cg.turn_count, 2);
+    assert_eq!(cg.total_growth, 0);
+    assert_eq!(cg.max_jump_tokens, 0);
+
+    // Turn 3: no usage again, interleaved -- must be skipped entirely and must
+    // not disturb previous_prompt_tokens tracking (still 400 from turn 2).
+    cg.update(&no_usage_turn(3));
+    assert_eq!(cg.turn_count, 2, "interleaved None-usage turn must not increment turn_count");
+
+    // Turn 4: usage-bearing, prompt_tokens (700) exceeds the prior *usage*
+    // turn's (400, from turn 2 -- the intervening None-usage turn 3 must not
+    // have reset previous_prompt_tokens) -- a real jump of 300.
+    cg.update(&usage_turn(4, 700));
+    assert_eq!(cg.turn_count, 3);
+    assert_eq!(cg.total_growth, 300);
+    assert_eq!(cg.max_jump_tokens, 300);
+
+    let metrics = cg.finalize();
+    assert_eq!(metrics.initial_prompt_tokens, 500);
+    assert_eq!(metrics.final_prompt_tokens, 700);
+    assert_eq!(metrics.max_jump_tokens, 300);
+    // avg_growth_per_turn = total_growth / (turn_count - 1) = 300 / (3 - 1) = 150.0
+    assert_eq!(metrics.avg_growth_per_turn, 150.0);
+
+    // CRIT-LUMEN-132: turn_count <= 1 must floor avg_growth_per_turn at 0.0
+    // rather than dividing by zero or a negative denominator.
+    let mut single = ContextGrowthAccumulator::default();
+    single.update(&usage_turn(0, 1000));
+    let single_metrics = single.finalize();
+    assert_eq!(single_metrics.avg_growth_per_turn, 0.0, "turn_count == 1 must yield avg_growth_per_turn 0.0");
+
+    let mut empty = ContextGrowthAccumulator::default();
+    empty.update(&no_usage_turn(0));
+    let empty_metrics = empty.finalize();
+    assert_eq!(empty_metrics.avg_growth_per_turn, 0.0, "turn_count == 0 must yield avg_growth_per_turn 0.0");
+    assert_eq!(empty_metrics.initial_prompt_tokens, 0, "no usage-bearing turns means initial_prompt_tokens defaults to 0");
+}
+
+#[test]
 fn test_api_health_and_mcp_affinity_accumulators() {
     let mut api = ApiHealthAccumulator::default();
     let mut mcp = McpAffinityAccumulator::default();
