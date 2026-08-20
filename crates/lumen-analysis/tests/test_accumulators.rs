@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use compact_str::CompactString;
 use lumen_analysis::*;
 use lumen_model::*;
@@ -1421,4 +1421,69 @@ fn test_trajectory_dag_intent_mapping_and_had_error() {
     assert_eq!(status_node.target_symbol, None);
     assert!(!status_node.is_mutation);
     assert!(!status_node.had_error);
+}
+
+#[test]
+fn test_timeline_accumulator_assistant_streaks_and_idle_gaps() {
+    // CRIT-LUMEN-150/151: consecutive Assistant turns extend an open streak; a
+    // non-Assistant turn closes it, bumping assistant_streak_count and updating
+    // longest_streak_turns. Independently, a gap exceeding 5 minutes since
+    // last_timestamp increments idle_gap_count/total_idle_ms/longest_idle_gap_ms,
+    // while last_timestamp always advances regardless of gap size.
+    let mut tl = TimelineAccumulator::default();
+
+    let t0 = Utc::now();
+
+    let make_turn = |turn_index: usize, role: TurnRole, timestamp: chrono::DateTime<Utc>| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role,
+        timestamp,
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    // 3 consecutive Assistant turns 1s apart -> streak of 3.
+    tl.update(&make_turn(0, TurnRole::Assistant, t0));
+    tl.update(&make_turn(1, TurnRole::Assistant, t0 + Duration::seconds(1)));
+    tl.update(&make_turn(2, TurnRole::Assistant, t0 + Duration::seconds(2)));
+    assert_eq!(tl.current_streak, 3);
+    assert_eq!(tl.idle_gap_count, 0);
+
+    // A User turn 6 minutes after the last Assistant turn -- gap exceeds 5min
+    // threshold, closes the streak.
+    let user_ts = t0 + Duration::seconds(2) + Duration::minutes(6);
+    tl.update(&make_turn(3, TurnRole::User, user_ts));
+
+    assert_eq!(tl.current_streak, 0, "streak must close on role transition away from Assistant");
+    assert_eq!(tl.assistant_streak_count, 1);
+    assert_eq!(tl.longest_streak_turns, 3);
+    assert_eq!(tl.idle_gap_count, 1);
+
+    let expected_gap_ms = Duration::minutes(6).num_milliseconds();
+    assert_eq!(tl.total_idle_ms, expected_gap_ms);
+    assert_eq!(tl.longest_idle_gap_ms, expected_gap_ms);
+    assert_eq!(tl.last_timestamp, Some(user_ts));
+
+    // 2 more consecutive Assistant turns 1s apart -- no new idle gap since <5min.
+    let a1_ts = user_ts + Duration::seconds(1);
+    let a2_ts = a1_ts + Duration::seconds(1);
+    tl.update(&make_turn(4, TurnRole::Assistant, a1_ts));
+    tl.update(&make_turn(5, TurnRole::Assistant, a2_ts));
+
+    assert_eq!(tl.current_streak, 2);
+    assert_eq!(tl.idle_gap_count, 1, "sub-5min gaps must not increment idle_gap_count");
+    assert_eq!(tl.total_idle_ms, expected_gap_ms, "sub-5min gaps must not add to total_idle_ms");
+    assert_eq!(tl.longest_idle_gap_ms, expected_gap_ms);
+    assert_eq!(tl.last_timestamp, Some(a2_ts), "last_timestamp must always advance to the most recent turn");
+
+    let report = tl.finalize();
+    assert_eq!(report.assistant_streak_count, 1);
+    assert_eq!(report.longest_streak_turns, 3);
+    assert_eq!(report.idle_gap_count, 1);
+    assert_eq!(report.total_idle_ms, expected_gap_ms);
+    assert_eq!(report.longest_idle_gap_ms, expected_gap_ms);
 }

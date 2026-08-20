@@ -9,8 +9,8 @@ use crate::accumulators::{
     ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, FuzzyToolsAccumulator,
     FuzzyToolsMetrics, McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator,
     PrLinkAccumulator, PrLinkMetrics, SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics,
-    StatsAccumulator, StatsMetrics, ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode, TrajectoryDagAccumulator,
-    TurnDurationAccumulator, TurnDurationMetrics,
+    StatsAccumulator, StatsMetrics, TimelineAccumulator, ToolInventoryAccumulator, ToolInventoryMetrics, ToolNode,
+    TrajectoryDagAccumulator, TurnDurationAccumulator, TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -35,6 +35,7 @@ pub struct AnalysisReport {
     pub attribution: AttributionMetrics,
     pub by_subagent: BTreeMap<CompactString, AttributionMetrics>,
     pub trajectory_dag: Vec<ToolNode>,
+    pub timeline: TimelineAccumulator,
 }
 
 pub struct AnalyticsEngine {
@@ -55,6 +56,7 @@ pub struct AnalyticsEngine {
     schema_extractor: SchemaExtractorAccumulator,
     attribution: AttributionAccumulator,
     trajectory_dag: TrajectoryDagAccumulator,
+    timeline: TimelineAccumulator,
 }
 
 impl Default for AnalyticsEngine {
@@ -83,6 +85,7 @@ impl AnalyticsEngine {
             schema_extractor: SchemaExtractorAccumulator::default(),
             attribution: AttributionAccumulator::default(),
             trajectory_dag: TrajectoryDagAccumulator::default(),
+            timeline: TimelineAccumulator::default(),
         }
     }
 
@@ -106,6 +109,7 @@ impl AnalyticsEngine {
             self.schema_extractor.update(turn);
             self.attribution.update(turn);
             self.trajectory_dag.update(turn);
+            self.timeline.update(turn);
         }
 
         let mut by_subagent = BTreeMap::new();
@@ -134,6 +138,7 @@ impl AnalyticsEngine {
             attribution: self.attribution.finalize(),
             by_subagent,
             trajectory_dag: self.trajectory_dag.finalize(),
+            timeline: self.timeline.finalize(),
         }
     }
 }
