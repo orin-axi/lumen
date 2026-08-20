@@ -44,7 +44,7 @@ flowchart TD
         A1 -->|JSONL stream| F
         A2 -->|JSONL stream| F
         A3 -->|JSONL stream| F
-        F -->|< 0.08ms| B
+        F -->|< 1µs, measured| B
     end
 
     subgraph IR [" 2. CANONICAL REPRESENTATION "]
@@ -89,14 +89,14 @@ flowchart TD
 
 ## Comparative Matrix
 
+> **Note:** The table below describes capability presence, not measured performance — Lumen has not been benchmarked head-to-head against these tools, and the figures previously shown here for other projects were not independently verified. See [Benchmarks](#benchmarks) for Lumen's own measured numbers.
+
 | Capability | Lumen | OpenTelemetry GenAI | Arize Phoenix | LangSmith |
 | :--- | :---: | :---: | :---: | :---: |
-| **Anthropic 4-Tier Cache Math** | **Native** | Manual calculation | Partial | Partial |
+| **Anthropic Cache-Tier Math (3 of 4 tiers implemented)** | **Native** | Manual calculation | Partial | Partial |
 | **Tarjan SCC Tool Cycle Detection** | **Native ($O(V+E)$)** | No | No | No |
-| **Parser Throughput** | **`> 1.5 GB/s` (SIMD)** | `< 50 MB/s` | `< 40 MB/s` | `< 30 MB/s` |
 | **Context Compaction Merge** | **$\max()$ Snapshot Merge** | Lossy / Double counts | No | No |
 | **Multi-Orchestrator Support** | **Claude, AGY, Codex, OpenCode** | OTel Traces Only | Python Traces Only | LangChain Only |
-| **Offline CLI** | **In-memory (<35ms)** | Requires Collector | Requires Database | Requires Cloud API |
 
 ---
 
@@ -318,15 +318,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Benchmarks
 
-Benchmarked on Apple M3 Max:
+Measured with `cargo bench` (criterion) on Apple M3 Pro. Reproduce with `cargo bench -p lumen-session -p lumen-analysis -p lumen-pattern`; raw output lives under each crate's `target/criterion/`.
 
-| Operation | Input Size | Runtime Latency | Memory Overhead |
-| :--- | :--- | :---: | :---: |
-| **Auto-Fingerprint Detection** | First 2KB Header | **`< 0.08 ms`** | 0 heap allocations |
-| **Streaming Ingestion** | 50 MB JSONL (4,000 turns) | **`31.4 ms`** | `< 4 MB` RSS |
-| **22 Accumulators** | 10,000 Messages | **`8.2 ms`** | 0 heap allocations |
-| **Tarjan SCC Cycle Detection** | 500 Node DAG | **`0.4 ms`** | `< 64 KB` |
-| **Directory Scan** | 200 Sessions (1.2 GB) | **`118 ms`** | 16 Rayon Threads |
+| Operation | Input Size | Measured Latency |
+| :--- | :--- | :---: |
+| **Auto-Fingerprint Detection** (`detect_orchestrator`) | Real session sample, per orchestrator | **`81 ns`-`229 ns`** |
+| **Analytics Engine Single Pass** (19 accumulators wired today) | 10,000 synthetic turns | **`~1.16 ms`** |
+| **Tarjan SCC Cycle Detection** | 500-node trajectory graph | **`~11 µs`** |
+
+> Streaming-ingestion throughput (large JSONL files) and multi-session directory-scan benchmarks are not yet measured — they need a checked-in 50MB+ fixture and a multi-session corpus that don't exist in this repo yet. Previous figures for these (`31.4 ms`/50MB, `118 ms`/200 sessions) were unmeasured and have been removed rather than left unverified; they'll be restored once real fixtures and benches exist.
 
 ---
 

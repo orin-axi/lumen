@@ -1,0 +1,18 @@
+pub fn real_claude_session_dump() -> &'static str {
+    r#"{"type":"user","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":null,"message":{"role":"user","content":"Please refactor the error handling in crates/lumen-store/src/error.rs"}}
+{"type":"assistant","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":"turn-0","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"I will inspect the existing error enum first."},{"type":"tool_use","id":"call_read_01","name":"view_file","input":{"AbsolutePath":"crates/lumen-store/src/error.rs"}}],"usage":{"input_tokens":12500,"output_tokens":85,"cache_creation_input_tokens":2500,"cache_read_input_tokens":45000}}}
+{"type":"user","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":"turn-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read_01","content":"use thiserror::Error;\n#[derive(Debug, Error)]\npub enum StoreError {}"}]}}
+{"type":"assistant","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":"turn-2","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"call_edit_01","name":"replace_file_content","input":{"TargetFile":"crates/lumen-store/src/error.rs","Instruction":"Add NotFound error variant"}}],"usage":{"input_tokens":13200,"output_tokens":140,"cache_creation_input_tokens":0,"cache_read_input_tokens":47500}}}
+{"type":"user","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":"turn-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_edit_01","content":"Successfully replaced content in crates/lumen-store/src/error.rs"}]}}
+{"type":"assistant","sessionId":"a1b2c3d4-1234-4567-89ab-1234567890ab","parentUuid":"turn-4","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"The error enum has been updated with the NotFound variant."}],"usage":{"input_tokens":13500,"output_tokens":45,"cache_creation_input_tokens":0,"cache_read_input_tokens":47500}}}
+"#
+}
+
+pub fn claude_session_with_errors_and_rate_limits() -> &'static str {
+    r#"{"type":"user","sessionId":"b2c3d4e5-2345-4567-89ab-234567890abc","parentUuid":null,"message":{"role":"user","content":"Run database migrations"}}
+{"type":"assistant","sessionId":"b2c3d4e5-2345-4567-89ab-234567890abc","parentUuid":"turn-0","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"call_mig_01","name":"run_command","input":{"CommandLine":"cargo run -p lumen-cli -- migrate"}}],"usage":{"input_tokens":5000,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":15000}}}
+{"type":"user","sessionId":"b2c3d4e5-2345-4567-89ab-234567890abc","parentUuid":"turn-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_mig_01","is_error":true,"content":"Error 429: Rate limit exceeded on database socket."}]}}
+{"type":"assistant","sessionId":"b2c3d4e5-2345-4567-89ab-234567890abc","parentUuid":"turn-2","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"call_retry_01","name":"run_command","input":{"CommandLine":"cargo run -p lumen-cli -- migrate --retry"}}],"usage":{"input_tokens":5200,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":15000}}}
+{"type":"user","sessionId":"b2c3d4e5-2345-4567-89ab-234567890abc","parentUuid":"turn-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_retry_01","is_error":false,"content":"Applied 5 migrations successfully."}]}}
+"#
+}
