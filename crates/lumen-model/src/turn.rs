@@ -14,6 +14,7 @@ pub struct CanonicalTurn {
     pub tool_calls: SmallVec<[CanonicalToolCall; 2]>,
     pub tool_results: SmallVec<[CanonicalToolResult; 2]>,
     pub usage: Option<TurnTokenUsage>,
+    pub attribution: Option<AttributionSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,13 @@ pub enum TurnRole {
     Assistant,
     System,
     ToolResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AttributionSource {
+    Root,
+    Plugin { name: CompactString },
+    Skill { name: CompactString, plugin: Option<CompactString> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

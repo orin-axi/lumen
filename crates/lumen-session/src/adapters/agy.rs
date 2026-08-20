@@ -71,6 +71,7 @@ impl SessionAdapter for AgyAdapter {
 
             if step_type == "USER_INPUT" {
                 turns.push(CanonicalTurn {
+                    attribution: None,
                     turn_index: turns.len(),
                     role: TurnRole::User,
                     timestamp: ended_at,
@@ -99,6 +100,7 @@ impl SessionAdapter for AgyAdapter {
                 }
 
                 turns.push(CanonicalTurn {
+                    attribution: None,
                     turn_index: turns.len(),
                     role: TurnRole::Assistant,
                     timestamp: ended_at,
@@ -123,6 +125,7 @@ impl SessionAdapter for AgyAdapter {
                 });
 
                 turns.push(CanonicalTurn {
+                    attribution: None,
                     turn_index: turns.len(),
                     role: TurnRole::ToolResult,
                     timestamp: ended_at,

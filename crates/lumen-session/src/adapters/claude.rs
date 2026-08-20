@@ -155,6 +155,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                     // Only push if turn has substantive content, tools, or usage
                     if turn_usage.is_some() || !tool_calls.is_empty() || turn_text.is_some() {
                         turns.push(CanonicalTurn {
+                            attribution: None,
                             turn_index: turns.len(),
                             role: TurnRole::Assistant,
                             timestamp: ended_at,
@@ -201,6 +202,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
                 if !tool_results.is_empty() {
                     turns.push(CanonicalTurn {
+                        attribution: None,
                         turn_index: turns.len(),
                         role: TurnRole::ToolResult,
                         timestamp: ended_at,
@@ -212,6 +214,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                     });
                 } else if let Some(text) = user_text {
                     turns.push(CanonicalTurn {
+                        attribution: None,
                         turn_index: turns.len(),
                         role: TurnRole::User,
                         timestamp: ended_at,

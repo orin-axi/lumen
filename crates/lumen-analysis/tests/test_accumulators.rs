@@ -10,6 +10,7 @@ fn test_circuit_breaker_trips_on_3_rounds() {
 
     for i in 0..3 {
         let turn = CanonicalTurn {
+            attribution: None,
             turn_index: i,
             role: TurnRole::Assistant,
             timestamp: Utc::now(),
@@ -45,6 +46,7 @@ fn test_circuit_breaker_round_counter_boundary_and_pair_change_reset() {
     let mut cb = CircuitBreakerAccumulator::default();
 
     let spawn_turn = |turn_index: usize, agent_type: &str| CanonicalTurn {
+        attribution: None,
         turn_index,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -93,6 +95,7 @@ fn test_turn_duration_p50_p95_percentiles() {
 
     for lat in [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] {
         let turn = CanonicalTurn {
+            attribution: None,
             turn_index: 0,
             role: TurnRole::Assistant,
             timestamp: Utc::now(),
@@ -120,6 +123,7 @@ fn test_turn_duration_excludes_non_assistant_roles() {
     let mut td = TurnDurationAccumulator::default();
 
     let make_turn = |turn_index: usize, role: TurnRole, latency_ms: u64| CanonicalTurn {
+        attribution: None,
         turn_index,
         role,
         timestamp: Utc::now(),
@@ -150,6 +154,7 @@ fn test_context_growth_and_autonomy_accumulators() {
 
     // Turn 0: User prompt
     let t0 = CanonicalTurn {
+        attribution: None,
         turn_index: 0,
         role: TurnRole::User,
         timestamp: Utc::now(),
@@ -166,6 +171,7 @@ fn test_context_growth_and_autonomy_accumulators() {
 
     // Turn 1: Assistant reading file
     let t1 = CanonicalTurn {
+        attribution: None,
         turn_index: 1,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -192,6 +198,7 @@ fn test_context_growth_and_autonomy_accumulators() {
 
     // Turn 2: Assistant editing file
     let t2 = CanonicalTurn {
+        attribution: None,
         turn_index: 2,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -242,6 +249,7 @@ fn test_api_health_and_mcp_affinity_accumulators() {
 
     // Turn 0: Failed tool with 429 rate limit
     let t0 = CanonicalTurn {
+        attribution: None,
         turn_index: 0,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -269,6 +277,7 @@ fn test_api_health_and_mcp_affinity_accumulators() {
 
     // Turn 1: Fallback raw bash command that succeeds
     let t1 = CanonicalTurn {
+        attribution: None,
         turn_index: 1,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -318,6 +327,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
 
     // Turn 0: MCP call fails with 429 rate limit.
     let t0 = CanonicalTurn {
+        attribution: None,
         turn_index: 0,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -346,6 +356,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
     // Turn 1: Retry via MCP fails with a 5xx server error -- also an approach pivot
     // (prior turn errored, this turn also errors after a retry attempt).
     let t1 = CanonicalTurn {
+        attribution: None,
         turn_index: 1,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -374,6 +385,7 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
     // Turn 2: Falls back to a raw shell command which succeeds -- a tool_retry
     // self-correction (prior turn errored, this one succeeds).
     let t2 = CanonicalTurn {
+        attribution: None,
         turn_index: 2,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -458,6 +470,7 @@ fn test_schema_extractor_citations() {
 
     // CRIT-LUMEN-063: Schema extraction and validation
     let t0 = CanonicalTurn {
+                attribution: None,
         turn_index: 0,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -481,6 +494,7 @@ fn test_schema_extractor_plan_citation_valid_and_invalid() {
 
     // CRIT-LUMEN-063: plan@1 cited alongside an embedded JSON block is a valid citation.
     let valid_turn = CanonicalTurn {
+                attribution: None,
         turn_index: 0,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -498,6 +512,7 @@ fn test_schema_extractor_plan_citation_valid_and_invalid() {
     // CRIT-LUMEN-063: plan@1 referenced in prose with no embedded JSON payload must still be
     // recorded as a citation, but marked invalid.
     let invalid_turn = CanonicalTurn {
+        attribution: None,
         turn_index: 1,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),
@@ -526,6 +541,7 @@ fn test_schema_extractor_wired_into_analysis_report() {
     let engine = AnalyticsEngine::new();
 
     let turn = CanonicalTurn {
+        attribution: None,
         turn_index: 0,
         role: TurnRole::Assistant,
         timestamp: Utc::now(),

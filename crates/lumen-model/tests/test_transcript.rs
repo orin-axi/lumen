@@ -22,6 +22,7 @@ fn test_canonical_transcript_roundtrip() {
         },
         economics: TokenEconomics::calculate(1000, 200, 4000, 15000, "claude-3-5-sonnet-20241022"),
         turns: vec![CanonicalTurn {
+            attribution: None,
             turn_index: 0,
             role: TurnRole::Assistant,
             timestamp: fixed_ts,
@@ -79,6 +80,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
         },
         economics: TokenEconomics::calculate(5000, 1000, 0, 10000, "claude-3-5-haiku-20241022"),
         turns: vec![CanonicalTurn {
+            attribution: None,
             turn_index: 0,
             role: TurnRole::Assistant,
             timestamp: fixed_ts_start,
@@ -109,6 +111,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
         economics: TokenEconomics::calculate(20000, 4000, 5000, 80000, "claude-3-5-sonnet-20241022"),
         turns: vec![
             CanonicalTurn {
+                attribution: None,
                 turn_index: 0,
                 role: TurnRole::User,
                 timestamp: fixed_ts_start,
@@ -119,6 +122,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
                 usage: None,
             },
             CanonicalTurn {
+                attribution: None,
                 turn_index: 1,
                 role: TurnRole::Assistant,
                 timestamp: fixed_ts_start,
@@ -154,6 +158,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
                 }),
             },
             CanonicalTurn {
+                attribution: None,
                 turn_index: 2,
                 role: TurnRole::ToolResult,
                 timestamp: fixed_ts_end,
