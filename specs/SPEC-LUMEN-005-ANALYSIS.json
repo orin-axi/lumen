@@ -7,7 +7,9 @@
   "non_goals": [
     "Log file format parsing or I/O streaming (handled by lumen-session).",
     "Tarjan SCC cycle graph algorithms (handled by lumen-pattern).",
-    "Writing to disk or external databases (pure computation engine)."
+    "Writing to disk or external databases (pure computation engine).",
+    "Genuine Draft-07 JSON Schema payload validation in SchemaExtractorAccumulator -- deferred pending resolution of where the 5 known schemas (spec@1, plan@1, changeset@1, eval-report@1, finding-report@1) should live relative to this repo, and creation of the still-nonexistent eval-report@1 schema.",
+    "Full elimination of per-turn heap allocations across all 19 in-loop accumulators -- known remaining violations as of 2026-08-20: circuit_breaker.rs (format!-based CompactString construction on every SubagentSpawn call), and CompactString-key cloning into BTreeMap/BTreeSet in artifacts.rs, tool_inventory.rs, fuzzy_tools.rs, attribution.rs, and trajectory_dag.rs. Tracked as dedicated follow-up performance work."
   ],
   "api_surface": [
     {
@@ -43,14 +45,57 @@
       "error_conditions": [
         "Flags is_valid = false if extracted JSON violates schema"
       ]
+    },
+    {
+      "name": "AttributionSource / CanonicalTurn.attribution",
+      "signature": "pub enum AttributionSource { Root, Plugin { name: CompactString }, Skill { name: CompactString, plugin: Option<CompactString> } }  // new field: CanonicalTurn.attribution: Option<AttributionSource>",
+      "description": "Tags each canonical turn with its originating plugin/skill (or Root), populated by adapters from Skill tool-call names or plugin-scoped tool namespaces, so AttributionAccumulator can key token spend by source (CRIT-LUMEN-147, 148).",
+      "error_conditions": [
+        "Adapters that cannot determine an origin MUST leave attribution as None; AttributionAccumulator treats None the same as Root (unattributed_tokens), never fabricating a Plugin/Skill name."
+      ]
+    },
+    {
+      "name": "CanonicalTranscript.otel_request_ids",
+      "signature": "pub otel_request_ids: SmallVec<[CompactString; 2]>  // new field on CanonicalTranscript",
+      "description": "Collects requestId/request_id values scanned from raw message envelopes at parse time (by the lumen-session adapter) so OtelCorrelationAccumulator can map session_id to the request ids it produced (CRIT-LUMEN-152), without re-scanning raw JSON at the analysis layer.",
+      "error_conditions": [
+        "Absent or non-string requestId/request_id keys are skipped, never inserted as empty strings or defaulted values."
+      ]
+    },
+    {
+      "name": "CanonicalToolResult.otel_span_id",
+      "signature": "pub otel_span_id: Option<CompactString>  // new field on CanonicalToolResult",
+      "description": "Optional OTel span identifier correlated with a tool_use_id/call_id, enabling SpanMappingAccumulator to map call_id -> span_id (CRIT-LUMEN-153).",
+      "error_conditions": [
+        "When no span id is present in the raw envelope for a tool result, otel_span_id MUST be None (not an empty string), which the accumulator counts toward unmapped_tool_use_count."
+      ]
+    },
+    {
+      "name": "HookActivityAccumulator",
+      "signature": "pub struct HookActivityAccumulator { pub hook_invocations: usize, pub by_event: BTreeMap<CompactString, usize>, pub total_duration_ms: u64, pub blocked_count: usize }; impl HookActivityAccumulator { pub fn update_raw(&mut self, message: &serde_json::Value); pub fn finalize(self) -> Self; }",
+      "description": "Tracks lifecycle hook execution counts by event name, cumulative duration, and permission-block rate from raw hook messages.",
+      "error_conditions": []
+    },
+    {
+      "name": "SpanMappingAccumulator",
+      "signature": "pub struct SpanMappingAccumulator { pub mapped: BTreeMap<CompactString, CompactString>, pub unmapped_tool_use_count: usize }; impl SpanMappingAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> Self; }",
+      "description": "Maps tool call_id to correlated OTel span_id where present, counting unmapped tool invocations.",
+      "error_conditions": []
+    },
+    {
+      "name": "OtelCorrelationAccumulator",
+      "signature": "pub struct OtelCorrelationAccumulator; impl OtelCorrelationAccumulator { pub fn finalize(transcript: &CanonicalTranscript) -> OtelCorrelationReport; } pub struct OtelCorrelationReport { pub session_id: CompactString, pub request_ids: Vec<CompactString>, pub request_id_count: usize }",
+      "description": "Reads CanonicalTranscript.otel_request_ids (populated at parse time, not re-scanned) and emits a per-session OTel request-id correlation report.",
+      "error_conditions": []
     }
   ],
   "acceptance_criteria": [
     {
       "id": "CRIT-LUMEN-060",
-      "criterion": "WHEN processing a session stream, THE SYSTEM SHALL execute all 22 accumulators in a single linear pass over the messages in O(N) time with zero heap allocations in the inner loop.",
+      "criterion": "WHEN processing a session stream, THE SYSTEM SHALL execute the 19 EntryAccumulator-based accumulators in a single linear pass over the parsed turns in O(N) time. Heap allocation in the inner loop SHALL be minimized and reviewed statically per accumulator, not verified via a custom global allocator: this workspace sets unsafe_code = \"forbid\" (Cargo.toml), and implementing Rust's GlobalAlloc trait requires an unsafe impl block, making a runtime allocation-counting harness structurally impossible to build here. token_usage and hook_activity are exempt by design: both are RawMessageAccumulators operating on raw pre-parse JSON messages, invoked independently of AnalyticsEngine::process_transcript, not inside its per-turn loop. otel_correlation is exempt by design: it reads the whole CanonicalTranscript once, post-loop, rather than per-turn.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Originally worded as requiring an empirically-measured zero-heap-allocation guarantee. A static audit (2026-08-20, during TASK-ANALYSIS-003) found this is not fully true today: circuit_breaker.rs calls format!(\"parent->{agent_type}\") on every SubagentSpawn call (format! always heap-allocates), and artifacts.rs/tool_inventory.rs/fuzzy_tools.rs/attribution.rs/trajectory_dag.rs clone CompactString keys into BTreeMap/BTreeSet, which heap-allocates for strings over roughly 24 bytes (e.g. typical file paths). pr_link.rs's unconditional per-turn BTreeMap::collect() was found and fixed in the same pass (crates/lumen-analysis/src/accumulators/pr_link.rs, now guarded on !entry.tool_results.is_empty()). The remaining violations are real but require a dedicated performance-engineering pass across 5 files, not a tail-end patch -- tracked as follow-up, not fixed here."
     },
     {
       "id": "CRIT-LUMEN-061",
@@ -66,9 +111,10 @@
     },
     {
       "id": "CRIT-LUMEN-063",
-      "criterion": "WHEN SchemaExtractorAccumulator encounters an embedded JSON block matching a known schema ID, THE SYSTEM SHALL validate the payload against Draft-07 and record a SchemaCitation.",
+      "criterion": "WHEN SchemaExtractorAccumulator encounters an embedded JSON block whose text contains a known schema ID (spec@1, plan@1, changeset@1, eval-report@1, finding-report@1) alongside a fenced ```json block or a raw {\"$schema\"...} marker, THE SYSTEM SHALL record a SchemaCitation with is_valid=true; otherwise is_valid=false.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Originally worded as requiring real Draft-07 JSON Schema validation, but this is not currently buildable: no jsonschema validation crate is a workspace dependency, no schema files exist anywhere in this repo, the real Draft-07 schemas for these 5 IDs live in a separate sibling repo (agent-plugins/shared/schemas/), and eval-report@1 specifically has no schema file in ANY repo yet. Reworded to describe the actual buildable heuristic (JSON-block presence, not payload validation) per TASK-ANALYSIS-002s implementation. Real Draft-07 validation is a separate follow-up requiring the cross-repo schema dependency question to be resolved first."
     },
     {
       "id": "CRIT-LUMEN-064",
@@ -103,6 +149,180 @@
     {
       "id": "CRIT-LUMEN-069",
       "criterion": "WHEN subagent transcripts are processed, THE SYSTEM SHALL aggregate token spend by subagent role and compute the hierarchical economics breakdown.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-126",
+      "criterion": "WHEN ArtifactsAccumulator processes a turn's tool_calls, THE SYSTEM SHALL insert non-empty FileRead paths into files_read, non-empty FileCreate paths into files_created, and non-empty FileEdit paths into files_edited, while silently skipping empty-path variants and all other ToolIntent variants.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-127",
+      "criterion": "WHEN ArtifactsAccumulator finalizes, THE SYSTEM SHALL compute total_unique_files as the size of the deduplicated union of files_read, files_created, and files_edited, such that a path present in more than one category set is counted exactly once even though it remains present in each of its category sets.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-128",
+      "criterion": "WHEN AutonomyAccumulator processes turns, THE SYSTEM SHALL increment current_streak and assistant_turns and update max_streak on TurnRole::Assistant or TurnRole::ToolResult, SHALL flush a non-zero current_streak into streak_lengths and reset it to 0 on TurnRole::User, and SHALL leave the streak neither extended nor broken on TurnRole::System.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-129",
+      "criterion": "WHEN AutonomyAccumulator finalizes, THE SYSTEM SHALL first flush any still-open trailing streak into streak_lengths, THEN set max_autonomous_streak to the maximum streak length, avg_autonomous_streak to the mean of streak_lengths (0.0 if none), total_streaks to the count of flushed streaks, and autonomy_index to assistant_turns divided by total_turns computed over all roles including System (0.0 when total_turns is 0).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-130",
+      "criterion": "WHEN ContextGrowthAccumulator processes turns, THE SYSTEM SHALL skip any turn where entry.usage is None entirely, excluding it from turn_count, and SHALL set initial_prompt_tokens exactly once, from the first turn where usage is present.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-131",
+      "criterion": "IF a usage-bearing turn's prompt_tokens does not exceed the previous usage turn's prompt_tokens, or previous_prompt_tokens is 0 (the first usage turn processed), THE SYSTEM SHALL count zero growth for that turn toward total_growth and max_jump_tokens rather than a negative or default jump value.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-132",
+      "criterion": "WHEN ContextGrowthAccumulator finalizes, THE SYSTEM SHALL compute avg_growth_per_turn as total_growth divided by (turn_count - 1), or 0.0 when turn_count <= 1.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-133",
+      "criterion": "WHEN StatsAccumulator processes a turn, THE SYSTEM SHALL increment total_turns by 1 and increment exactly one of user_turns, assistant_turns, tool_result_turns, or system_turns based on entry.role, mutually exclusive of the others.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-134",
+      "criterion": "WHEN StatsAccumulator processes a turn with entry.text = Some(text), THE SYSTEM SHALL add text.len() (UTF-8 byte length, not character count) to total_text_characters, and SHALL add nothing to total_text_characters when entry.text is None.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-135",
+      "criterion": "WHEN ToolInventoryAccumulator processes a turn's tool_calls, THE SYSTEM SHALL increment invocations_by_tool[call.tool_name] for every call and overwrite last_tool_name with each call's tool_name in list order, such that after a turn containing multiple calls, last_tool_name reflects the last call in that turn.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-136",
+      "criterion": "IF a turn's tool_results contains an entry with is_error = true, THE SYSTEM SHALL increment errors_by_tool keyed by the accumulator's running last_tool_name rather than any per-result tool identifier; IF last_tool_name is None at that point, THE SYSTEM SHALL drop the error without incrementing any counter.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-137",
+      "criterion": "WHEN FlowAccumulator processes a turn whose tool_results contain an entry with is_error = true and an error_class that case-insensitively contains \"permission\", THE SYSTEM SHALL flush a non-zero current_streak into streak_lengths, increment permission_blocks, reset current_streak to 0, and exclude that turn's tool_calls from the streak count; OTHERWISE THE SYSTEM SHALL add tool_calls.len() to current_streak.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-138",
+      "criterion": "WHEN FlowAccumulator finalizes, THE SYSTEM SHALL flush any open trailing streak, set longest_streak to the maximum entry in streak_lengths, avg_streak_len to their mean, and flow_ratio to the sum of streak_lengths of at least 2 divided by the total tool_calls observed across the session.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-139",
+      "criterion": "WHEN HookActivityAccumulator.update_raw receives a raw message where message[\"hookEventName\"] is a string, THE SYSTEM SHALL increment hook_invocations and by_event[event_name] (a BTreeMap<CompactString, usize>), and SHALL add message[\"durationMs\"].as_u64().unwrap_or(0) to total_duration_ms.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-140",
+      "criterion": "IF a raw message has message[\"decision\"] == \"block\" or message[\"permissionDecision\"] == \"deny\", THE SYSTEM SHALL increment blocked_count; WHEN HookActivityAccumulator finalizes, THE SYSTEM SHALL compute block_rate = blocked_count/hook_invocations and avg_duration_ms = total_duration_ms/hook_invocations when hook_invocations > 0, and SHALL report 0.0 for both when hook_invocations is 0.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-141",
+      "criterion": "WHEN PrLinkAccumulator scans a turn's VersionControl-paired tool_results.truncated_output and entry.text for a substring matching the form \"github.com/{owner}/{repo}/pull/{digits}\", THE SYSTEM SHALL split the matched path on \"/\" to bind {owner} and {repo} (owner and repo MUST NOT themselves contain \"/\"), discard any trailing path/query/fragment after the digit run, store the string \"{owner}/{repo}#{digits}\" in the deduplicated pr_urls set, and record the turn_index of the first such match in first_pr_turn_index.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-142",
+      "criterion": "WHEN a PR URL match's source is a tool_result whose paired tool_call is ToolIntent::VersionControl, THE SYSTEM SHALL increment linked_via_vcs_tool; WHEN a PR URL match's source is only entry.text, THE SYSTEM SHALL NOT increment linked_via_vcs_tool.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-143",
+      "criterion": "WHEN FuzzyToolsAccumulator finalizes, THE SYSTEM SHALL sort counts' keys (the BTreeMap<CompactString, usize> populated during the update phase per CRIT-LUMEN-154) by (-count, name), greedily assign each unassigned name as a new cluster's canonical, and assign a remaining unassigned name as that cluster's variant if and only if 0 < levenshtein(canonical, candidate) <= threshold, where threshold is 1 when candidate.len() < 5 and 2 otherwise.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-144",
+      "criterion": "WHEN FuzzyToolsAccumulator finalizes, THE SYSTEM SHALL compute typo_call_count as the sum of all variant counts across all clusters, and typo_rate as typo_call_count divided by total_tool_calls (0.0 when total_tool_calls is 0).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-145",
+      "criterion": "WHEN TrajectoryDagAccumulator processes a tool_call, THE SYSTEM SHALL set target_file/target_symbol from ToolIntent::{FileRead,FileEdit,FileCreate}.path (target_symbol = None) or ToolIntent::CodeSearch.query (target_symbol = query, target_file = None), and SHALL set is_mutation = true for FileEdit, FileCreate, or VersionControl with action \"commit\" or \"push\", and false for all other intents. For FileDiscovery, TestExecution, SubagentSpawn, McpCall, Other, and VersionControl with any action other than \"commit\"/\"push\", THE SYSTEM SHALL set target_file = None, target_symbol = None, and is_mutation = false.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-146",
+      "criterion": "IF a tool_call has no tool_result with a matching call_id in the same turn, THE SYSTEM SHALL default had_error to false for that ToolNode; WHEN a matching tool_result exists in the same turn, THE SYSTEM SHALL set had_error to that result's is_error value.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-147",
+      "criterion": "WHEN AttributionAccumulator processes a turn whose attribution is Some(AttributionSource::Plugin{name}) or Some(AttributionSource::Skill{name,..}), THE SYSTEM SHALL add that turn's total token usage to by_plugin[name] or by_skill[name] respectively.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-148",
+      "criterion": "IF a turn's attribution is None or Some(AttributionSource::Root), THE SYSTEM SHALL add its token usage to unattributed_tokens rather than to by_plugin or by_skill.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-149",
+      "criterion": "WHEN the analysis engine processes a CanonicalTranscript with a non-empty subagents field, THE SYSTEM SHALL recurse AttributionAccumulator (or an equivalent token roll-up) into each subagent transcript and aggregate its token totals into by_subagent keyed by subagent role, requiring process_transcript to recurse into subagents where it currently does not.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-150",
+      "criterion": "WHEN TimelineAccumulator processes turns, THE SYSTEM SHALL extend an open streak counter while consecutive turns have role == Assistant, and on any turn with a different role SHALL close the streak, increment assistant_streak_count, and update longest_streak_turns to the maximum streak length observed so far.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-151",
+      "criterion": "WHEN TimelineAccumulator processes a turn and last_timestamp is Some(prev) with (current_timestamp - prev) exceeding 5 minutes, THE SYSTEM SHALL increment idle_gap_count, add the gap to total_idle_ms, and update longest_idle_gap_ms if the gap is the largest seen; THE SYSTEM SHALL always update last_timestamp to the current turn's timestamp regardless of gap size.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-152",
+      "criterion": "WHEN OtelCorrelationAccumulator finalizes, THE SYSTEM SHALL read CanonicalTranscript.otel_request_ids (populated at parse time by the lumen-session adapter, not re-scanned by this accumulator) and emit session_id, the deduplicated request_ids as a Vec, and request_id_count equal to that Vec's length.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-153",
+      "criterion": "IF a tool_result's otel_span_id is Some(span_id), THE SYSTEM SHALL insert (call_id -> span_id) into SpanMappingAccumulator's mapped map; IF a tool_result's otel_span_id is None, THE SYSTEM SHALL increment unmapped_tool_use_count instead of inserting into mapped.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-154",
+      "criterion": "WHEN FuzzyToolsAccumulator (an EntryAccumulator) processes a turn's tool_calls, THE SYSTEM SHALL increment counts[call.tool_name] (a BTreeMap<CompactString, usize>) for each call and add tool_calls.len() to total_tool_calls.",
       "is_error_case": false,
       "judgment_call": false
     }

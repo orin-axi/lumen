@@ -62,17 +62,19 @@ impl EntryAccumulator for PrLinkAccumulator {
     type Output = PrLinkMetrics;
 
     fn update(&mut self, entry: &CanonicalTurn) {
-        let call_intents: BTreeMap<&CompactString, &ToolIntent> =
-            entry.tool_calls.iter().map(|call| (&call.call_id, &call.intent)).collect();
+        if !entry.tool_results.is_empty() {
+            let call_intents: BTreeMap<&CompactString, &ToolIntent> =
+                entry.tool_calls.iter().map(|call| (&call.call_id, &call.intent)).collect();
 
-        for result in &entry.tool_results {
-            let Some(output) = &result.truncated_output else { continue };
-            let is_vcs = matches!(call_intents.get(&result.call_id), Some(ToolIntent::VersionControl { .. }));
+            for result in &entry.tool_results {
+                let Some(output) = &result.truncated_output else { continue };
+                let is_vcs = matches!(call_intents.get(&result.call_id), Some(ToolIntent::VersionControl { .. }));
 
-            for (owner, repo, digits) in find_pr_matches(output) {
-                self.record(entry.turn_index, &owner, &repo, &digits);
-                if is_vcs {
-                    self.linked_via_vcs_tool += 1;
+                for (owner, repo, digits) in find_pr_matches(output) {
+                    self.record(entry.turn_index, &owner, &repo, &digits);
+                    if is_vcs {
+                        self.linked_via_vcs_tool += 1;
+                    }
                 }
             }
         }
