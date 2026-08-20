@@ -1175,3 +1175,77 @@ fn test_hook_activity_accumulator_block_rate_and_duration() {
     assert_eq!(empty.block_rate, 0.0);
     assert_eq!(empty.avg_duration_ms, 0.0);
 }
+
+#[test]
+fn test_pr_link_accumulator_vcs_vs_text_source() {
+    // CRIT-LUMEN-141 / CRIT-LUMEN-142: PrLinkAccumulator scans VersionControl-paired
+    // tool_results and entry.text for github.com PR URLs, dedupes them into pr_urls,
+    // records the first turn a PR was seen, and only counts a match toward
+    // linked_via_vcs_tool when it came from a VersionControl-paired tool_result --
+    // text-only restatements of the same PR must not double count or bump the counter.
+    let mut pr_link = PrLinkAccumulator::default();
+
+    let turn0 = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: CompactString::new("call_1"),
+            tool_name: CompactString::new("bash"),
+            intent: ToolIntent::VersionControl { action: CompactString::new("push") },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: CompactString::new("call_1"),
+            output_bytes: 64,
+            line_count: 1,
+            is_error: false,
+            error_class: None,
+            truncated_output: Some(CompactString::new(
+                "Created https://github.com/acme/widgets/pull/42 successfully"
+            )),
+        }],
+        usage: None,
+    };
+    pr_link.update(&turn0);
+
+    let turn1 = CanonicalTurn {
+        attribution: None,
+        turn_index: 1,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: Some("see github.com/acme/widgets/pull/42?tab=files for details".into()),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    pr_link.update(&turn1);
+
+    let turn2 = CanonicalTurn {
+        attribution: None,
+        turn_index: 2,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: Some("also check github.com/acme/other/pull/7".into()),
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    pr_link.update(&turn2);
+
+    let metrics = pr_link.finalize();
+
+    let expected: std::collections::BTreeSet<CompactString> =
+        ["acme/widgets#42", "acme/other#7"].into_iter().map(CompactString::new).collect();
+    assert_eq!(metrics.pr_urls, expected);
+    assert_eq!(metrics.first_pr_turn_index, Some(0));
+    assert_eq!(
+        metrics.linked_via_vcs_tool, 1,
+        "only turn 0's VersionControl-paired tool_result match counts; text-only matches do not"
+    );
+}
