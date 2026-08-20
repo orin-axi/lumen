@@ -1076,3 +1076,63 @@ fn test_tool_inventory_last_call_wins_and_running_error_key() {
     assert_eq!(metrics.distinct_tools_count, 2);
     assert_eq!(metrics.errors_by_tool.get("edit_file").copied(), Some(1));
 }
+
+#[test]
+fn test_flow_accumulator_permission_break_and_ratio() {
+    // CRIT-LUMEN-137/138
+    let mut flow = FlowAccumulator::default();
+
+    let make_turn = |turn_index: usize, n_calls: usize, tool_results: smallvec::SmallVec<[CanonicalToolResult; 2]>| {
+        let tool_calls: smallvec::SmallVec<[CanonicalToolCall; 2]> = (0..n_calls)
+            .map(|i| CanonicalToolCall {
+                call_id: CompactString::new(format!("call_{turn_index}_{i}")),
+                tool_name: "run_command".into(),
+                intent: ToolIntent::Other { raw_name: "run_command".into() },
+                raw_arguments: serde_json::json!({}),
+            })
+            .collect();
+        CanonicalTurn {
+            attribution: None,
+            turn_index,
+            role: TurnRole::Assistant,
+            timestamp: Utc::now(),
+            latency_ms: 100,
+            text: None,
+            tool_calls,
+            tool_results,
+            usage: None,
+        }
+    };
+
+    // 3 turns of 2 tool_calls each -> streak reaches 6.
+    for i in 0..3 {
+        flow.update(&make_turn(i, 2, smallvec![]));
+    }
+    assert_eq!(flow.current_streak, 6);
+
+    // Permission-error turn with 1 tool_call whose result is a permission error (mixed case).
+    let perm_result = smallvec![CanonicalToolResult {
+        call_id: "call_perm".into(),
+        output_bytes: 10,
+        line_count: 1,
+        is_error: true,
+        error_class: Some("Permission_Denied".into()),
+        truncated_output: None,
+    }];
+    flow.update(&make_turn(3, 1, perm_result));
+
+    assert!(flow.streak_lengths.contains(&6));
+    assert_eq!(flow.permission_blocks, 1);
+    assert_eq!(flow.current_streak, 0, "the error turn's own tool_calls must not be added to current_streak");
+    assert_eq!(flow.total_tool_calls, 7, "total_tool_calls is unconditional, so the error turn's 1 call counts");
+
+    // 2 more turns of 1 tool_call each -> trailing streak of 2.
+    flow.update(&make_turn(4, 1, smallvec![]));
+    flow.update(&make_turn(5, 1, smallvec![]));
+
+    let metrics = flow.finalize();
+    assert_eq!(metrics.longest_streak, 6);
+    assert_eq!(metrics.avg_streak_len, 4.0);
+    assert_eq!(metrics.total_tool_calls, 9);
+    assert!((metrics.flow_ratio - (8.0 / 9.0)).abs() < 1e-9);
+}

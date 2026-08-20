@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use crate::accumulators::{
     ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AttributionAccumulator,
     AttributionMetrics, AutonomyAccumulator, AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport,
-    ContextGrowthAccumulator, ContextGrowthMetrics, McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics,
-    PermissionModeAccumulator, SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics,
-    StatsAccumulator, StatsMetrics, ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator,
-    TurnDurationMetrics,
+    ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, McpAffinityAccumulator,
+    McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator, SchemaExtractorAccumulator,
+    SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics, ToolInventoryAccumulator,
+    ToolInventoryMetrics, TurnDurationAccumulator, TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -26,6 +26,7 @@ pub struct AnalysisReport {
     pub autonomy: AutonomyMetrics,
     pub permission_mode: PermissionMetrics,
     pub artifacts: ArtifactMetrics,
+    pub flow: FlowMetrics,
     pub stats: StatsMetrics,
     pub schema_extractor: Vec<SchemaCitation>,
     pub attribution: AttributionMetrics,
@@ -43,6 +44,7 @@ pub struct AnalyticsEngine {
     autonomy: AutonomyAccumulator,
     permission_mode: PermissionModeAccumulator,
     artifacts: ArtifactsAccumulator,
+    flow: FlowAccumulator,
     stats: StatsAccumulator,
     schema_extractor: SchemaExtractorAccumulator,
     attribution: AttributionAccumulator,
@@ -67,6 +69,7 @@ impl AnalyticsEngine {
             autonomy: AutonomyAccumulator::default(),
             permission_mode: PermissionModeAccumulator::default(),
             artifacts: ArtifactsAccumulator::default(),
+            flow: FlowAccumulator::default(),
             stats: StatsAccumulator::default(),
             schema_extractor: SchemaExtractorAccumulator::default(),
             attribution: AttributionAccumulator::default(),
@@ -86,6 +89,7 @@ impl AnalyticsEngine {
             self.autonomy.update(turn);
             self.permission_mode.update(turn);
             self.artifacts.update(turn);
+            self.flow.update(turn);
             self.stats.update(turn);
             self.schema_extractor.update(turn);
             self.attribution.update(turn);
@@ -109,6 +113,7 @@ impl AnalyticsEngine {
             autonomy: self.autonomy.finalize(),
             permission_mode: self.permission_mode.finalize(),
             artifacts: self.artifacts.finalize(),
+            flow: self.flow.finalize(),
             stats: self.stats.finalize(),
             schema_extractor: self.schema_extractor.finalize(),
             attribution: self.attribution.finalize(),
