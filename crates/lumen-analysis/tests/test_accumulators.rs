@@ -1249,3 +1249,96 @@ fn test_pr_link_accumulator_vcs_vs_text_source() {
         "only turn 0's VersionControl-paired tool_result match counts; text-only matches do not"
     );
 }
+
+#[test]
+fn test_fuzzy_tools_clustering_and_typo_rate() {
+    // CRIT-LUMEN-143/144/154: counts and total_tool_calls are populated during
+    // update(); finalize() greedily clusters by (-count, name) using Levenshtein
+    // distance with a length-dependent threshold (1 if candidate.len() < 5, else 2).
+    let mut ft = FuzzyToolsAccumulator::default();
+
+    let make_call = |call_id: &str, tool_name: &str| CanonicalToolCall {
+        call_id: call_id.into(),
+        tool_name: tool_name.into(),
+        intent: ToolIntent::Other { raw_name: tool_name.into() },
+        raw_arguments: serde_json::json!({}),
+    };
+
+    let make_turn = |turn_index: usize, tool_calls: smallvec::SmallVec<[CanonicalToolCall; 2]>| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls,
+        tool_results: smallvec![],
+        usage: None,
+    };
+
+    // Turn 0: 5x view_file, 2x veiw_file (transposition typo, distance 2, len>=5).
+    ft.update(&make_turn(
+        0,
+        smallvec![
+            make_call("c1", "view_file"),
+            make_call("c2", "view_file"),
+            make_call("c3", "view_file"),
+            make_call("c4", "view_file"),
+            make_call("c5", "view_file"),
+            make_call("c6", "veiw_file"),
+            make_call("c7", "veiw_file"),
+        ],
+    ));
+
+    // Turn 1: 3x grep, 1x grpe (transposition typo, distance 2, but len<5 so threshold=1).
+    ft.update(&make_turn(
+        1,
+        smallvec![
+            make_call("c8", "grep"),
+            make_call("c9", "grep"),
+            make_call("c10", "grep"),
+            make_call("c11", "grpe"),
+        ],
+    ));
+
+    // Turn 2: 1x bash.
+    ft.update(&make_turn(2, smallvec![make_call("c12", "bash")]));
+
+    // CRIT-LUMEN-154: counts and total_tool_calls are populated during update().
+    assert_eq!(ft.counts.get("view_file").copied(), Some(5));
+    assert_eq!(ft.counts.get("veiw_file").copied(), Some(2));
+    assert_eq!(ft.counts.get("grep").copied(), Some(3));
+    assert_eq!(ft.counts.get("grpe").copied(), Some(1));
+    assert_eq!(ft.counts.get("bash").copied(), Some(1));
+    assert_eq!(ft.total_tool_calls, 12);
+
+    let metrics = ft.finalize();
+
+    // CRIT-LUMEN-143: greedy clustering by (-count, name) with the length-dependent
+    // Levenshtein threshold. Sorted order is view_file(5), grep(3), veiw_file(2),
+    // bash(1), grpe(1) -- bash sorts before grpe alphabetically at equal count.
+    assert_eq!(metrics.clusters.len(), 4, "expected 4 clusters: view_file, grep, bash, grpe");
+
+    assert_eq!(metrics.clusters[0].canonical.as_str(), "view_file");
+    assert_eq!(
+        metrics.clusters[0].variants,
+        vec![(CompactString::new("veiw_file"), 2)],
+        "veiw_file is distance 2 from view_file and len>=5 so threshold=2 -- clusters as a variant"
+    );
+
+    assert_eq!(metrics.clusters[1].canonical.as_str(), "grep");
+    assert!(
+        metrics.clusters[1].variants.is_empty(),
+        "grpe is distance 2 from grep but len<5 so threshold=1 -- must NOT cluster"
+    );
+
+    assert_eq!(metrics.clusters[2].canonical.as_str(), "bash");
+    assert!(metrics.clusters[2].variants.is_empty());
+
+    assert_eq!(metrics.clusters[3].canonical.as_str(), "grpe");
+    assert!(metrics.clusters[3].variants.is_empty(), "grpe must become its own singleton canonical");
+
+    // CRIT-LUMEN-144: typo_call_count is the sum of variant counts across all clusters.
+    assert_eq!(metrics.typo_call_count, 2);
+    assert_eq!(metrics.typo_rate, 2.0 / 12.0);
+}

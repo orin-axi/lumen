@@ -6,10 +6,11 @@ use std::collections::BTreeMap;
 use crate::accumulators::{
     ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AttributionAccumulator,
     AttributionMetrics, AutonomyAccumulator, AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport,
-    ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, McpAffinityAccumulator,
-    McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator, PrLinkAccumulator, PrLinkMetrics,
-    SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics,
-    ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator, TurnDurationMetrics,
+    ContextGrowthAccumulator, ContextGrowthMetrics, FlowAccumulator, FlowMetrics, FuzzyToolsAccumulator,
+    FuzzyToolsMetrics, McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator,
+    PrLinkAccumulator, PrLinkMetrics, SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics,
+    StatsAccumulator, StatsMetrics, ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator,
+    TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -28,6 +29,7 @@ pub struct AnalysisReport {
     pub artifacts: ArtifactMetrics,
     pub pr_link: PrLinkMetrics,
     pub flow: FlowMetrics,
+    pub fuzzy_tools: FuzzyToolsMetrics,
     pub stats: StatsMetrics,
     pub schema_extractor: Vec<SchemaCitation>,
     pub attribution: AttributionMetrics,
@@ -47,6 +49,7 @@ pub struct AnalyticsEngine {
     artifacts: ArtifactsAccumulator,
     pr_link: PrLinkAccumulator,
     flow: FlowAccumulator,
+    fuzzy_tools: FuzzyToolsAccumulator,
     stats: StatsAccumulator,
     schema_extractor: SchemaExtractorAccumulator,
     attribution: AttributionAccumulator,
@@ -73,6 +76,7 @@ impl AnalyticsEngine {
             artifacts: ArtifactsAccumulator::default(),
             pr_link: PrLinkAccumulator::default(),
             flow: FlowAccumulator::default(),
+            fuzzy_tools: FuzzyToolsAccumulator::default(),
             stats: StatsAccumulator::default(),
             schema_extractor: SchemaExtractorAccumulator::default(),
             attribution: AttributionAccumulator::default(),
@@ -94,6 +98,7 @@ impl AnalyticsEngine {
             self.artifacts.update(turn);
             self.pr_link.update(turn);
             self.flow.update(turn);
+            self.fuzzy_tools.update(turn);
             self.stats.update(turn);
             self.schema_extractor.update(turn);
             self.attribution.update(turn);
@@ -119,6 +124,7 @@ impl AnalyticsEngine {
             artifacts: self.artifacts.finalize(),
             pr_link: self.pr_link.finalize(),
             flow: self.flow.finalize(),
+            fuzzy_tools: self.fuzzy_tools.finalize(),
             stats: self.stats.finalize(),
             schema_extractor: self.schema_extractor.finalize(),
             attribution: self.attribution.finalize(),
