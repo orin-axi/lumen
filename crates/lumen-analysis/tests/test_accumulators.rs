@@ -230,6 +230,148 @@ fn test_api_health_and_mcp_affinity_accumulators() {
 }
 
 #[test]
+fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
+    let mut api = ApiHealthAccumulator::default();
+    let mut mcp = McpAffinityAccumulator::default();
+    let mut corr = SelfCorrectionAccumulator::default();
+
+    // Turn 0: MCP call fails with 429 rate limit.
+    let t0 = CanonicalTurn {
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 1500,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: "call_mcp_1".into(),
+            tool_name: "mcp__jira__search".into(),
+            intent: ToolIntent::McpCall { server: "jira".into(), method: "search".into() },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: "call_mcp_1".into(),
+            output_bytes: 40,
+            line_count: 1,
+            is_error: true,
+            error_class: Some("rate_limit_429".into()),
+            truncated_output: None,
+        }],
+        usage: None,
+    };
+    api.update(&t0);
+    mcp.update(&t0);
+    corr.update(&t0);
+
+    // Turn 1: Retry via MCP fails with a 5xx server error -- also an approach pivot
+    // (prior turn errored, this turn also errors after a retry attempt).
+    let t1 = CanonicalTurn {
+        turn_index: 1,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 800,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: "call_mcp_2".into(),
+            tool_name: "mcp__jira__search".into(),
+            intent: ToolIntent::McpCall { server: "jira".into(), method: "search".into() },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: "call_mcp_2".into(),
+            output_bytes: 40,
+            line_count: 1,
+            is_error: true,
+            error_class: Some("503_service_unavailable".into()),
+            truncated_output: None,
+        }],
+        usage: None,
+    };
+    api.update(&t1);
+    mcp.update(&t1);
+    corr.update(&t1);
+
+    // Turn 2: Falls back to a raw shell command which succeeds -- a tool_retry
+    // self-correction (prior turn errored, this one succeeds).
+    let t2 = CanonicalTurn {
+        turn_index: 2,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 400,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: "call_sh_1".into(),
+            tool_name: "run_command".into(),
+            intent: ToolIntent::Other { raw_name: "run_command".into() },
+            raw_arguments: serde_json::json!({"command": "jira issue search"}),
+        }],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: "call_sh_1".into(),
+            output_bytes: 200,
+            line_count: 5,
+            is_error: false,
+            error_class: None,
+            truncated_output: None,
+        }],
+        usage: None,
+    };
+    api.update(&t2);
+    mcp.update(&t2);
+    corr.update(&t2);
+
+    // CRIT-LUMEN-065: 429 and 5xx errors are both recorded with retry counts.
+    let api_res = api.finalize();
+    assert_eq!(api_res.rate_limit_429_count, 1);
+    assert_eq!(api_res.server_error_5xx_count, 1);
+    assert_eq!(api_res.retry_count, 2);
+
+    // CRIT-LUMEN-066: ratio of structured MCP calls vs raw shell fallback.
+    let mcp_res = mcp.finalize();
+    assert_eq!(mcp_res.structured_mcp_count, 2);
+    assert_eq!(mcp_res.raw_shell_count, 1);
+    assert!((mcp_res.mcp_adoption_ratio - (2.0 / 3.0)).abs() < f32::EPSILON);
+
+    // CRIT-LUMEN-067: tool failure immediately followed by an adjusted retry
+    // is recorded as a tool_retry self-correction event.
+    let corr_res = corr.finalize();
+    assert_eq!(corr_res.tool_retry_corrections, 1);
+    assert_eq!(corr_res.approach_pivot_corrections, 1);
+    assert_eq!(corr_res.total_corrections, 2);
+
+    // CRIT-LUMEN-061 / CRIT-LUMEN-068: TokenUsageAccumulator sums real usage into
+    // running totals and silently excludes synthetic model usage from billing.
+    let mut tok = TokenUsageAccumulator::new("claude-3-5-sonnet-20241022");
+    tok.update_raw(&serde_json::json!({
+        "message": {
+            "model": "claude-3-5-sonnet-20241022",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 10,
+                "cache_read_input_tokens": 5
+            }
+        }
+    }));
+    tok.update_raw(&serde_json::json!({
+        "message": {
+            "model": "<synthetic>title-generator",
+            "usage": {
+                "input_tokens": 9999,
+                "output_tokens": 9999,
+                "cache_creation_input_tokens": 9999,
+                "cache_read_input_tokens": 9999
+            }
+        }
+    }));
+
+    let economics = tok.finalize();
+    assert_eq!(economics.input_tokens, 100);
+    assert_eq!(economics.output_tokens, 50);
+    assert_eq!(economics.cache_creation_tokens, 10);
+    assert_eq!(economics.cache_read_tokens, 5);
+    assert!(!economics.per_model.contains_key("<synthetic>title-generator"));
+}
+
+#[test]
 fn test_schema_extractor_citations() {
     let mut ext = SchemaExtractorAccumulator::default();
 
