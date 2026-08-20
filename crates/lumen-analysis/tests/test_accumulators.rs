@@ -109,6 +109,7 @@ fn test_turn_duration_p50_p95_percentiles() {
     assert_eq!(metrics.total_turns, 10);
     assert_eq!(metrics.p50_ms, 600);
     assert_eq!(metrics.p95_ms, 1000);
+    assert_eq!(metrics.avg_ms, 550);
 }
 
 #[test]
