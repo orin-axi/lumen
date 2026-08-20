@@ -1,6 +1,7 @@
 use compact_str::CompactString;
 use lumen_model::{CanonicalTurn, ToolIntent};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 use crate::traits::EntryAccumulator;
 
@@ -32,7 +33,8 @@ impl EntryAccumulator for CircuitBreakerAccumulator {
     fn update(&mut self, entry: &CanonicalTurn) {
         for call in &entry.tool_calls {
             if let ToolIntent::SubagentSpawn { agent_type, .. } = &call.intent {
-                let pair = CompactString::new(format!("parent->{agent_type}"));
+                let mut pair = CompactString::const_new("parent->");
+                write!(pair, "{agent_type}").expect("writing to CompactString cannot fail");
 
                 if self.current_agent_pair.as_ref() == Some(&pair) {
                     self.consecutive_rounds += 1;
