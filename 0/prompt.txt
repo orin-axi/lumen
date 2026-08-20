@@ -377,3 +377,7 @@ Are we now ready to start implementing then?
 ---
 
 Pickup the interrupted work
+
+---
+
+Pickup where you got interrupted
