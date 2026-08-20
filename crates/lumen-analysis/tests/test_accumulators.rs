@@ -668,6 +668,7 @@ fn test_schema_extractor_wired_into_analysis_report() {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        otel_request_ids: smallvec![],
     };
 
     // CRIT-LUMEN-063: SchemaExtractorAccumulator must be wired into AnalyticsEngine's
@@ -738,6 +739,7 @@ fn test_subagent_and_plugin_skill_attribution() {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        otel_request_ids: smallvec![],
     };
 
     let parent_turn = usage_turn(0, None, 10);
@@ -760,6 +762,7 @@ fn test_subagent_and_plugin_skill_attribution() {
         subagents: vec![child_transcript],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        otel_request_ids: smallvec![],
     };
 
     let engine = AnalyticsEngine::new();

@@ -251,6 +251,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
+            otel_request_ids: SmallVec::new(),
         })
     }
 }

@@ -61,6 +61,7 @@ mod tests {
             subagents: vec![],
             extracted_schemas: smallvec::smallvec![],
             detected_anomalies: smallvec::smallvec![],
+            otel_request_ids: smallvec::smallvec![],
         };
 
         let snapshots = vec![

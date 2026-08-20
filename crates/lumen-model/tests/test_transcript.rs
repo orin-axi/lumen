@@ -50,6 +50,7 @@ fn test_canonical_transcript_roundtrip() {
             summary: Some(CompactString::new("SPEC-PRISM-001")),
         }],
         detected_anomalies: smallvec![],
+        otel_request_ids: smallvec![],
     };
 
     let serialized = serde_json::to_string(&transcript).unwrap();
@@ -93,6 +94,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        otel_request_ids: smallvec![],
     };
 
     let parent_transcript = CanonicalTranscript {
@@ -200,6 +202,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
                 target_file: CompactString::new("src/auth.rs"),
             },
         ],
+        otel_request_ids: smallvec![],
     };
 
     let json_str = serde_json::to_string_pretty(&parent_transcript).expect("Serialization failed");
