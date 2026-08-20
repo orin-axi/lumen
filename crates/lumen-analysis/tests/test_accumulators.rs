@@ -1136,3 +1136,42 @@ fn test_flow_accumulator_permission_break_and_ratio() {
     assert_eq!(metrics.total_tool_calls, 9);
     assert!((metrics.flow_ratio - (8.0 / 9.0)).abs() < 1e-9);
 }
+
+#[test]
+fn test_hook_activity_accumulator_block_rate_and_duration() {
+    // CRIT-LUMEN-139 / CRIT-LUMEN-140: HookActivityAccumulator tallies hook
+    // invocations by event name and duration, and separately tracks blocked
+    // decisions to compute a block rate and average duration on finalize.
+    let mut hooks = HookActivityAccumulator::default();
+
+    hooks.update_raw(&serde_json::json!({
+        "hookEventName": "PreToolUse",
+        "durationMs": 100
+    }));
+    hooks.update_raw(&serde_json::json!({
+        "hookEventName": "PreToolUse",
+        "durationMs": 150,
+        "permissionDecision": "deny"
+    }));
+    hooks.update_raw(&serde_json::json!({
+        "hookEventName": "PostToolUse",
+        "durationMs": 50,
+        "decision": "block"
+    }));
+    hooks.update_raw(&serde_json::json!({
+        "someOtherField": "ignored"
+    }));
+
+    let metrics = hooks.finalize();
+    assert_eq!(metrics.hook_invocations, 3);
+    assert_eq!(metrics.by_event.get("PreToolUse").copied(), Some(2));
+    assert_eq!(metrics.by_event.get("PostToolUse").copied(), Some(1));
+    assert_eq!(metrics.total_duration_ms, 300);
+    assert_eq!(metrics.blocked_count, 2);
+    assert!((metrics.block_rate - (2.0 / 3.0)).abs() < 1e-9);
+    assert!((metrics.avg_duration_ms - 100.0).abs() < 1e-9);
+
+    let empty = HookActivityAccumulator::default().finalize();
+    assert_eq!(empty.block_rate, 0.0);
+    assert_eq!(empty.avg_duration_ms, 0.0);
+}
