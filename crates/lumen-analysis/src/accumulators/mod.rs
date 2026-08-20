@@ -1,5 +1,6 @@
 pub mod api_health;
 pub mod artifacts;
+pub mod attribution;
 pub mod autonomy;
 pub mod circuit_breaker;
 pub mod context_growth;
@@ -14,6 +15,7 @@ pub mod turn_duration;
 
 pub use api_health::{ApiHealthAccumulator, ApiHealthMetrics};
 pub use artifacts::{ArtifactMetrics, ArtifactsAccumulator};
+pub use attribution::{AttributionAccumulator, AttributionMetrics};
 pub use autonomy::{AutonomyAccumulator, AutonomyMetrics};
 pub use circuit_breaker::{CircuitBreakerAccumulator, CircuitBreakerReport, CircuitStallEvent};
 pub use context_growth::{ContextGrowthAccumulator, ContextGrowthMetrics};

@@ -1,12 +1,15 @@
+use compact_str::CompactString;
 use lumen_model::{CanonicalTranscript, SchemaCitation};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::accumulators::{
-    ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AutonomyAccumulator,
-    AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport, ContextGrowthAccumulator, ContextGrowthMetrics,
-    McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics, PermissionModeAccumulator,
-    SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics, StatsAccumulator, StatsMetrics,
-    ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator, TurnDurationMetrics,
+    ApiHealthAccumulator, ApiHealthMetrics, ArtifactMetrics, ArtifactsAccumulator, AttributionAccumulator,
+    AttributionMetrics, AutonomyAccumulator, AutonomyMetrics, CircuitBreakerAccumulator, CircuitBreakerReport,
+    ContextGrowthAccumulator, ContextGrowthMetrics, McpAffinityAccumulator, McpAffinityMetrics, PermissionMetrics,
+    PermissionModeAccumulator, SchemaExtractorAccumulator, SelfCorrectionAccumulator, SelfCorrectionMetrics,
+    StatsAccumulator, StatsMetrics, ToolInventoryAccumulator, ToolInventoryMetrics, TurnDurationAccumulator,
+    TurnDurationMetrics,
 };
 use crate::traits::EntryAccumulator;
 
@@ -25,6 +28,8 @@ pub struct AnalysisReport {
     pub artifacts: ArtifactMetrics,
     pub stats: StatsMetrics,
     pub schema_extractor: Vec<SchemaCitation>,
+    pub attribution: AttributionMetrics,
+    pub by_subagent: BTreeMap<CompactString, AttributionMetrics>,
 }
 
 pub struct AnalyticsEngine {
@@ -40,6 +45,7 @@ pub struct AnalyticsEngine {
     artifacts: ArtifactsAccumulator,
     stats: StatsAccumulator,
     schema_extractor: SchemaExtractorAccumulator,
+    attribution: AttributionAccumulator,
 }
 
 impl Default for AnalyticsEngine {
@@ -63,6 +69,7 @@ impl AnalyticsEngine {
             artifacts: ArtifactsAccumulator::default(),
             stats: StatsAccumulator::default(),
             schema_extractor: SchemaExtractorAccumulator::default(),
+            attribution: AttributionAccumulator::default(),
         }
     }
 
@@ -81,6 +88,13 @@ impl AnalyticsEngine {
             self.artifacts.update(turn);
             self.stats.update(turn);
             self.schema_extractor.update(turn);
+            self.attribution.update(turn);
+        }
+
+        let mut by_subagent = BTreeMap::new();
+        for subagent in &transcript.subagents {
+            let sub_report = AnalyticsEngine::new().process_transcript(subagent);
+            by_subagent.insert(CompactString::from(subagent.session_id.as_str()), sub_report.attribution);
         }
 
         AnalysisReport {
@@ -97,6 +111,8 @@ impl AnalyticsEngine {
             artifacts: self.artifacts.finalize(),
             stats: self.stats.finalize(),
             schema_extractor: self.schema_extractor.finalize(),
+            attribution: self.attribution.finalize(),
+            by_subagent,
         }
     }
 }

@@ -581,3 +581,93 @@ fn test_schema_extractor_wired_into_analysis_report() {
     assert_eq!(report.schema_extractor[0].schema_id, "spec@1");
     assert!(report.schema_extractor[0].is_valid);
 }
+
+#[test]
+fn test_subagent_and_plugin_skill_attribution() {
+    // CRIT-LUMEN-147/148: turns attributed to a Plugin or Skill bucket their token
+    // usage under by_plugin/by_skill; turns with None or Root attribution both land
+    // in unattributed_tokens.
+    let usage_turn = |turn_index: usize, attribution: Option<AttributionSource>, tokens: u64| CanonicalTurn {
+        attribution,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: Some(TurnTokenUsage {
+            input_tokens: tokens,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        }),
+    };
+
+    let turn_a = usage_turn(0, Some(AttributionSource::Plugin { name: "foo".into() }), 100);
+    let turn_b = usage_turn(1, Some(AttributionSource::Skill { name: "bar".into(), plugin: None }), 50);
+    let turn_c = usage_turn(2, None, 30);
+    let turn_d = usage_turn(3, Some(AttributionSource::Root), 20);
+
+    let mut attribution = AttributionAccumulator::default();
+    attribution.update(&turn_a);
+    attribution.update(&turn_b);
+    attribution.update(&turn_c);
+    attribution.update(&turn_d);
+    let metrics = attribution.finalize();
+
+    assert_eq!(metrics.by_plugin.get("foo"), Some(&100));
+    assert_eq!(metrics.by_skill.get("bar"), Some(&50));
+    assert_eq!(metrics.unattributed_tokens, 50);
+
+    // CRIT-LUMEN-069/149: subagent transcripts must be recursed into and their
+    // token totals aggregated into by_subagent, keyed by the subagent's session_id.
+    let child_turn = usage_turn(0, Some(AttributionSource::Plugin { name: "reviewer-tool".into() }), 40);
+
+    let child_transcript = CanonicalTranscript {
+        session_id: "reviewer".into(),
+        parent_session_id: Some("parent".into()),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: "claude-3-5-sonnet-20241022".into(),
+        timing: ExecutionTiming {
+            started_at: Utc::now(),
+            ended_at: Utc::now(),
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        turns: vec![child_turn],
+        subagents: vec![],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+    };
+
+    let parent_turn = usage_turn(0, None, 10);
+
+    let parent_transcript = CanonicalTranscript {
+        session_id: "parent".into(),
+        parent_session_id: None,
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: "claude-3-5-sonnet-20241022".into(),
+        timing: ExecutionTiming {
+            started_at: Utc::now(),
+            ended_at: Utc::now(),
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        turns: vec![parent_turn],
+        subagents: vec![child_transcript],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+    };
+
+    let engine = AnalyticsEngine::new();
+    let report = engine.process_transcript(&parent_transcript);
+
+    assert_eq!(report.by_subagent.get("reviewer").map(|m| m.by_plugin.get("reviewer-tool").copied()), Some(Some(40)));
+}

@@ -8,4 +8,6 @@ pub use economics::{ModelTokenSummary, TokenEconomics};
 pub use pricing::ModelPricing;
 pub use schema::SchemaCitation;
 pub use transcript::{CanonicalTranscript, ExecutionTiming, OrchestratorKind, TrajectoryAnomaly};
-pub use turn::{CanonicalToolCall, CanonicalToolResult, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage};
+pub use turn::{
+    AttributionSource, CanonicalToolCall, CanonicalToolResult, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage,
+};
