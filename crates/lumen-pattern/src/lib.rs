@@ -200,15 +200,20 @@ pub fn compute_recovery_index(transcript: &CanonicalTranscript) -> f32 {
 /// Derives (target_file, target_symbol, is_mutation) from a tool call's intent, matching
 /// the grounding convention established by CRIT-LUMEN-145 (trajectory_dag accumulator):
 /// FileRead/FileEdit/FileCreate ground on their path; CodeSearch grounds on its query;
-/// mutation is true for FileEdit, FileCreate, and VersionControl{commit|push}; everything
-/// else is ungrounded and non-mutating.
+/// mutation is true for FileEdit, FileCreate, and VersionControl whose second
+/// whitespace-separated word (the git subcommand, e.g. "commit" in "git commit -m ...")
+/// is "commit" or "push" -- `action` holds the full raw shell command, not a bare verb;
+/// everything else is ungrounded and non-mutating.
 fn ground_tool_intent(intent: &ToolIntent) -> (Option<CompactString>, Option<CompactString>, bool) {
     match intent {
         ToolIntent::FileRead { path, .. } => (Some(path.clone()), None, false),
         ToolIntent::FileEdit { path, .. } => (Some(path.clone()), None, true),
         ToolIntent::FileCreate { path } => (Some(path.clone()), None, true),
         ToolIntent::CodeSearch { query, .. } => (None, Some(query.clone()), false),
-        ToolIntent::VersionControl { action } => (None, None, action == "commit" || action == "push"),
+        ToolIntent::VersionControl { action } => {
+            let subcommand = action.split_whitespace().nth(1);
+            (None, None, subcommand == Some("commit") || subcommand == Some("push"))
+        }
         _ => (None, None, false),
     }
 }
@@ -230,4 +235,42 @@ pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32 {
         }
     }
     tg.calculate_monotonicity()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the VersionControl mutation-detection bug: `action` on
+    /// `ToolIntent::VersionControl` holds the FULL raw shell command (confirmed by
+    /// reading the real construction sites in lumen-session's claude.rs and
+    /// opencode.rs adapters, e.g. `ToolIntent::VersionControl { action:
+    /// CompactString::new(cmd) }` where `cmd` is `"git commit -m 'fix bug'"`), not
+    /// the bare word "commit"/"push". An exact-equality check against "commit" or
+    /// "push" can never match a real command string, so `is_mutation` was always
+    /// false for real git commit/push tool calls.
+    #[test]
+    fn ground_tool_intent_detects_mutation_for_real_git_commit_command() {
+        let intent = ToolIntent::VersionControl { action: CompactString::new("git commit -m 'fix bug'") };
+        let (_, _, is_mutation) = ground_tool_intent(&intent);
+        assert!(is_mutation, "expected 'git commit -m ...' to be detected as a mutation");
+    }
+
+    #[test]
+    fn ground_tool_intent_detects_mutation_for_real_git_push_command() {
+        let intent = ToolIntent::VersionControl { action: CompactString::new("git push origin main") };
+        let (_, _, is_mutation) = ground_tool_intent(&intent);
+        assert!(is_mutation, "expected 'git push origin main' to be detected as a mutation");
+    }
+
+    #[test]
+    fn ground_tool_intent_does_not_flag_non_mutating_git_commands_as_mutations() {
+        let status = ToolIntent::VersionControl { action: CompactString::new("git status") };
+        let (_, _, status_is_mutation) = ground_tool_intent(&status);
+        assert!(!status_is_mutation, "expected 'git status' to remain non-mutating");
+
+        let log = ToolIntent::VersionControl { action: CompactString::new("git log") };
+        let (_, _, log_is_mutation) = ground_tool_intent(&log);
+        assert!(!log_is_mutation, "expected 'git log' to remain non-mutating");
+    }
 }
