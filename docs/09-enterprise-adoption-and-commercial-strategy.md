@@ -1,5 +1,7 @@
 # Enterprise Adoption, Privacy & Commercial Licensing Strategy (`docs/09`)
 
+> **Status: Vision / Roadmap.** This document describes a target architecture and product direction, not the current implementation — components and crates referenced here (e.g. `lumen-daemon`, `lumen-mac`, `lumen-cloud`, `lumen-store`, `lumen-insights`) may not yet exist in the workspace or may differ materially once built. Treat claims of behavior, licensing, or performance in this document as aspirational unless independently verified against the current codebase; docs 01-06 describe the implemented system and take precedence wherever the two conflict.
+
 This document defines the 3-tier customer roadmap, enterprise data security standards, OpenTelemetry fleet export architecture, and the Functional Source License (FSL-1.1-MIT) commercial model.
 
 ---
@@ -58,17 +60,23 @@ flush_interval_seconds = 30
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                        WORKSPACE LICENSING STRUCTURE                                   │
 ├───────────────────────┬─────────────────────────┬──────────────────────────────────────┤
-│ CRATE / ARTIFACT      │ LICENSE                 │ COMMERCIAL RIGHTS                    │
+│ CRATE / ARTIFACT      │ LICENSE                 │ STATUS                               │
 ├───────────────────────┼─────────────────────────┼──────────────────────────────────────┤
-│ `lumen-model`         │ `MIT OR Apache-2.0`     │ Permissive Layer 1 domain primitives │
-│ `lumen-session`       │ `MIT OR Apache-2.0`     │ Permissive multi-orchestrator parser │
-│ `lumen-store`         │ `FSL-1.1-MIT`           │ Free for devs; forbids competitor SaaS│
-│ `lumen-daemon`        │ `FSL-1.1-MIT`           │ Converts to MIT after 2 years        │
-│ `lumen-analysis`      │ `FSL-1.1-MIT`           │ Converts to MIT after 2 years        │
-│ `lumen-pattern`       │ `FSL-1.1-MIT`           │ Converts to MIT after 2 years        │
-│ `lumen-insights`      │ `FSL-1.1-MIT`           │ Converts to MIT after 2 years        │
-│ `lumen-cli`           │ `FSL-1.1-MIT`           │ Converts to MIT after 2 years        │
-│ `apps/lumen-mac`      │ `Proprietary`           │ Commercial native macOS App          │
-│ `lumen-cloud`         │ `Proprietary`           │ Commercial Enterprise Fleet Service  │
+│ `lumen-model`         │ `MIT OR Apache-2.0`     │ Exists                               │
+│ `lumen-session`       │ `MIT OR Apache-2.0`     │ Exists                               │
+│ `lumen-analysis`      │ `FSL-1.1-MIT`           │ Exists                               │
+│ `lumen-pattern`       │ `FSL-1.1-MIT`           │ Exists                               │
+│ `lumen-cli`           │ `FSL-1.1-MIT`           │ Exists                               │
+│ `lumen-store`         │ Planned, not licensed   │ Does not exist yet                   │
+│ `lumen-daemon`        │ Planned, not licensed   │ Does not exist yet                   │
+│ `lumen-insights`      │ Planned, not licensed   │ Does not exist yet                   │
+│ `apps/lumen-mac`      │ Planned, not licensed   │ Does not exist yet                   │
+│ `lumen-cloud`         │ Planned, not licensed   │ Does not exist yet                   │
 └───────────────────────┴─────────────────────────┴──────────────────────────────────────┘
 ```
+
+> Note: the FSL-1.1-MIT crates above share a single Excluded Purpose clause and a single
+> Change Date, both defined once in the repository's `LICENSE` file — not a separate clause
+> per crate. The Excluded Purpose is "providing the functionality of the Software to third
+> parties as a competing commercial product or service"; the Change Date is 2 years from
+> each version's release, after which that version relicenses to MIT.

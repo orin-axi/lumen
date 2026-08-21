@@ -1,5 +1,7 @@
 # The Six Generational Leaps in Session Intelligence (`docs/10`)
 
+> **Status: Vision / Roadmap.** This document describes a target architecture and product direction, not the current implementation — components and crates referenced here (e.g. `lumen-daemon`, `lumen-mac`, `lumen-cloud`, `lumen-store`, `lumen-insights`) may not yet exist in the workspace or may differ materially once built. Treat claims of behavior, licensing, or performance in this document as aspirational unless independently verified against the current codebase; docs 01-06 describe the implemented system and take precedence wherever the two conflict.
+
 This document defines the 6 breakthrough capabilities that elevate Lumen from a passive telemetry counter into an active developer flight controller and self-evolving knowledge engine.
 
 ---

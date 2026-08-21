@@ -57,7 +57,7 @@ flowchart TD
     Raw[("<b>Raw Byte Stream</b><br/>First 2048 Bytes")]:::parser
     Detect(["<b>detect_orchestrator()</b><br/>Heuristic Sniffer"]):::router
 
-    Raw -->|< 0.08ms| Detect
+    Raw -->|< 1µs, measured| Detect
 
     Detect -->|Contains 'sessionId'| Ad1["<b>ClaudeCodeAdapter</b><br/>Anthropic Format"]:::input
     Detect -->|Contains 'step_index'| Ad2["<b>AgyAdapter</b><br/>Antigravity Format"]:::input

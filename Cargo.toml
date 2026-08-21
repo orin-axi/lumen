@@ -37,6 +37,7 @@ proptest = "1.6"
 insta = { version = "1.41", features = ["json", "yaml", "redactions"] }
 rstest = "0.23"
 pretty_assertions = "1.4"
+criterion = "0.5"
 
 
 

@@ -1,5 +1,7 @@
 # Data Presentation & UI/CLI Design Standard (`docs/07`)
 
+> **Status: Vision / Roadmap.** This document describes a target architecture and product direction, not the current implementation — components and crates referenced here (e.g. `lumen-daemon`, `lumen-mac`, `lumen-cloud`, `lumen-store`, `lumen-insights`) may not yet exist in the workspace or may differ materially once built. Treat claims of behavior, licensing, or performance in this document as aspirational unless independently verified against the current codebase; docs 01-06 describe the implemented system and take precedence wherever the two conflict.
+
 This document defines the quantitative visualization standards, color palettes, typography, and human-computer interaction (HCI) rules governing `lumen-cli` and `Lumen for Mac`.
 
 ---
