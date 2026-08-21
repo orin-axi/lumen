@@ -29,11 +29,16 @@ fn test_codex_adapter_parses_real_event_msg_envelope() {
 
     assert_eq!(transcript.turns.len(), 3);
     assert_eq!(transcript.turns[0].role, TurnRole::User);
+    // Real UserMessage shape: item.content is an array of blocks, each carrying its own
+    // `text` field -- there is no top-level `item.text`.
     assert_eq!(transcript.turns[0].text.as_deref(), Some("Fix the failing test"));
     assert_eq!(transcript.turns[1].role, TurnRole::Assistant);
+    // Real AgentMessage shape: same content-array-of-blocks structure as UserMessage.
     assert_eq!(transcript.turns[1].text.as_deref(), Some("Looking now."));
     assert_eq!(transcript.turns[2].role, TurnRole::ToolResult);
-    assert_eq!(transcript.turns[2].text.as_deref(), Some("cargo test"));
+    // Real CommandExecution items have no text/content field at all; the real signal is the
+    // `command` array (a shell argv list), joined with spaces.
+    assert_eq!(transcript.turns[2].text.as_deref(), Some("/bin/zsh -lc cargo test"));
 
     // Last-write, not summed: the second token_count line (1500/110/55) must win over the
     // first (1200/85/40). A naive sum would produce 2700/195.
@@ -42,6 +47,33 @@ fn test_codex_adapter_parses_real_event_msg_envelope() {
     assert_eq!(transcript.economics.reasoning_output_tokens, 55);
 
     assert_eq!(transcript.service_tier.as_deref(), Some("Standard"));
+
+    // Bug 4: thread_settings_applied's adjacent, equally-real `model` field must update
+    // model_family away from the hardcoded "gpt-4o" default.
+    assert_eq!(transcript.model_family.as_str(), "gpt-5.6-terra");
+}
+
+#[test]
+fn test_codex_adapter_extracts_cache_tokens_from_real_nested_shape() {
+    // Bug 1 + Bug 2: real Codex token_count payloads nest total_token_usage one level deeper,
+    // under payload.info.total_token_usage -- not directly on payload -- and the real cache
+    // field names are cached_input_tokens / cache_write_input_tokens (Codex's own names, NOT
+    // Claude Code's cache_read_input_tokens / cache_creation_input_tokens). Before the fix,
+    // payload.get("total_token_usage") always returned None against real data, so
+    // input/output/reasoning tokens were always 0, and cache fields were hardcoded to 0
+    // regardless of payload content.
+    let sample = real_codex_session_dump();
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    // Last-write: the second token_count line's cached_input_tokens=900 /
+    // cache_write_input_tokens=25 must win over the first line's 400/10.
+    assert_eq!(transcript.economics.cache_read_tokens, 900, "cached_input_tokens must map to cache_read_tokens");
+    assert_eq!(
+        transcript.economics.cache_creation_tokens, 25,
+        "cache_write_input_tokens must map to cache_creation_tokens"
+    );
 }
 
 #[test]
@@ -60,10 +92,15 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
     assert_eq!(transcript.economics.input_tokens, 1500);
     assert_eq!(transcript.economics.output_tokens, 110);
 
-    // model_family is "gpt-4o" ($2.50/M input, $10.00/M output, $10.00/M reasoning -- same as
-    // output, per PricingTable::seed()'s documented reasoning-rate policy): 1500 * 2.50e-6 +
-    // 110 * 10.00e-6 + 55 * 10.00e-6 (55 reasoning tokens, last-write value from the fixture).
-    let expected_cost = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0 + 55.0 * 10.00 / 1_000_000.0;
+    // model_family is now "gpt-5.6-terra" (Bug 4 fix), extracted from the fixture's real
+    // thread_settings.model field. It has no seeded pricing row, so PricingTable::rate_for
+    // falls back to claude-3-5-sonnet's rates (CRIT-LUMEN-008): $3.00/M input, $3.75/M
+    // cache-write, $0.30/M cache-read, $15.00/M output, $15.00/M reasoning.
+    let expected_cost = 1500.0 * 3.00 / 1_000_000.0
+        + 25.0 * 3.75 / 1_000_000.0
+        + 900.0 * 0.30 / 1_000_000.0
+        + 110.0 * 15.00 / 1_000_000.0
+        + 55.0 * 15.00 / 1_000_000.0;
     assert!(
         transcript.economics.total_cost_usd > 0.0,
         "a Codex session with a real service_tier must not silently price at $0.00"
@@ -89,8 +126,13 @@ fn test_codex_adapter_reasoning_tokens_flow_into_pricing_math() {
 
     assert_eq!(transcript.economics.reasoning_output_tokens, 55);
 
-    let cost_without_reasoning = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0;
-    let reasoning_contribution = 55.0 * 10.00 / 1_000_000.0;
+    // model_family "gpt-5.6-terra" has no seeded pricing row and falls back to
+    // claude-3-5-sonnet's rates (see test_codex_adapter_prices_tiered_session_nonzero).
+    let cost_without_reasoning = 1500.0 * 3.00 / 1_000_000.0
+        + 25.0 * 3.75 / 1_000_000.0
+        + 900.0 * 0.30 / 1_000_000.0
+        + 110.0 * 15.00 / 1_000_000.0;
+    let reasoning_contribution = 55.0 * 15.00 / 1_000_000.0;
 
     assert!(
         (transcript.economics.total_cost_usd - (cost_without_reasoning + reasoning_contribution)).abs() < 1e-9,

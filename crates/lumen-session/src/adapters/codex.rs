@@ -34,7 +34,7 @@ impl SessionAdapter for CodexAdapter {
 
     fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("codex-session");
-        let model_family = CompactString::new("gpt-4o");
+        let mut model_family = CompactString::new("gpt-4o");
         let mut started_at = Utc::now();
         let mut ended_at = started_at;
         let mut has_start = false;
@@ -48,6 +48,11 @@ impl SessionAdapter for CodexAdapter {
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
         let mut reasoning_output_tokens = 0u64;
+        // Bug 2: real Codex cache-token field names (cached_input_tokens /
+        // cache_write_input_tokens) differ from Claude Code's (cache_read_input_tokens /
+        // cache_creation_input_tokens) -- do not conflate the two adapters' vocabularies.
+        let mut cache_read_tokens = 0u64;
+        let mut cache_creation_tokens = 0u64;
 
         let mut byte_offset: usize = 0;
 
@@ -138,7 +143,31 @@ impl SessionAdapter for CodexAdapter {
                         "CommandExecution" | "Reasoning" => TurnRole::ToolResult,
                         _ => TurnRole::System,
                     };
-                    let text = item.and_then(|i| i.get("text")).and_then(|t| t.as_str()).map(|s| s.to_string());
+                    // Bug 3: no real item shape has a top-level `text` field.
+                    // UserMessage/AgentMessage carry an array of content blocks under
+                    // `content`, each with its own `text`; multiple blocks are joined with a
+                    // newline. CommandExecution has no text/content field at all -- its real
+                    // signal is the `command` array (a shell argv list), joined with spaces
+                    // into a readable representation. Reasoning's `summary_text`/`raw_content`
+                    // were empty arrays in every real occurrence observed; their real populated
+                    // shape is unconfirmed, so `text` is deliberately left `None` rather than
+                    // guessed at.
+                    let text = match item_type {
+                        "UserMessage" | "AgentMessage" => {
+                            item.and_then(|i| i.get("content")).and_then(|c| c.as_array()).map(|blocks| {
+                                blocks
+                                    .iter()
+                                    .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                        }
+                        "CommandExecution" => item
+                            .and_then(|i| i.get("command"))
+                            .and_then(|c| c.as_array())
+                            .map(|argv| argv.iter().filter_map(|a| a.as_str()).collect::<Vec<_>>().join(" ")),
+                        _ => None,
+                    };
 
                     turns.push(CanonicalTurn {
                         attribution: None,
@@ -153,22 +182,33 @@ impl SessionAdapter for CodexAdapter {
                     });
                 }
                 Some("token_count") => {
-                    if let Some(usage) = payload.get("total_token_usage") {
+                    // Bug 1: real payloads nest total_token_usage one level deeper, under
+                    // payload.info.total_token_usage -- not directly on payload.
+                    if let Some(usage) = payload.get("info").and_then(|i| i.get("total_token_usage")) {
                         input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(input_tokens);
                         output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(output_tokens);
                         reasoning_output_tokens = usage
                             .get("reasoning_output_tokens")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(reasoning_output_tokens);
+                        // Bug 2: real Codex cache field names, distinct from Claude Code's.
+                        cache_read_tokens =
+                            usage.get("cached_input_tokens").and_then(|v| v.as_u64()).unwrap_or(cache_read_tokens);
+                        cache_creation_tokens = usage
+                            .get("cache_write_input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(cache_creation_tokens);
                     }
                     // No total_token_usage on this payload: leave the running totals as-is.
                 }
                 Some("thread_settings_applied") => {
-                    service_tier = payload
-                        .get("thread_settings")
-                        .and_then(|ts| ts.get("service_tier"))
-                        .and_then(|v| v.as_str())
-                        .map(CompactString::new);
+                    if let Some(ts) = payload.get("thread_settings") {
+                        service_tier = ts.get("service_tier").and_then(|v| v.as_str()).map(CompactString::new);
+                        // Bug 4: the adjacent, equally-real `model` field was never read.
+                        if let Some(model) = ts.get("model").and_then(|v| v.as_str()) {
+                            model_family = CompactString::new(model);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -180,8 +220,8 @@ impl SessionAdapter for CodexAdapter {
             usage: TurnTokenUsage {
                 input_tokens,
                 output_tokens,
-                cache_creation_tokens: 0,
-                cache_read_tokens: 0,
+                cache_creation_tokens,
+                cache_read_tokens,
                 reasoning_tokens: reasoning_output_tokens,
             },
             timestamp: ended_at,
