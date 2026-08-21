@@ -548,6 +548,25 @@ fn make_test_session_record(provider_session_id: &str) -> SessionFactRecord {
     }
 }
 
+fn empty_token_economics() -> TokenEconomics {
+    TokenEconomics {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        ephemeral_5m_tokens: 0,
+        ephemeral_1h_tokens: 0,
+        cache_hit_ratio: 0.0,
+        total_cost_usd: 0.0,
+        provided_cost_usd: None,
+        baseline_cost_no_cache_usd: 0.0,
+        net_savings_usd: 0.0,
+        efficiency_multiplier: 1.0,
+        per_model: std::collections::HashMap::new(),
+        reasoning_output_tokens: 0,
+    }
+}
+
 #[test]
 fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
     let dir = tempdir().unwrap();
@@ -714,4 +733,136 @@ fn test_snapshot_repository_scoped_by_provider_and_session_id() {
 
     let nonexistent = repo.get_latest_snapshot("claude", "sess-scope-nonexistent").unwrap();
     assert_eq!(nonexistent, None);
+}
+
+#[test]
+fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mapping() {
+    use std::collections::HashMap;
+
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("token_usage_insert_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-token-1")).unwrap();
+
+    let mut per_model = HashMap::new();
+    per_model.insert(
+        compact_str::CompactString::from("claude-3-5-sonnet-20241022"),
+        ModelTokenSummary {
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_creation_tokens: 50,
+            cache_read_tokens: 30,
+            cost_usd: 1.25,
+            turns: 3,
+        },
+    );
+    per_model.insert(
+        compact_str::CompactString::from("claude-3-opus-20240229"),
+        ModelTokenSummary {
+            input_tokens: 2000,
+            output_tokens: 400,
+            cache_creation_tokens: 80,
+            cache_read_tokens: 60,
+            cost_usd: 2.50,
+            turns: 5,
+        },
+    );
+
+    let economics = TokenEconomics {
+        input_tokens: 3000,
+        output_tokens: 600,
+        cache_creation_tokens: 130,
+        cache_read_tokens: 90,
+        ephemeral_5m_tokens: 0,
+        ephemeral_1h_tokens: 0,
+        cache_hit_ratio: 0.0,
+        total_cost_usd: 3.75,
+        provided_cost_usd: None,
+        baseline_cost_no_cache_usd: 3.75,
+        net_savings_usd: 0.0,
+        efficiency_multiplier: 1.0,
+        per_model,
+        reasoning_output_tokens: 0,
+    };
+
+    let token_repo = TokenUsageRepository::new(&conn);
+    token_repo.insert_token_usage("sess-token-1", &economics).expect("insert_token_usage failed");
+
+    let internal_id: i64 = conn
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-token-1"], |row| row.get(0))
+        .unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT model_name, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, cost_usd
+             FROM token_usage WHERE session_id = ?1 ORDER BY model_name ASC",
+        )
+        .unwrap();
+    let rows: Vec<(String, i64, i64, i64, i64, f64)> = stmt
+        .query_map([internal_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert_eq!(rows.len(), 2, "must insert exactly one row per per_model entry");
+
+    let sonnet = &rows[0];
+    assert_eq!(sonnet.0, "claude-3-5-sonnet-20241022");
+    assert_eq!(sonnet.1, 1000);
+    assert_eq!(sonnet.2, 50, "cache_creation_tokens must map to cache_write_tokens column");
+    assert_eq!(sonnet.3, 30);
+    assert_eq!(sonnet.4, 200);
+    assert!((sonnet.5 - 1.25).abs() < f64::EPSILON);
+
+    let opus = &rows[1];
+    assert_eq!(opus.0, "claude-3-opus-20240229");
+    assert_eq!(opus.1, 2000);
+    assert_eq!(opus.2, 80, "cache_creation_tokens must map to cache_write_tokens column");
+    assert_eq!(opus.3, 60);
+    assert_eq!(opus.4, 400);
+    assert!((opus.5 - 2.50).abs() < f64::EPSILON);
+}
+
+#[test]
+fn test_token_usage_repository_nonexistent_session_returns_error() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("token_usage_missing_session_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let token_repo = TokenUsageRepository::new(&conn);
+    let economics = empty_token_economics();
+
+    let insert_result = token_repo.insert_token_usage("no-such-session", &economics);
+    assert!(insert_result.is_err(), "insert_token_usage against a nonexistent session must error");
+    assert!(matches!(insert_result.unwrap_err(), StoreError::NotFound(_)));
+}
+
+#[test]
+fn test_token_usage_repository_empty_per_model_inserts_zero_rows() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("token_usage_empty_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-token-empty")).unwrap();
+
+    let token_repo = TokenUsageRepository::new(&conn);
+    let economics = empty_token_economics();
+
+    token_repo.insert_token_usage("sess-token-empty", &economics).expect("empty per_model insert failed");
+
+    let internal_id: i64 = conn
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-token-empty"], |row| row.get(0))
+        .unwrap();
+
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    assert_eq!(count, 0);
 }
