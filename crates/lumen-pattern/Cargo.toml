@@ -16,6 +16,13 @@ petgraph = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+criterion = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "tarjan_bench"
+harness = false
 
 [lints]
 workspace = true

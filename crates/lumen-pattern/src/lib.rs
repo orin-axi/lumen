@@ -34,6 +34,12 @@ pub struct TrajectoryGraph {
     pub last_node: Option<NodeIndex>,
     pub total_mutations: usize,
     pub total_reads: usize,
+    /// Most recent node index seen for a given grounded target (symbol, falling back to
+    /// file). Used to close a back-edge when the same target is revisited, so repeated
+    /// access to the same symbol/file forms an actual graph cycle for Tarjan SCC to find --
+    /// without this, `push_tool` only ever produces a linear chain and no cycle is
+    /// topologically possible regardless of how `target_symbol`/`target_file` are populated.
+    target_last_seen: std::collections::HashMap<CompactString, NodeIndex>,
 }
 
 impl Default for TrajectoryGraph {
@@ -44,7 +50,13 @@ impl Default for TrajectoryGraph {
 
 impl TrajectoryGraph {
     pub fn new() -> Self {
-        Self { graph: DiGraph::new(), last_node: None, total_mutations: 0, total_reads: 0 }
+        Self {
+            graph: DiGraph::new(),
+            last_node: None,
+            total_mutations: 0,
+            total_reads: 0,
+            target_last_seen: std::collections::HashMap::new(),
+        }
     }
 
     pub fn push_tool(&mut self, node: ToolNode) -> NodeIndex {
@@ -54,10 +66,21 @@ impl TrajectoryGraph {
             self.total_reads += 1;
         }
 
+        let target_key = node.target_symbol.clone().or_else(|| node.target_file.clone());
+
         let current = self.graph.add_node(node);
         if let Some(prev) = self.last_node {
             self.graph.add_edge(prev, current, ());
         }
+
+        if let Some(key) = target_key {
+            if let Some(&prior) = self.target_last_seen.get(&key) {
+                // Close the loop: prior --(forward chain)--> current --(back-edge)--> prior
+                self.graph.add_edge(current, prior, ());
+            }
+            self.target_last_seen.insert(key, current);
+        }
+
         self.last_node = Some(current);
         current
     }
@@ -165,17 +188,33 @@ pub fn compute_recovery_index(transcript: &CanonicalTranscript) -> f32 {
     }
 }
 
+/// Derives (target_file, target_symbol, is_mutation) from a tool call's intent, matching
+/// the grounding convention established by CRIT-LUMEN-145 (trajectory_dag accumulator):
+/// FileRead/FileEdit/FileCreate ground on their path; CodeSearch grounds on its query;
+/// mutation is true for FileEdit, FileCreate, and VersionControl{commit|push}; everything
+/// else is ungrounded and non-mutating.
+fn ground_tool_intent(intent: &ToolIntent) -> (Option<CompactString>, Option<CompactString>, bool) {
+    match intent {
+        ToolIntent::FileRead { path, .. } => (Some(path.clone()), None, false),
+        ToolIntent::FileEdit { path, .. } => (Some(path.clone()), None, true),
+        ToolIntent::FileCreate { path } => (Some(path.clone()), None, true),
+        ToolIntent::CodeSearch { query, .. } => (None, Some(query.clone()), false),
+        ToolIntent::VersionControl { action } => (None, None, action == "commit" || action == "push"),
+        _ => (None, None, false),
+    }
+}
+
 /// Convenience helper to build `TrajectoryGraph` and calculate monotonicity score.
 pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32 {
     let mut tg = TrajectoryGraph::new();
     for turn in &transcript.turns {
         for call in &turn.tool_calls {
-            let is_mutation = matches!(call.intent, ToolIntent::FileEdit { .. } | ToolIntent::FileCreate { .. });
+            let (target_file, target_symbol, is_mutation) = ground_tool_intent(&call.intent);
             tg.push_tool(ToolNode {
                 turn_index: turn.turn_index,
                 tool_name: call.tool_name.clone(),
-                target_symbol: None,
-                target_file: None,
+                target_symbol,
+                target_file,
                 is_mutation,
                 had_error: false,
             });
