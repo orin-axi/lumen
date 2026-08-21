@@ -1095,7 +1095,7 @@ fn test_tool_inventory_last_call_wins_and_running_error_key() {
         "the error must be keyed by the running last_tool_name (edit_file), not by call_id"
     );
     assert!(
-        inv.errors_by_tool.get("call_b").is_none(),
+        !inv.errors_by_tool.contains_key("call_b"),
         "the error must never be keyed by the result's own call_id"
     );
     assert_eq!(
