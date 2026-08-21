@@ -894,3 +894,7 @@ Ok, how do we take all our learnings and apply to our specs and plans?
 ---
 
 All done/
+
+---
+
+Let's commit and push
