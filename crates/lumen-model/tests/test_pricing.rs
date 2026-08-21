@@ -647,6 +647,105 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
     assert!((table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9);
 }
 
+/// Real, newly-discovered financial-correctness bug found via mutation testing during a fresh
+/// spec re-verification: `normalize_model_key`'s progressively-shorter-prefix search let
+/// "gpt-4o-mini" match the seeded "gpt-4o" key by stripping the trailing "mini" segment.
+/// "gpt-4o-mini" is a REAL, DIFFERENT, materially cheaper OpenAI model (~$0.15/$0.60 per M vs
+/// gpt-4o's $2.50/$10.00 per M) -- normalizing it onto gpt-4o's rate is a real ~17x overcharge
+/// for any Codex/Claude session that reports this model string. The fix restricts what
+/// `normalize_model_key` may strip to segments that are clearly version/date/scale markers
+/// (numeric-only segments, digit+single-letter parameter-scale segments like "32b", and a small
+/// allowlist of non-differentiating tuning words), so "mini" -- which denotes a genuinely
+/// different priced product, not a version/scale suffix -- can never be stripped. Since no
+/// seeded key matches after only stripping safe segments, "gpt-4o-mini" must fall through to
+/// the CRIT-LUMEN-008 unrecognized-model Sonnet fallback, NOT gpt-4o's rate.
+#[test]
+fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let mini_rate = table.rate_for("gpt-4o-mini", None, TokenRateKind::Input, as_of);
+    let sonnet_rate = table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of);
+    let gpt4o_rate = table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of);
+
+    assert!(
+        (gpt4o_rate - 2.50).abs() < 1e-9,
+        "sanity: gpt-4o's own seeded Input rate must still be $2.50/M"
+    );
+    assert!(
+        (mini_rate - 2.50).abs() > 1e-9,
+        "gpt-4o-mini must NOT be billed at gpt-4o's $2.50/M rate -- it is a distinct, much \
+         cheaper real model"
+    );
+    assert!(
+        (mini_rate - sonnet_rate).abs() < 1e-9,
+        "gpt-4o-mini is unrecognized after normalization (no seeded key matches once \"mini\" is \
+         correctly rejected as strippable), so it must fall back to Sonnet's $3.00/M rate per \
+         CRIT-LUMEN-008, got {mini_rate}"
+    );
+}
+
+/// A second, genuine same-prefix-different-model risk among the seeded keys: "gemini-2.0-flash"
+/// is seeded, and Google's real "gemini-2.0-flash-lite" is a distinct, differently-priced
+/// product (not a version/date/scale suffix of flash). Confirms the fix generalizes beyond the
+/// single gpt-4o-mini case rather than special-casing it.
+#[test]
+fn test_gemini_flash_lite_does_not_normalize_to_gemini_flash() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let lite_rate = table.rate_for("gemini-2.0-flash-lite", None, TokenRateKind::Input, as_of);
+    let flash_rate = table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of);
+    let sonnet_rate = table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of);
+
+    assert!((flash_rate - 0.10).abs() < 1e-9, "sanity: gemini-2.0-flash's own seeded Input rate must still be $0.10/M");
+    assert!(
+        (lite_rate - 0.10).abs() > 1e-9,
+        "gemini-2.0-flash-lite must NOT be billed at gemini-2.0-flash's rate -- it is a \
+         distinct real model, not a version/scale suffix of flash"
+    );
+    assert!(
+        (lite_rate - sonnet_rate).abs() < 1e-9,
+        "gemini-2.0-flash-lite is unrecognized after normalization, so it must fall back to \
+         Sonnet's rate per CRIT-LUMEN-008, got {lite_rate}"
+    );
+}
+
+/// All nine real model strings a prior drift-check confirmed must keep normalizing correctly
+/// after the strippable-segment restriction is applied -- each stripped segment across these
+/// nine cases is either numeric-only or a digit+single-letter parameter-scale token or an
+/// allowlisted tuning word, so none of them should regress.
+#[test]
+fn test_real_versioned_strings_still_normalize_after_safe_strip_restriction() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let cases: &[(&str, &str, f64)] = &[
+        ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet", 3.00),
+        ("claude-3-5-haiku-20241022", "claude-3-5-haiku", 0.80),
+        ("claude-opus-4-20250514", "claude-opus", 15.00),
+        ("claude-opus-4-1-20250805", "claude-opus", 15.00),
+        ("gpt-4o-2024-08-06", "gpt-4o", 2.50),
+        ("gemini-2.0-flash-001", "gemini-2.0-flash", 0.10),
+        ("gemini-2.0-flash-exp", "gemini-2.0-flash", 0.10),
+        ("deepseek-r1-0528", "deepseek-r1", 0.55),
+        ("qwen-2.5-coder-32b-instruct", "qwen-2.5-coder", 0.20),
+    ];
+
+    for (raw, canonical, expected_input_rate) in cases {
+        let raw_rate = table.rate_for(raw, None, TokenRateKind::Input, as_of);
+        let canonical_rate = table.rate_for(canonical, None, TokenRateKind::Input, as_of);
+        assert!(
+            (raw_rate - expected_input_rate).abs() < 1e-9,
+            "{raw} must normalize to {canonical}'s ${expected_input_rate}/M Input rate, got {raw_rate}"
+        );
+        assert!(
+            (raw_rate - canonical_rate).abs() < 1e-9,
+            "{raw}'s normalized rate must exactly equal {canonical}'s own rate"
+        );
+    }
+}
+
 /// Perf finding: adapters were calling `PricingTable::seed()` fresh on every single
 /// `parse_stream` invocation instead of reusing one shared instance, even though
 /// `TokenEconomics::calculate` takes `&PricingTable` specifically so callers could avoid that.

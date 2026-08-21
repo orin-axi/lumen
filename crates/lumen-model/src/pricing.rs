@@ -165,12 +165,52 @@ impl PricingTable {
     fn normalize_model_key<'a>(&'a self, model: &'a str) -> Option<&'a str> {
         let parts: Vec<&str> = model.split('-').collect();
         for end in (1..=parts.len()).rev() {
+            // Only accept this (shorter) candidate if every segment it would strip from the
+            // tail is a safe version/date/scale marker -- never a segment that could denote a
+            // genuinely different, differently-priced model (e.g. "mini", "lite", "nano").
+            if !parts[end..].iter().all(|seg| Self::is_safe_strip_segment(seg)) {
+                continue;
+            }
             let candidate = &model[..Self::prefix_byte_len(&parts, end)];
             if self.rates.iter().any(|r| r.model == candidate) {
                 return Some(candidate);
             }
         }
         None
+    }
+
+    /// Whether a single '-'-delimited segment stripped from the tail of a raw model string is
+    /// safe to discard when normalizing -- i.e. it can only ever denote a version, release
+    /// date, or parameter-scale marker, never a genuinely different priced model name.
+    ///
+    /// Deliberately an ALLOWLIST of safe-to-strip patterns, not a denylist of known-bad words:
+    /// a denylist can never be complete (new differently-priced model tiers are named
+    /// constantly -- "mini", "nano", "flash-lite", ...), whereas the set of ways providers
+    /// encode version/date/scale is small and closed.
+    ///
+    /// 1. Numeric-only segments ("20241022", "001", "0528", "4", "1") -- a bare number is never
+    ///    a model-tier name.
+    /// 2. Parameter-scale segments matching `^\d+[A-Za-z]$` ("32b", "70b") -- digits followed by
+    ///    exactly one trailing letter denote model SIZE within the same family/price tier, not
+    ///    a different-tier product name. Deliberately the strict single-trailing-letter form,
+    ///    not a looser pattern that would also admit multi-token scale strings like "8x7b" --
+    ///    no seeded key requires stripping that shape, so the stricter (safer) form is kept.
+    /// 3. A small explicit allowlist of known non-differentiating tuning-suffix words.
+    fn is_safe_strip_segment(segment: &str) -> bool {
+        if !segment.is_empty() && segment.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+
+        if let Some(last) = segment.chars().next_back() {
+            if last.is_ascii_alphabetic() {
+                let digits = &segment[..segment.len() - last.len_utf8()];
+                if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                    return true;
+                }
+            }
+        }
+
+        matches!(segment, "exp" | "latest" | "preview" | "instruct" | "chat")
     }
 
     /// Byte length of the '-'-joined prefix consisting of the first `count` elements of
