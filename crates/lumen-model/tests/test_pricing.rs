@@ -1,4 +1,35 @@
+use chrono::{TimeZone, Utc};
 use lumen_model::*;
+
+#[test]
+fn test_core_pricing_rates_and_unrecognized_model_fallback() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // CRIT-LUMEN-002: Claude 3.5 Sonnet
+    assert!((table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of) - 3.00).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-sonnet", None, TokenRateKind::CacheWrite, as_of) - 3.75).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-sonnet", None, TokenRateKind::CacheRead, as_of) - 0.30).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Output, as_of) - 15.00).abs() < 1e-9);
+
+    // CRIT-LUMEN-003: Claude 3.5 Haiku
+    assert!((table.rate_for("claude-3-5-haiku", None, TokenRateKind::Input, as_of) - 0.80).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-haiku", None, TokenRateKind::CacheWrite, as_of) - 1.00).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-haiku", None, TokenRateKind::CacheRead, as_of) - 0.08).abs() < 1e-9);
+    assert!((table.rate_for("claude-3-5-haiku", None, TokenRateKind::Output, as_of) - 4.00).abs() < 1e-9);
+
+    // CRIT-LUMEN-004: Qwen 2.5 Coder
+    assert!((table.rate_for("qwen-2.5-coder", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9);
+    assert!((table.rate_for("qwen-2.5-coder", None, TokenRateKind::CacheRead, as_of) - 0.05).abs() < 1e-9);
+    assert!((table.rate_for("qwen-2.5-coder", None, TokenRateKind::Output, as_of) - 0.60).abs() < 1e-9);
+
+    // CRIT-LUMEN-008: genuinely unrecognized model falls back to Claude 3.5 Sonnet's rates
+    for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
+        let unrecognized = table.rate_for("totally-unrecognized-model-xyz", None, kind, as_of);
+        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
+        assert!((unrecognized - sonnet).abs() < 1e-9, "fallback rate for {kind:?} should equal Sonnet's rate");
+    }
+}
 
 #[test]
 fn test_claude_sonnet_pricing_calculation() {

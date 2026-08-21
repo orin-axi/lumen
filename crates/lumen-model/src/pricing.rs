@@ -1,4 +1,97 @@
+use chrono::{DateTime, TimeZone, Utc};
+use compact_str::CompactString;
+
 use crate::turn::TurnTokenUsage;
+
+/// Kind of token rate a [`PricingRate`] row applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TokenRateKind {
+    Input,
+    CacheWrite,
+    CacheRead,
+    Output,
+}
+
+/// A single versioned pricing row: the rate for one (model, tier, kind) combination,
+/// valid over an [effective_from, effective_until) window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PricingRate {
+    pub model: CompactString,
+    pub tier: Option<CompactString>,
+    pub kind: TokenRateKind,
+    pub rate_per_m: f64,
+    pub effective_from: DateTime<Utc>,
+    pub effective_until: Option<DateTime<Utc>>,
+}
+
+/// Versioned exchange-rate-style pricing lookup table, replacing the hardcoded
+/// [`ModelPricing`] match statement with dated rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PricingTable {
+    pub rates: Vec<PricingRate>,
+}
+
+/// Shared baseline epoch for all seeded rows' `effective_from`.
+fn seed_epoch() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+}
+
+impl PricingTable {
+    /// Seeds the table with the canonical rate rows for the models this pass covers.
+    pub fn seed() -> Self {
+        let epoch = seed_epoch();
+        let mut rates = Vec::new();
+
+        let mut push = |model: &str, kind: TokenRateKind, rate_per_m: f64| {
+            rates.push(PricingRate {
+                model: CompactString::from(model),
+                tier: None,
+                kind,
+                rate_per_m,
+                effective_from: epoch,
+                effective_until: None,
+            });
+        };
+
+        push("claude-3-5-sonnet", TokenRateKind::Input, 3.00);
+        push("claude-3-5-sonnet", TokenRateKind::CacheWrite, 3.75);
+        push("claude-3-5-sonnet", TokenRateKind::CacheRead, 0.30);
+        push("claude-3-5-sonnet", TokenRateKind::Output, 15.00);
+
+        push("claude-3-5-haiku", TokenRateKind::Input, 0.80);
+        push("claude-3-5-haiku", TokenRateKind::CacheWrite, 1.00);
+        push("claude-3-5-haiku", TokenRateKind::CacheRead, 0.08);
+        push("claude-3-5-haiku", TokenRateKind::Output, 4.00);
+
+        push("qwen-2.5-coder", TokenRateKind::Input, 0.20);
+        push("qwen-2.5-coder", TokenRateKind::CacheRead, 0.05);
+        push("qwen-2.5-coder", TokenRateKind::Output, 0.60);
+
+        Self { rates }
+    }
+
+    /// Looks up the rate for (model, tier, kind) whose effective window contains `as_of`.
+    /// Falls back to `claude-3-5-sonnet`'s rate for the requested kind when the model
+    /// string matches no row at all (CRIT-LUMEN-008).
+    pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
+        let model_recognized = self.rates.iter().any(|r| r.model == model);
+
+        let lookup_model = if model_recognized { model } else { "claude-3-5-sonnet" };
+
+        self.rates
+            .iter()
+            .filter(|r| {
+                r.model == lookup_model
+                    && r.kind == kind
+                    && r.tier.as_deref() == tier
+                    && r.effective_from <= as_of
+                    && r.effective_until.is_none_or(|until| as_of < until)
+            })
+            .max_by_key(|r| r.effective_from)
+            .map(|r| r.rate_per_m)
+            .unwrap_or(0.0)
+    }
+}
 
 /// Model pricing matrix defining exact rates per 1,000,000 tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
