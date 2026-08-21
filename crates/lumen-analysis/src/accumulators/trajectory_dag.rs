@@ -17,6 +17,12 @@ pub struct ToolNode {
 #[derive(Debug, Default, Clone)]
 pub struct TrajectoryDagAccumulator {
     pub nodes: Vec<ToolNode>,
+    /// call_id -> index into `nodes` for calls whose result has not yet been
+    /// seen. Real adapters place a tool_call and its tool_result on separate
+    /// turns (call on an assistant turn, result on a later ToolResult turn),
+    /// so this buffer persists across the whole single forward pass over
+    /// turns rather than being scoped to one `entry`.
+    pending_calls: std::collections::HashMap<CompactString, usize>,
 }
 
 impl EntryAccumulator for TrajectoryDagAccumulator {
@@ -37,21 +43,22 @@ impl EntryAccumulator for TrajectoryDagAccumulator {
                 | ToolIntent::Other { .. } => (None, None, false),
             };
 
-            let had_error = entry
-                .tool_results
-                .iter()
-                .find(|result| result.call_id == call.call_id)
-                .map(|result| result.is_error)
-                .unwrap_or(false);
-
             self.nodes.push(ToolNode {
                 call_id: call.call_id.clone(),
                 tool_name: call.tool_name.clone(),
                 target_file,
                 target_symbol,
                 is_mutation,
-                had_error,
+                had_error: false,
             });
+            self.pending_calls.insert(call.call_id.clone(), self.nodes.len() - 1);
+        }
+
+        for result in &entry.tool_results {
+            if let Some(&idx) = self.pending_calls.get(&result.call_id) {
+                self.nodes[idx].had_error = result.is_error;
+                self.pending_calls.remove(&result.call_id);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 use compact_str::CompactString;
 use lumen_model::{CanonicalTurn, ToolIntent};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::traits::EntryAccumulator;
 
@@ -17,6 +17,11 @@ pub struct PrLinkAccumulator {
     pub pr_urls: BTreeSet<CompactString>,
     pub first_pr_turn_index: Option<usize>,
     pub linked_via_vcs_tool: usize,
+    /// call_ids of VersionControl tool_calls whose result has not yet been
+    /// seen. Real adapters place the call and its result on separate turns,
+    /// so this buffer persists across the whole single forward pass over
+    /// turns rather than being scoped to one `entry`.
+    pending_vcs_calls: BTreeSet<CompactString>,
 }
 
 /// Scans `text` for `github.com/{owner}/{repo}/pull/{digits}` substrings via manual
@@ -62,13 +67,16 @@ impl EntryAccumulator for PrLinkAccumulator {
     type Output = PrLinkMetrics;
 
     fn update(&mut self, entry: &CanonicalTurn) {
-        if !entry.tool_results.is_empty() {
-            let call_intents: BTreeMap<&CompactString, &ToolIntent> =
-                entry.tool_calls.iter().map(|call| (&call.call_id, &call.intent)).collect();
+        for call in &entry.tool_calls {
+            if matches!(call.intent, ToolIntent::VersionControl { .. }) {
+                self.pending_vcs_calls.insert(call.call_id.clone());
+            }
+        }
 
+        if !entry.tool_results.is_empty() {
             for result in &entry.tool_results {
                 let Some(output) = &result.truncated_output else { continue };
-                let is_vcs = matches!(call_intents.get(&result.call_id), Some(ToolIntent::VersionControl { .. }));
+                let is_vcs = self.pending_vcs_calls.remove(&result.call_id);
 
                 for (owner, repo, digits) in find_pr_matches(output) {
                     self.record(entry.turn_index, &owner, &repo, &digits);

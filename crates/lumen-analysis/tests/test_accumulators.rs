@@ -1286,6 +1286,67 @@ fn test_pr_link_accumulator_vcs_vs_text_source() {
 }
 
 #[test]
+fn test_pr_link_cross_turn_vcs_result() {
+    // Real adapters put a VersionControl tool_call on one turn and its result
+    // (containing the PR URL) on a later turn -- never the same turn. This proves
+    // PrLinkAccumulator's pending_vcs_calls buffer correlates the call's intent
+    // across the forward pass to the result turn where the URL actually appears.
+    let mut pr_link = PrLinkAccumulator::default();
+
+    let call_turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: CompactString::new("call_1"),
+            tool_name: CompactString::new("bash"),
+            intent: ToolIntent::VersionControl { action: CompactString::new("push") },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    pr_link.update(&call_turn);
+
+    let result_turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 1,
+        role: TurnRole::ToolResult,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: CompactString::new("call_1"),
+            output_bytes: 64,
+            line_count: 1,
+            is_error: false,
+            error_class: None,
+            truncated_output: Some(CompactString::new(
+                "Created https://github.com/acme/widgets/pull/42 successfully"
+            )),
+            otel_span_id: None,
+        }],
+        usage: None,
+    };
+    pr_link.update(&result_turn);
+
+    let metrics = pr_link.finalize();
+
+    let expected: std::collections::BTreeSet<CompactString> =
+        ["acme/widgets#42"].into_iter().map(CompactString::new).collect();
+    assert_eq!(metrics.pr_urls, expected);
+    assert_eq!(metrics.first_pr_turn_index, Some(1));
+    assert_eq!(
+        metrics.linked_via_vcs_tool, 1,
+        "VersionControl call on turn 0 and its PR-URL result on turn 1 must still correlate"
+    );
+}
+
+#[test]
 fn test_fuzzy_tools_clustering_and_typo_rate() {
     // CRIT-LUMEN-143/144/154: counts and total_tool_calls are populated during
     // update(); finalize() greedily clusters by (-count, name) using Levenshtein
@@ -1457,6 +1518,64 @@ fn test_trajectory_dag_intent_mapping_and_had_error() {
     assert_eq!(status_node.target_symbol, None);
     assert!(!status_node.is_mutation);
     assert!(!status_node.had_error);
+}
+
+#[test]
+fn test_trajectory_dag_cross_turn_had_error() {
+    // Real adapters never place a tool_call and its tool_result on the same
+    // CanonicalTurn -- the call lands on an Assistant turn and its result lands
+    // on a later ToolResult turn, correlated only by call_id. This proves
+    // TrajectoryDagAccumulator correlates across the single forward pass over
+    // turns (a bounded pending_calls buffer), not just within one entry.
+    let mut td = TrajectoryDagAccumulator::default();
+
+    let call_turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 0,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![CanonicalToolCall {
+            call_id: "call_edit".into(),
+            tool_name: "edit_file".into(),
+            intent: ToolIntent::FileEdit { path: "a.rs".into(), lines_added: 1, lines_removed: 1 },
+            raw_arguments: serde_json::json!({}),
+        }],
+        tool_results: smallvec![],
+        usage: None,
+    };
+    td.update(&call_turn);
+
+    let result_turn = CanonicalTurn {
+        attribution: None,
+        turn_index: 1,
+        role: TurnRole::ToolResult,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![CanonicalToolResult {
+            call_id: "call_edit".into(),
+            output_bytes: 0,
+            line_count: 0,
+            is_error: true,
+            error_class: Some("edit_failed".into()),
+            truncated_output: None,
+            otel_span_id: None,
+        }],
+        usage: None,
+    };
+    td.update(&result_turn);
+
+    let nodes = td.finalize();
+    assert_eq!(nodes.len(), 1);
+    let edit_node = &nodes[0];
+    assert_eq!(edit_node.call_id.as_str(), "call_edit");
+    assert!(
+        edit_node.had_error,
+        "call on turn 0 and its error result on turn 1 must still correlate via call_id"
+    );
 }
 
 #[test]
