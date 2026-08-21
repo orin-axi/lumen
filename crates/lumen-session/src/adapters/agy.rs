@@ -8,6 +8,14 @@ use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
 
 pub struct AgyAdapter;
 
+impl AgyAdapter {
+    /// CRIT-LUMEN-165: resolves the real transcript path directly, bypassing the
+    /// ~/.gemini/logs symlink farm.
+    pub fn resolve_transcript_path(brain_root: &std::path::Path, conversation_id: &str) -> std::path::PathBuf {
+        brain_root.join(conversation_id).join(".system_generated").join("logs").join("transcript.jsonl")
+    }
+}
+
 impl SessionAdapter for AgyAdapter {
     fn name(&self) -> &'static str {
         "antigravity"
@@ -88,7 +96,24 @@ impl SessionAdapter for AgyAdapter {
                 if let Some(calls) = val.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {
                         let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let args = call.get("args").cloned().unwrap_or(serde_json::Value::Null);
+                        let mut parsed_args = serde_json::Map::new();
+                        if let Some(obj) = call.get("args").and_then(|a| a.as_object()) {
+                            for (k, v) in obj {
+                                if let Some(s) = v.as_str() {
+                                    match serde_json::from_str::<serde_json::Value>(s) {
+                                        Ok(inner) => {
+                                            parsed_args.insert(k.clone(), inner);
+                                        }
+                                        Err(_) => {
+                                            parsed_args.insert(k.clone(), v.clone());
+                                        }
+                                    }
+                                } else {
+                                    parsed_args.insert(k.clone(), v.clone());
+                                }
+                            }
+                        }
+                        let args = serde_json::Value::Object(parsed_args);
 
                         tool_calls.push(CanonicalToolCall {
                             call_id: CompactString::new(format!("agy_call_{}", tool_calls.len())),

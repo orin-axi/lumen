@@ -37,3 +37,30 @@ fn test_agy_adapter_thinking_blocks_and_tool_calls() {
     assert_eq!(assistant_turn.tool_calls.len(), 1);
     assert_eq!(assistant_turn.tool_calls[0].tool_name, "find_by_name");
 }
+
+#[test]
+fn test_agy_adapter_tool_call_args_double_json_parse() {
+    // CRIT-LUMEN-027: each tool_call arg value is itself a JSON-encoded string requiring a
+    // second parse pass; a value that fails the inner parse retains its raw string.
+    let sample = r#"{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","thinking":"scanning","tool_calls":[{"name":"find_by_name","args":{"DirectoryPath":"\"/Users/gabe/lumen\"","Malformed":"not-json"}}]}"#;
+
+    let adapter = AgyAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).unwrap();
+
+    let args = &transcript.turns[0].tool_calls[0].raw_arguments;
+    assert_eq!(args.get("DirectoryPath").and_then(|v| v.as_str()), Some("/Users/gabe/lumen"));
+    assert_eq!(args.get("Malformed").and_then(|v| v.as_str()), Some("not-json"));
+}
+
+#[test]
+fn test_agy_resolve_transcript_path_bypasses_symlink_layer() {
+    // CRIT-LUMEN-165: resolves the real brain/ transcript path directly, not the
+    // ~/.gemini/logs/<id>.jsonl symlink layer.
+    let brain_root = std::path::Path::new("/Users/test/.gemini/antigravity-cli/brain");
+    let path = AgyAdapter::resolve_transcript_path(brain_root, "conv-123");
+    assert_eq!(
+        path,
+        std::path::PathBuf::from("/Users/test/.gemini/antigravity-cli/brain/conv-123/.system_generated/logs/transcript.jsonl")
+    );
+    assert!(!path.to_string_lossy().contains("/.gemini/logs/"));
+}
