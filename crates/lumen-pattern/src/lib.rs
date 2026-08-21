@@ -66,7 +66,7 @@ impl TrajectoryGraph {
             self.total_reads += 1;
         }
 
-        let target_key = node.target_symbol.clone().or_else(|| node.target_file.clone());
+        let target_key = Self::grounded_key(&node);
 
         let current = self.graph.add_node(node);
         if let Some(prev) = self.last_node {
@@ -91,19 +91,28 @@ impl TrajectoryGraph {
 
         for component in sccs {
             if component.len() >= 3 {
-                let first_symbol = self.graph[component[0]].target_symbol.clone();
+                let first_key = Self::grounded_key(&self.graph[component[0]]);
                 let is_redundant = component
                     .iter()
-                    .all(|idx| self.graph[*idx].target_symbol == first_symbol && !self.graph[*idx].is_mutation);
+                    .all(|idx| Self::grounded_key(&self.graph[*idx]) == first_key && !self.graph[*idx].is_mutation);
 
                 if is_redundant {
-                    if let Some(sym) = first_symbol {
-                        anomalies.push(CircularLoopAnomaly { symbol: sym, cycle_depth: component.len() });
+                    if let Some(key) = first_key {
+                        anomalies.push(CircularLoopAnomaly { symbol: key, cycle_depth: component.len() });
                     }
                 }
             }
         }
         anomalies
+    }
+
+    /// Grounded key for cycle detection: the node's target symbol, falling back to its
+    /// target file when no symbol is present. Shared between `push_tool` (which uses it
+    /// to close back-edges) and `detect_circular_loops` (which uses it to decide whether
+    /// an SCC is a genuine redundant-target cycle) so the two can never drift out of sync
+    /// -- a back-edge closed on one key must be checked against that same key.
+    fn grounded_key(node: &ToolNode) -> Option<CompactString> {
+        node.target_symbol.clone().or_else(|| node.target_file.clone())
     }
 
     pub fn calculate_efficiency(&self) -> f32 {

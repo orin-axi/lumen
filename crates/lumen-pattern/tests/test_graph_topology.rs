@@ -193,6 +193,58 @@ fn test_deep_linear_acyclic_dag() {
 }
 
 #[test]
+fn test_3_node_cycle_grounded_on_file_alone_is_detected() {
+    // CRIT-LUMEN-070 follow-up: FileRead-derived nodes ground on target_file only
+    // (target_symbol is always None for them, per ground_tool_intent). push_tool
+    // already closes a back-edge for file-grounded repeats (target_symbol.or(target_file)
+    // key), so this SCC exists in the graph either way -- the bug is that
+    // detect_circular_loops used to check target_symbol alone, so it silently dropped
+    // any component whose nodes were grounded on target_file alone. This test proves
+    // the file-based cycle is now detected and penalized, not just topologically present.
+    let mut g = TrajectoryGraph::new();
+
+    let n1 = g.push_tool(ToolNode {
+        turn_index: 0,
+        tool_name: CompactString::new("view_file"),
+        target_symbol: None,
+        target_file: Some(CompactString::new("src/lib.rs")),
+        is_mutation: false,
+        had_error: false,
+    });
+
+    let _n2 = g.push_tool(ToolNode {
+        turn_index: 1,
+        tool_name: CompactString::new("view_file"),
+        target_symbol: None,
+        target_file: Some(CompactString::new("src/lib.rs")),
+        is_mutation: false,
+        had_error: false,
+    });
+
+    let n3 = g.push_tool(ToolNode {
+        turn_index: 2,
+        tool_name: CompactString::new("view_file"),
+        target_symbol: None,
+        target_file: Some(CompactString::new("src/lib.rs")),
+        is_mutation: false,
+        had_error: false,
+    });
+
+    // push_tool already closes this back-edge itself via the file-grounded key, but we
+    // add it explicitly too so this test's cycle doesn't depend on push_tool's internal
+    // bookkeeping -- it isolates detect_circular_loops as the thing under test.
+    g.graph.add_edge(n3, n1, ());
+
+    let loops = g.detect_circular_loops();
+    assert_eq!(loops.len(), 1, "expected a single file-grounded cycle to be reported, got {loops:?}");
+    assert_eq!(loops[0].symbol, "src/lib.rs");
+    assert!(loops[0].cycle_depth >= 3);
+
+    let monotonicity = g.calculate_monotonicity();
+    assert!(monotonicity < 1.0, "expected monotonicity to be penalized for the file-read loop, got {monotonicity}");
+}
+
+#[test]
 fn test_empty_and_single_step_graphs() {
     let empty = TrajectoryGraph::new();
     assert_eq!(empty.detect_circular_loops().len(), 0);
