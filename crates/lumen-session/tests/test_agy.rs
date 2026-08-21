@@ -99,3 +99,65 @@ fn test_agy_adapter_does_not_claim_precedence_over_claude_code() {
     );
     assert!(!adapter.matches_fingerprint(dual_marker));
 }
+
+#[test]
+fn test_agy_adapter_model_family_is_not_a_fake_claude_model() {
+    // Bug 1: model_family was hardcoded to a specific Claude model name that AGY (a
+    // Gemini-lineage orchestrator) never actually reports. The real on-disk transcript.jsonl
+    // schema has no per-session model field at all, so the honest fix is a generic
+    // placeholder that does not claim to be any specific Claude/Gemini model.
+    let sample = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"hi"}"#;
+
+    let adapter = AgyAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).unwrap();
+
+    assert_ne!(transcript.model_family, "claude-3-5-sonnet-20241022");
+    assert_eq!(transcript.model_family, "antigravity-unknown-model");
+}
+
+#[test]
+fn test_agy_adapter_tool_call_and_result_call_ids_correlate_across_turns() {
+    // Bug 2: tool_calls minted call_id from a per-turn-local counter (tool_calls.len())
+    // while TOOL_RESULT minted call_id from the global turns.len() -- two incompatible
+    // numbering schemes that essentially never coincide. This proves real FIFO correlation:
+    // two separate PLANNER_RESPONSE/TOOL_RESULT pairs, each result's call_id must match its
+    // own call's call_id, not some arbitrary turn-count-derived string.
+    let sample = r#"{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","thinking":"first","tool_calls":[{"name":"find_by_name","args":{}}]}
+{"step_index":1,"source":"SYSTEM","type":"TOOL_RESULT","content":"result one"}
+{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","thinking":"second","tool_calls":[{"name":"read_file","args":{}}]}
+{"step_index":3,"source":"SYSTEM","type":"TOOL_RESULT","content":"result two"}
+"#;
+
+    let adapter = AgyAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).unwrap();
+
+    assert_eq!(transcript.turns.len(), 4);
+
+    let first_call_id = transcript.turns[0].tool_calls[0].call_id.clone();
+    let first_result_id = transcript.turns[1].tool_results[0].call_id.clone();
+    assert_eq!(first_call_id, first_result_id, "first result must correlate to first call");
+
+    let second_call_id = transcript.turns[2].tool_calls[0].call_id.clone();
+    let second_result_id = transcript.turns[3].tool_results[0].call_id.clone();
+    assert_eq!(second_call_id, second_result_id, "second result must correlate to second call");
+
+    // And the two calls must be genuinely distinct -- not both coincidentally "agy_call_0".
+    assert_ne!(first_call_id, second_call_id);
+}
+
+#[test]
+fn test_agy_adapter_records_parse_failures_with_real_error_and_line_number() {
+    // Bug 3: parse_failures was hardcoded to SmallVec::new() regardless of malformed lines
+    // encountered, silently discarding the JSON parse error. Mirrors the fix already landed
+    // in claude.rs (78f91cf) and codex.rs (f0826a4).
+    let sample = "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"ok\"}\nnot valid json at all\n{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"fine\"}\n";
+
+    let adapter = AgyAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).unwrap();
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    let failure = &transcript.parse_failures[0];
+    assert_eq!(failure.line_number, 2);
+    assert!(!failure.error.is_empty());
+    assert!(failure.byte_offset > 0, "second line's byte_offset must be non-zero");
+}

@@ -42,17 +42,40 @@ impl SessionAdapter for AgyAdapter {
 
     fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let session_id = CompactString::new("agy-session");
-        let model_family = CompactString::new("claude-3-5-sonnet-20241022");
+        // Bug 1 fix: AGY's real on-disk transcript.jsonl schema (step_index, source, type,
+        // status, created_at, content, plus thinking/tool_calls[] on PLANNER_RESPONSE entries
+        // -- confirmed against real fixtures) has no per-session model-name field anywhere.
+        // Antigravity is a Gemini-lineage orchestrator, not Claude, so the old hardcoded
+        // "claude-3-5-sonnet-20241022" actively lied about the model. There is no real signal
+        // to extract, so this is an honest generic placeholder instead of a specific model
+        // name we cannot verify. Pricing still falls back to Sonnet's rate via PricingTable's
+        // existing CRIT-LUMEN-008 fallback for unrecognized model strings -- unchanged here.
+        let model_family = CompactString::new("antigravity-unknown-model");
         let mut turns = Vec::new();
         let mut started_at = Utc::now();
         let mut ended_at = Utc::now();
         let mut has_start = false;
 
-        for line_res in reader.lines() {
+        // Bug 2 fix: a persistent (not per-turn) monotonic counter and FIFO queue so that
+        // TOOL_RESULT entries correlate to the tool_call that produced them, instead of two
+        // incompatible ad-hoc numbering schemes that essentially never matched.
+        let mut next_call_id: usize = 0;
+        let mut pending_call_ids: std::collections::VecDeque<CompactString> = std::collections::VecDeque::new();
+
+        // Bug 3 fix: mirrors claude.rs (78f91cf) / codex.rs (f0826a4) -- enumerate lines and
+        // track a running byte offset so malformed lines are recorded, not silently discarded.
+        let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
+        let mut byte_offset: usize = 0;
+
+        for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
             };
+
+            // LF-based approximation, same documented limitation as claude.rs/codex.rs.
+            let line_start_offset = byte_offset;
+            byte_offset += line.len() + 1;
 
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -61,7 +84,15 @@ impl SessionAdapter for AgyAdapter {
 
             let val: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: line_start_offset,
+                        error: CompactString::new(e.to_string()),
+                    });
+                    continue;
+                }
             };
 
             if let Some(created_str) = val.get("created_at").and_then(|v| v.as_str()) {
@@ -115,8 +146,12 @@ impl SessionAdapter for AgyAdapter {
                         }
                         let args = serde_json::Value::Object(parsed_args);
 
+                        let call_id = CompactString::new(format!("agy_call_{next_call_id}"));
+                        next_call_id += 1;
+                        pending_call_ids.push_back(call_id.clone());
+
                         tool_calls.push(CanonicalToolCall {
-                            call_id: CompactString::new(format!("agy_call_{}", tool_calls.len())),
+                            call_id,
                             tool_name: CompactString::new(name),
                             intent: ToolIntent::Other { raw_name: CompactString::new(name) },
                             raw_arguments: args,
@@ -139,9 +174,13 @@ impl SessionAdapter for AgyAdapter {
                 let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 let is_error = val.get("status").and_then(|v| v.as_str()) == Some("ERROR");
 
+                let call_id = pending_call_ids
+                    .pop_front()
+                    .unwrap_or_else(|| CompactString::new(format!("agy_unmatched_result_{}", turns.len())));
+
                 let mut tool_results = SmallVec::new();
                 tool_results.push(CanonicalToolResult {
-                    call_id: CompactString::new(format!("agy_call_{}", turns.len().saturating_sub(1))),
+                    call_id,
                     output_bytes: content.len(),
                     line_count: content.lines().count(),
                     is_error,
@@ -186,7 +225,7 @@ impl SessionAdapter for AgyAdapter {
             extracted_schemas: SmallVec::new(),
             otel_conversation_id: None,
             service_tier: None,
-            parse_failures: SmallVec::new(),
+            parse_failures,
             detected_anomalies: SmallVec::new(),
         })
     }
