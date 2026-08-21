@@ -6,8 +6,6 @@ use thiserror::Error;
 pub enum IngestionError {
     #[error("I/O error reading session log: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Malformed JSON line: {0}")]
-    MalformedJson(String),
     #[error("Unrecognized log format")]
     UnrecognizedFormat,
 }
