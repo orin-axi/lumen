@@ -45,11 +45,28 @@ impl SessionAdapter for OpenCodeAdapter {
         let mut current_cache_write = 0u64;
         let mut current_cache_read = 0u64;
 
-        for line_res in reader.lines() {
+        // accumulated_cost is a per-line cumulative running total (per its name), not a
+        // per-turn delta -- treated last-write-wins, same as Codex's cumulative token_count
+        // events, never summed across lines.
+        let mut last_accumulated_cost: Option<f64> = None;
+
+        let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
+        let mut byte_offset: usize = 0;
+
+        for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
             };
+
+            // Offset at the START of the line currently being processed. `reader.lines()`
+            // strips newlines and discards byte-position info, so we track it manually: this
+            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
+            // line for CRLF-terminated input -- an acceptable known limitation for a
+            // diagnostic field, not a byte-exact file-seek requirement. Same pattern as
+            // claude.rs, codex.rs, agy.rs.
+            let line_start_offset = byte_offset;
+            byte_offset += line.len() + 1;
 
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -58,7 +75,15 @@ impl SessionAdapter for OpenCodeAdapter {
 
             let val: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: line_start_offset,
+                        error: CompactString::new(e.to_string()),
+                    });
+                    continue;
+                }
             };
 
             if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
@@ -75,11 +100,11 @@ impl SessionAdapter for OpenCodeAdapter {
             // Extract usage if present
             let mut turn_usage = None;
             if let Some(usage_obj) = val.get("metrics").or_else(|| val.get("usage")) {
-                let in_tok = usage_obj
-                    .get("accumulated_cost")
-                    .or_else(|| usage_obj.get("input_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+                if let Some(cost) = usage_obj.get("accumulated_cost").and_then(|v| v.as_f64()) {
+                    last_accumulated_cost = Some(cost);
+                }
+
+                let in_tok = usage_obj.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let out_tok = usage_obj.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let c_write = usage_obj.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let c_read = usage_obj.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -200,7 +225,7 @@ impl SessionAdapter for OpenCodeAdapter {
             }],
             &model_family,
             &PricingTable::seed(),
-            None,
+            last_accumulated_cost,
         );
 
         let wall_duration = (ended_at - started_at).num_milliseconds().max(0) as u64;
@@ -223,7 +248,7 @@ impl SessionAdapter for OpenCodeAdapter {
             turns,
             otel_conversation_id: None,
             service_tier: None,
-            parse_failures: SmallVec::new(),
+            parse_failures,
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
