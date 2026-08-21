@@ -3,11 +3,13 @@
   "$id": "spec@1",
   "id": "SPEC-LUMEN-003-STORE",
   "purpose": "Defines the local-first SQLite persistence layer, WAL concurrency mode, database migrations, connection pooling, repository APIs, and typed read models for Lumen session intelligence.",
-  "scope": "Covers crates/lumen-store: SqliteStore, MigrationManager, QueueRepository, SessionRepository, ToolCallRepository, CommandEventRepository, FindingsRepository, RollupRepository, and typed read models.",
+  "scope": "Covers crates/lumen-store: SqliteStore, MigrationManager, QueueRepository, SessionRepository, ToolCallRepository, CommandEventRepository, FindingsRepository, RollupRepository, SnapshotRepository, TokenUsageRepository, ReadContractEnvelope, and typed read models.",
   "non_goals": [
     "Hook process interception or daemon async scheduling (handled by lumen-daemon).",
     "Log file parsing or stream transformation (handled by lumen-session).",
-    "Direct network I/O or remote cloud sync."
+    "Direct network I/O or remote cloud sync.",
+    "Ownership of the Mac app's read-model schema: any Swift/Mac client, if/when built, is a consumer of schemas/read-contracts/v1.schema.json, not its source of truth.",
+    "Category-score computation and discovered-category clustering (handled by lumen-insights, not yet integrated into any daemon transaction)."
   ],
   "api_surface": [
     {
@@ -35,6 +37,44 @@
       "name": "FindingsRepository",
       "signature": "pub struct FindingsRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> FindingsRepository<'a> { pub fn insert_findings(&self, session_id: &str, findings: &[FindingFactRecord]) -> Result<(), StoreError>; pub fn list_top_findings(&self, limit: usize) -> Result<Vec<FindingReadModel>, StoreError>; }",
       "description": "Repository storing structured findings with confidence scores, evidence JSON payloads, and rule versions.",
+      "error_conditions": []
+    },
+    {
+      "name": "ToolCallRepository",
+      "signature": "pub struct ToolCallRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> ToolCallRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_tool_calls(&self, session_id: i64, calls: &[ToolCallFactRecord]) -> Result<(), StoreError>; pub fn list_by_session(&self, session_id: i64) -> Result<Vec<ToolCallReadModel>, StoreError>; pub fn tool_counts_by_session(&self, session_id: i64) -> Result<BTreeMap<CompactString, usize>, StoreError>; pub fn error_counts_by_session(&self, session_id: i64) -> Result<BTreeMap<CompactString, usize>, StoreError>; }",
+      "description": "Repository for the tool_calls table (id, session_id, turn_index, tool_name, call_id, intent_kind, is_error, latency_ms). insert_tool_calls batch-inserts ToolCallFactRecord rows for a session using a single prepared statement in a loop, following FindingsRepository::insert_findings's pattern; an empty slice inserts zero rows without error. tool_counts_by_session and error_counts_by_session are the methods SessionRepository::get_session uses to populate SessionDetailReadModel's tool_counts/error_counts fields (previously hardcoded to BTreeMap::new()).",
+      "error_conditions": []
+    },
+    {
+      "name": "RollupRepository",
+      "signature": "pub struct RollupRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> RollupRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn upsert_rollup(&self, record: &RollupFactRecord) -> Result<(), StoreError>; pub fn get_rollup(&self, period_start: chrono::DateTime<chrono::Utc>, period_type: &str) -> Result<Option<RollupReadModel>, StoreError>; pub fn list_rollups(&self, period_type: &str, limit: usize) -> Result<Vec<RollupReadModel>, StoreError>; }",
+      "description": "Repository for the rollups table (id, period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms). upsert_rollup's idempotent ON CONFLICT requires a UNIQUE(period_start, period_type) index, which does not exist on the rollups table created by migration V5 (SQLite has no ALTER TABLE ADD CONSTRAINT) — this SHALL be added via a new, separate migration (V6: CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type)), never by editing the already-applied V5 migration in place.",
+      "error_conditions": []
+    },
+    {
+      "name": "CommandEventRepository",
+      "signature": "pub struct CommandEventRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> CommandEventRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_command_events(&self, session_id: &str, events: &[CommandEventFactRecord]) -> Result<(), StoreError>; pub fn list_by_session(&self, session_id: &str) -> Result<Vec<CommandEventReadModel>, StoreError>; }",
+      "description": "Repository for the command_events table. insert_command_events persists command_base and redacted argument patterns per CRIT-LUMEN-037's redaction requirement, ensuring zero raw private arguments are written.",
+      "error_conditions": []
+    },
+    {
+      "name": "SnapshotRepository",
+      "signature": "pub struct SnapshotRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> SnapshotRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn save_snapshot(&self, provider: &str, session_id: &str, data: &[u8]) -> Result<i64, StoreError>; pub fn get_latest_snapshot(&self, provider: &str, session_id: &str) -> Result<Option<Vec<u8>>, StoreError>; }",
+      "description": "Repository for the session_snapshots table (created by migration V1 per CRIT-LUMEN-032 but previously unimplemented). Used by lumen-daemon's PreCompact hook handler to persist pre-compaction transcript BLOBs.",
+      "error_conditions": [
+        "StoreError::WriteFailed if the BLOB insert fails or exceeds configured size limits"
+      ]
+    },
+    {
+      "name": "TokenUsageRepository",
+      "signature": "pub struct TokenUsageRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> TokenUsageRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_token_usage(&self, session_id: &str, economics: &lumen_model::TokenEconomics) -> Result<(), StoreError>; }",
+      "description": "Repository for the token_usage table (created by migration V1 per CRIT-LUMEN-032). insert_token_usage inserts one row per entry in TokenEconomics.per_model (keyed by model name, using ModelTokenSummary's input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/cost_usd/turns fields directly) rather than an invented intermediate record type.",
+      "error_conditions": []
+    },
+    {
+      "name": "ReadContractEnvelope",
+      "signature": "pub struct ReadContractEnvelope<T: Serialize> { pub contract_version: &'static str, pub data: T }",
+      "description": "Serialization wrapper applied at the CLI/API boundary to SessionSummaryReadModel, SessionDetailReadModel, FindingReadModel, ToolCallReadModel, and RollupReadModel, carrying the versioned read-contract identifier consumed by any external client.",
       "error_conditions": []
     }
   ],
@@ -89,7 +129,7 @@
     },
     {
       "id": "CRIT-LUMEN-038",
-      "criterion": "WHEN serializing read models to JSON, THE SYSTEM SHALL produce byte-identical JSON matching the Mac app and CLI read contracts with BTreeMap ordering.",
+      "criterion": "WHEN read models (SessionSummaryReadModel, SessionDetailReadModel, FindingReadModel, ToolCallReadModel, RollupReadModel) are serialized via ReadContractEnvelope<T>, THE SYSTEM SHALL produce JSON validating against schemas/read-contracts/v1.schema.json (type, required fields, and additionalProperties: false only — JSON Schema has no key-ordering construct; key ordering is instead verified by a separate golden-file byte-for-byte comparison test), with contract_version supplied by the envelope. This in-repo schema is the read contract's source of truth; any external consumer (including a future Mac app) validates against it, not the reverse.",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -97,6 +137,60 @@
       "id": "CRIT-LUMEN-039",
       "criterion": "IF a database is locked by a concurrent reader, THE SYSTEM SHALL retry with busy_timeout = 5000ms before returning an error.",
       "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-117",
+      "criterion": "WHEN insert_tool_calls is called with a non-empty slice of ToolCallFactRecord, THE SYSTEM SHALL insert one row per record into tool_calls for the given session_id using a single prepared statement, and an empty slice SHALL insert zero rows without error.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-118",
+      "criterion": "WHEN tool_counts_by_session or error_counts_by_session is called for a session_id, THE SYSTEM SHALL return a BTreeMap keyed by tool_name whose values equal, respectively, the total count of tool_calls rows and the count of tool_calls rows with is_error = true for that session_id.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-119",
+      "criterion": "WHEN SessionRepository::get_session populates SessionDetailReadModel's tool_counts and error_counts fields, THE SYSTEM SHALL invoke tool_counts_by_session(id) / error_counts_by_session(id) using the internal integer sessions.id already returned by its row query, not the session_id: &str input parameter.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-120",
+      "criterion": "WHEN upsert_rollup is called multiple times with a RollupFactRecord sharing identical (period_start, period_type), THE SYSTEM SHALL perform an idempotent update without creating duplicate rows, backed by a new migration (V6) that adds CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type) — never by modifying the already-applied V5 migration.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-121",
+      "criterion": "WHEN get_rollup is called with a (period_start, period_type) pair that has no matching row, THE SYSTEM SHALL return Ok(None) rather than an error.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-122",
+      "criterion": "WHEN list_rollups is called with a given period_type and limit, THE SYSTEM SHALL return at most `limit` RollupReadModel structs whose period_type matches, ordered by period_start descending.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-123",
+      "criterion": "WHEN insert_command_events is called with a non-empty slice of CommandEventFactRecord, THE SYSTEM SHALL insert one row per record into command_events for the given session_id, persisting only command_base and redacted argument patterns per CRIT-LUMEN-037.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-124",
+      "criterion": "WHEN save_snapshot is called, THE SYSTEM SHALL insert the BLOB into session_snapshots and return its row id, and get_latest_snapshot SHALL return the most recently inserted BLOB for the given (provider, session_id) or None if none exists.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-125",
+      "criterion": "WHEN insert_token_usage is called with a TokenEconomics value, THE SYSTEM SHALL insert one token_usage row per entry in TokenEconomics.per_model, using that entry's ModelTokenSummary fields directly (no intermediate record type).",
+      "is_error_case": false,
       "judgment_call": false
     }
   ],

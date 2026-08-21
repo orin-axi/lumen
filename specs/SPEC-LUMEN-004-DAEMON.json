@@ -6,7 +6,8 @@
   "scope": "Covers crates/lumen-daemon: DaemonServer, HookHandler, WorkerPipeline, LaunchAgentManager, and DaemonConfig.",
   "non_goals": [
     "Terminal TUI presentation or user command line interfaces (handled by lumen-cli).",
-    "Evaluation sandboxing or grading execution (handled by prism-core)."
+    "Evaluation sandboxing or grading execution (handled by prism-core).",
+    "Category-score computation and discovered-category clustering (handled by lumen-insights, not yet integrated into WorkerPipeline's transaction)."
   ],
   "api_surface": [
     {
@@ -23,6 +24,14 @@
       "signature": "pub struct HookHandler; impl HookHandler { pub fn handle_enqueue(provider: &str, session_id: &str, path: &str) -> Result<(), DaemonError>; pub fn handle_snapshot(provider: &str, session_id: &str, data: &[u8]) -> Result<(), DaemonError>; }",
       "description": "Fast-path hook entrypoints invoked by Claude Code PreCompact/Stop hooks or AGY lifecycle triggers.",
       "error_conditions": []
+    },
+    {
+      "name": "WorkerPipeline",
+      "signature": "pub struct WorkerPipeline { store: Arc<SqliteStore> }; impl WorkerPipeline { pub async fn run_once(&self, item: QueuedSessionRow) -> Result<(), DaemonError>; }",
+      "description": "Drains one queued session: adapter normalization, accumulator execution, fact-row inserts via lumen-store repositories, and queue completion, all within a single SQLite transaction.",
+      "error_conditions": [
+        "DaemonError::TranscriptUnparseable if adapter normalization fails (handled by CRIT-LUMEN-054's retry path, not a hard failure)"
+      ]
     },
     {
       "name": "LaunchAgentManager",
@@ -42,7 +51,7 @@
     },
     {
       "id": "CRIT-LUMEN-051",
-      "criterion": "WHEN lumen daemon snapshot is invoked by a PreCompact hook, THE SYSTEM SHALL save the pre-compaction BLOB into session_snapshots in under 50 milliseconds p95.",
+      "criterion": "WHEN lumen daemon snapshot is invoked by a PreCompact hook, THE SYSTEM SHALL call SnapshotRepository::save_snapshot(provider, session_id, data) to persist the pre-compaction BLOB into session_snapshots in under 50 milliseconds p95.",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -54,7 +63,7 @@
     },
     {
       "id": "CRIT-LUMEN-053",
-      "criterion": "WHEN the worker loop processes a queued session, THE SYSTEM SHALL run adapter normalization, execute the 22 accumulators, insert fact rows, and mark the queue item completed in a single SQLite transaction.",
+      "criterion": "WHEN WorkerPipeline::run_once processes a queued session, THE SYSTEM SHALL run adapter normalization, execute the 22 accumulators, insert their outputs via ToolCallRepository::insert_tool_calls, CommandEventRepository::insert_command_events, TokenUsageRepository::insert_token_usage, and FindingsRepository::insert_findings, then call QueueRepository::mark_completed(id) — all within a single SQLite transaction. Category-score and discovered-category aggregation (session_category_scores, discovered_categories) is out of scope for this transaction; those tables are populated by a separate downstream lumen-insights stage once that crate exists.",
       "is_error_case": false,
       "judgment_call": false
     },
