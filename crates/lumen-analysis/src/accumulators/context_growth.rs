@@ -15,7 +15,7 @@ pub struct ContextGrowthMetrics {
 #[derive(Debug, Default, Clone)]
 pub struct ContextGrowthAccumulator {
     pub initial_prompt_tokens: Option<u64>,
-    pub previous_prompt_tokens: u64,
+    pub previous_prompt_tokens: Option<u64>,
     pub peak_prompt_tokens: u64,
     pub final_prompt_tokens: u64,
     pub total_growth: u64,
@@ -33,15 +33,17 @@ impl EntryAccumulator for ContextGrowthAccumulator {
                 self.initial_prompt_tokens = Some(prompt);
             }
 
-            if prompt > self.previous_prompt_tokens && self.previous_prompt_tokens > 0 {
-                let jump = prompt - self.previous_prompt_tokens;
-                self.total_growth += jump;
-                self.max_jump_tokens = self.max_jump_tokens.max(jump);
+            if let Some(prev) = self.previous_prompt_tokens {
+                if prompt > prev {
+                    let jump = prompt - prev;
+                    self.total_growth += jump;
+                    self.max_jump_tokens = self.max_jump_tokens.max(jump);
+                }
             }
+            self.previous_prompt_tokens = Some(prompt);
 
             self.peak_prompt_tokens = self.peak_prompt_tokens.max(prompt);
             self.final_prompt_tokens = prompt;
-            self.previous_prompt_tokens = prompt;
             self.turn_count += 1;
         }
     }

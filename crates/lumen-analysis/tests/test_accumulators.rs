@@ -344,6 +344,47 @@ fn test_context_growth_skips_missing_usage_and_zero_growth_floor() {
 }
 
 #[test]
+fn test_context_growth_real_zero_prompt_tokens_not_confused_with_unset_previous() {
+    // Regression: previous_prompt_tokens was a plain u64 defaulting to 0, which
+    // conflated "no previous turn yet" with "the previous turn's real
+    // prompt_tokens happened to be exactly 0". A three-turn sequence with real
+    // prompt_tokens [500, 0, 5000] must record the genuine 5000-token jump
+    // from turn 2 (prompt=0) to turn 3 (prompt=5000), not silently drop it
+    // because previous_prompt_tokens == 0 was mistaken for "unset".
+    let mut cg = ContextGrowthAccumulator::default();
+
+    let usage_turn = |turn_index: usize, prompt_tokens: u64| CanonicalTurn {
+        attribution: None,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 0,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: Some(TurnTokenUsage {
+            input_tokens: prompt_tokens,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0,
+        }),
+    };
+
+    cg.update(&usage_turn(0, 500));
+    cg.update(&usage_turn(1, 0));
+    cg.update(&usage_turn(2, 5000));
+
+    let metrics = cg.finalize();
+    assert_eq!(
+        metrics.max_jump_tokens, 5000,
+        "the real 0 -> 5000 jump must be recorded, not skipped as if previous_prompt_tokens were unset"
+    );
+    // avg_growth_per_turn = total_growth / (turn_count - 1) = 5000 / (3 - 1) = 2500.0
+    assert_eq!(metrics.avg_growth_per_turn, 2500.0);
+}
+
+#[test]
 fn test_api_health_and_mcp_affinity_accumulators() {
     let mut api = ApiHealthAccumulator::default();
     let mut mcp = McpAffinityAccumulator::default();
