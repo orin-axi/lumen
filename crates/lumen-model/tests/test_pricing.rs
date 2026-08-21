@@ -88,38 +88,67 @@ fn test_all_model_pricing_rates_and_fallbacks() {
 }
 
 #[test]
-fn test_token_economics_summary_and_zero_division() {
-    // CRIT-LUMEN-005 & CRIT-LUMEN-006: Standard TokenEconomics
-    let economics = TokenEconomics::calculate(
-        10_000,  // Uncached input
-        2_000,   // Output
-        20_000,  // Cache write
-        170_000, // Cache read (85% of total prompt)
-        "claude-3-5-sonnet-20241022",
-    );
+fn test_token_economics_zero_division_clamping_and_scale() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
 
-    assert_eq!(economics.input_tokens, 10_000);
-    assert_eq!(economics.cache_creation_tokens, 20_000);
-    assert_eq!(economics.cache_read_tokens, 170_000);
-    assert_eq!(economics.output_tokens, 2_000);
-    assert!((economics.cache_hit_ratio - 85.0).abs() < 1e-4);
-    assert!(economics.net_savings_usd > 0.0);
-    assert!(economics.efficiency_multiplier > 1.0);
+    // (a) CRIT-LUMEN-007: an empty turns slice must not divide by zero and returns a zeroed
+    // TokenEconomics with cache_hit_ratio 0.0 and efficiency_multiplier 1.0.
+    let empty_econ = TokenEconomics::calculate(&[], "claude-3-5-sonnet", &pricing, None);
+    assert_eq!(empty_econ.cache_hit_ratio, 0.0);
+    assert_eq!(empty_econ.efficiency_multiplier, 1.0);
+    assert_eq!(empty_econ.total_cost_usd, 0.0);
 
-    // CRIT-LUMEN-007: Zero prompt tokens must return 0.0 hit ratio and 1.0 efficiency without dividing by zero
-    let zero_econ = TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022");
-    assert_eq!(zero_econ.cache_hit_ratio, 0.0);
-    assert_eq!(zero_econ.efficiency_multiplier, 1.0);
-    assert_eq!(zero_econ.total_cost_usd, 0.0);
-    assert_eq!(zero_econ.net_savings_usd, 0.0);
+    // (b) CRIT-LUMEN-005: cache_read_tokens exactly half of total prompt tokens must yield
+    // cache_hit_ratio == 50.0 on the 0-100 percentage scale (not 0.5).
+    let half_cache_turn = TurnPricingInput {
+        usage: TurnTokenUsage {
+            input_tokens: 100,
+            cache_creation_tokens: 100,
+            cache_read_tokens: 200,
+            output_tokens: 50,
+        },
+        timestamp: as_of,
+        tier: None,
+    };
+    let half_cache_econ = TokenEconomics::calculate(&[half_cache_turn], "claude-3-5-sonnet", &pricing, None);
+    assert_eq!(half_cache_econ.cache_hit_ratio, 50.0);
 
-    // CRIT-LUMEN-009: Net savings clamped to >= 0.0
-    assert!(zero_econ.net_savings_usd >= 0.0);
-    assert!(economics.net_savings_usd >= 0.0);
+    // (c) CRIT-LUMEN-009: a turn with zero cache activity has baseline_cost_no_cache_usd equal
+    // to total_cost_usd, and net_savings_usd must clamp to 0.0 (never negative).
+    let no_cache_turn = TurnPricingInput {
+        usage: TurnTokenUsage {
+            input_tokens: 1_000_000,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 500_000,
+        },
+        timestamp: as_of,
+        tier: None,
+    };
+    let no_cache_econ = TokenEconomics::calculate(&[no_cache_turn], "claude-3-5-sonnet", &pricing, None);
+    assert!((no_cache_econ.baseline_cost_no_cache_usd - no_cache_econ.total_cost_usd).abs() < 1e-9);
+    assert_eq!(no_cache_econ.net_savings_usd, 0.0);
 
-    // CRIT-LUMEN-010: TurnTokenUsage::prompt_tokens returns sum
+    // (d) CRIT-LUMEN-010: TurnTokenUsage::prompt_tokens returns the sum of input, cache
+    // creation, and cache read tokens.
     let usage =
         TurnTokenUsage { input_tokens: 100, cache_creation_tokens: 200, cache_read_tokens: 300, output_tokens: 400 };
     assert_eq!(usage.prompt_tokens(), 600);
-    assert_eq!(usage.total_tokens(), 1000);
+
+    // (e) CRIT-LUMEN-006: a mixed-cache turn's efficiency_multiplier equals
+    // baseline_cost_no_cache_usd / total_cost_usd exactly.
+    let mixed_turn = TurnPricingInput {
+        usage: TurnTokenUsage {
+            input_tokens: 100_000,
+            cache_creation_tokens: 50_000,
+            cache_read_tokens: 50_000,
+            output_tokens: 10_000,
+        },
+        timestamp: as_of,
+        tier: None,
+    };
+    let mixed_econ = TokenEconomics::calculate(&[mixed_turn], "claude-3-5-sonnet", &pricing, None);
+    let expected_multiplier = (mixed_econ.baseline_cost_no_cache_usd / mixed_econ.total_cost_usd) as f32;
+    assert_eq!(mixed_econ.efficiency_multiplier, expected_multiplier);
 }

@@ -4,7 +4,7 @@ pub mod schema;
 pub mod transcript;
 pub mod turn;
 
-pub use economics::{ModelTokenSummary, TokenEconomics};
+pub use economics::{ModelTokenSummary, TokenEconomics, TurnPricingInput};
 pub use pricing::{ModelPricing, PricingRate, PricingTable, TokenRateKind};
 pub use schema::SchemaCitation;
 pub use transcript::{CanonicalTranscript, ExecutionTiming, OrchestratorKind, TrajectoryAnomaly};
