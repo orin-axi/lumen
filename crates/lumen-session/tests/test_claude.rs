@@ -177,6 +177,76 @@ fn test_claude_code_adapter_rejects_explicit_null_session_id() {
 }
 
 #[test]
+fn test_claude_code_adapter_rejects_explicit_nested_null_cache_read_tokens() {
+    // Bug 1 (CRIT-LUMEN-163 nested-path gap): message.usage.cache_read_input_tokens: null must
+    // be rejected via parse_failures, not silently coerced to 0 and folded into economics.
+    let sample = "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":null}}}\n";
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Should not error on explicit null");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].error.as_str(), "explicit null on field 'message.usage.cache_read_input_tokens'");
+    assert_eq!(transcript.turns.len(), 0);
+    assert_eq!(transcript.economics.cache_read_tokens, 0);
+}
+
+#[test]
+fn test_claude_code_adapter_rejects_explicit_nested_null_model() {
+    // Bug 1 (CRIT-LUMEN-163 nested-path gap): message.model: null must be rejected via
+    // parse_failures, not silently left at the hardcoded default model_family with no signal.
+    let sample = "{\"type\":\"assistant\",\"message\":{\"model\":null,\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n";
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Should not error on explicit null");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].error.as_str(), "explicit null on field 'message.model'");
+    assert_eq!(transcript.turns.len(), 0);
+}
+
+#[test]
+fn test_claude_code_adapter_still_rejects_top_level_explicit_nulls() {
+    // Regression guard: the 6 genuinely top-level fields (id, cwd, sessionId, requestId,
+    // version, costUSD) must still be rejected when explicitly null after the nested-path split.
+    for field in ["id", "cwd", "sessionId", "requestId", "version", "costUSD"] {
+        let sample = format!("{{\"type\":\"user\",\"{field}\":null,\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n");
+        let adapter = ClaudeCodeAdapter;
+        let transcript =
+            adapter.parse_stream(Box::new(Cursor::new(sample.as_str()))).expect("Should not error on explicit null");
+
+        assert_eq!(transcript.parse_failures.len(), 1, "field '{field}' should have produced a parse failure");
+        assert_eq!(transcript.turns.len(), 0, "field '{field}' should have rejected the line's turn");
+    }
+}
+
+#[test]
+fn test_claude_code_adapter_parse_failure_byte_offset_is_real() {
+    // Bug 2 (CRIT-LUMEN-025): byte_offset must reflect the real accumulated byte position of
+    // the start of the malformed line, not the hardcoded literal 0.
+    let first_line = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+    let second_line_malformed = "{CORRUPTED TRUNCATED JSON LINE !@#$%\n";
+    let sample = format!("{first_line}{second_line_malformed}");
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(sample.as_str()))).expect("Should not error on corrupted lines");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    // Offset at the start of line 2 == byte length of line 1 including its stripped newline.
+    assert_eq!(transcript.parse_failures[0].byte_offset, first_line.len());
+    assert!(transcript.parse_failures[0].byte_offset > 0);
+
+    // A malformed FIRST line must report byte_offset 0 (the start of the file).
+    let first_line_malformed = "{CORRUPTED TRUNCATED JSON LINE !@#$%\n";
+    let transcript2 = adapter
+        .parse_stream(Box::new(Cursor::new(first_line_malformed)))
+        .expect("Should not error on corrupted lines");
+    assert_eq!(transcript2.parse_failures.len(), 1);
+    assert_eq!(transcript2.parse_failures[0].byte_offset, 0);
+}
+
+#[test]
 fn test_claude_code_adapter_otel_conversation_id_first_non_sidechain_wins() {
     // CRIT-LUMEN-164: otel_conversation_id is set from the first non-sidechain entry's requestId,
     // never overwritten thereafter; sidechain entries are skipped entirely.

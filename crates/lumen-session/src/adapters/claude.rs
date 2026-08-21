@@ -47,11 +47,21 @@ impl SessionAdapter for ClaudeCodeAdapter {
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
         let mut otel_conversation_id: Option<CompactString> = None;
 
+        let mut byte_offset: usize = 0;
+
         'lines: for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
             };
+
+            // Offset at the START of the line currently being processed. `reader.lines()`
+            // strips newlines and discards byte-position info, so we track it manually: this
+            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
+            // line for CRLF-terminated input -- an acceptable known limitation for a
+            // diagnostic field, not a byte-exact file-seek requirement.
+            let line_start_offset = byte_offset;
+            byte_offset += line.len() + 1;
 
             let trimmed = line.trim();
             let clean_line = trimmed.strip_prefix('\u{FEFF}').unwrap_or(trimmed).trim();
@@ -67,7 +77,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
                         line_number: idx + 1,
-                        byte_offset: 0,
+                        byte_offset: line_start_offset,
                         error: CompactString::new(e.to_string()),
                     });
                     continue;
@@ -78,28 +88,49 @@ impl SessionAdapter for ClaudeCodeAdapter {
                 continue;
             }
 
-            // CRIT-LUMEN-163: an explicit JSON null on one of these known fields is malformed,
-            // not a valid empty/zero value -- reject the whole line rather than silently
-            // treating the null the same as an absent field.
-            for field in [
-                "id",
-                "cwd",
-                "model",
-                "sessionId",
-                "requestId",
-                "version",
-                "costUSD",
-                "cache_creation_input_tokens",
-                "cache_read_input_tokens",
-            ] {
+            // CRIT-LUMEN-163: an explicit JSON null on one of these known top-level fields is
+            // malformed, not a valid empty/zero value -- reject the whole line rather than
+            // silently treating the null the same as an absent field.
+            for field in ["id", "cwd", "sessionId", "requestId", "version", "costUSD"] {
                 if val.get(field).map(|v| v.is_null()).unwrap_or(false) {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
                         line_number: idx + 1,
-                        byte_offset: 0,
+                        byte_offset: line_start_offset,
                         error: CompactString::new(format!("explicit null on field '{field}'")),
                     });
                     continue 'lines;
+                }
+            }
+
+            // CRIT-LUMEN-163 (nested paths): model and the two cache token fields are actually
+            // read from nested paths (message.model, message.usage.cache_*_input_tokens), not
+            // the entry's top level -- check them there. Only meaningful when a `message`
+            // object is present at all; a missing message object is a different, already
+            // handled case (no usage/model to misparse).
+            if let Some(message) = val.get("message").and_then(|m| m.as_object()) {
+                if message.get("model").map(|v| v.is_null()).unwrap_or(false) {
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: line_start_offset,
+                        error: CompactString::new("explicit null on field 'message.model'"),
+                    });
+                    continue 'lines;
+                }
+
+                if let Some(usage) = message.get("usage").and_then(|u| u.as_object()) {
+                    for field in ["cache_creation_input_tokens", "cache_read_input_tokens"] {
+                        if usage.get(field).map(|v| v.is_null()).unwrap_or(false) {
+                            parse_failures.push(ParseFailureRecord {
+                                session_id: session_id.clone(),
+                                line_number: idx + 1,
+                                byte_offset: line_start_offset,
+                                error: CompactString::new(format!("explicit null on field 'message.usage.{field}'")),
+                            });
+                            continue 'lines;
+                        }
+                    }
                 }
             }
 
