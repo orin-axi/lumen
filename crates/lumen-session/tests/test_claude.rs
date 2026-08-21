@@ -188,7 +188,10 @@ fn test_claude_code_adapter_rejects_explicit_nested_null_cache_read_tokens() {
     let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Should not error on explicit null");
 
     assert_eq!(transcript.parse_failures.len(), 1);
-    assert_eq!(transcript.parse_failures[0].error.as_str(), "explicit null on field 'message.usage.cache_read_input_tokens'");
+    assert_eq!(
+        transcript.parse_failures[0].error.as_str(),
+        "explicit null on field 'message.usage.cache_read_input_tokens'"
+    );
     assert_eq!(transcript.turns.len(), 0);
     assert_eq!(transcript.economics.cache_read_tokens, 0);
 }
@@ -212,7 +215,8 @@ fn test_claude_code_adapter_still_rejects_top_level_explicit_nulls() {
     // Regression guard: the 6 genuinely top-level fields (id, cwd, sessionId, requestId,
     // version, costUSD) must still be rejected when explicitly null after the nested-path split.
     for field in ["id", "cwd", "sessionId", "requestId", "version", "costUSD"] {
-        let sample = format!("{{\"type\":\"user\",\"{field}\":null,\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n");
+        let sample =
+            format!("{{\"type\":\"user\",\"{field}\":null,\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n");
         let adapter = ClaudeCodeAdapter;
         let transcript =
             adapter.parse_stream(Box::new(Cursor::new(sample.as_str()))).expect("Should not error on explicit null");
@@ -241,9 +245,8 @@ fn test_claude_code_adapter_parse_failure_byte_offset_is_real() {
 
     // A malformed FIRST line must report byte_offset 0 (the start of the file).
     let first_line_malformed = "{CORRUPTED TRUNCATED JSON LINE !@#$%\n";
-    let transcript2 = adapter
-        .parse_stream(Box::new(Cursor::new(first_line_malformed)))
-        .expect("Should not error on corrupted lines");
+    let transcript2 =
+        adapter.parse_stream(Box::new(Cursor::new(first_line_malformed))).expect("Should not error on corrupted lines");
     assert_eq!(transcript2.parse_failures.len(), 1);
     assert_eq!(transcript2.parse_failures[0].byte_offset, 0);
 }

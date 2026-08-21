@@ -44,26 +44,24 @@ impl<'a> RollupRepository<'a> {
         period_start: DateTime<Utc>,
         period_type: &str,
     ) -> Result<Option<RollupReadModel>, StoreError> {
-        let result = self
-            .conn
-            .query_row(
-                "SELECT id, period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms
+        let result = self.conn.query_row(
+            "SELECT id, period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms
                  FROM rollups
                  WHERE period_start = ?1 AND period_type = ?2",
-                params![period_start, period_type],
-                |row| {
-                    let total_duration_ms: i64 = row.get(6)?;
-                    Ok(RollupReadModel {
-                        id: row.get(0)?,
-                        period_start: row.get(1)?,
-                        period_type: row.get(2)?,
-                        session_count: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_savings_usd: row.get(5)?,
-                        total_duration_ms: total_duration_ms as u64,
-                    })
-                },
-            );
+            params![period_start, period_type],
+            |row| {
+                let total_duration_ms: i64 = row.get(6)?;
+                Ok(RollupReadModel {
+                    id: row.get(0)?,
+                    period_start: row.get(1)?,
+                    period_type: row.get(2)?,
+                    session_count: row.get(3)?,
+                    total_cost_usd: row.get(4)?,
+                    total_savings_usd: row.get(5)?,
+                    total_duration_ms: total_duration_ms as u64,
+                })
+            },
+        );
 
         match result {
             Ok(row) => Ok(Some(row)),

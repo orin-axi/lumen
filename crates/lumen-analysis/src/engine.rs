@@ -121,10 +121,8 @@ impl AnalyticsEngine {
         let mut by_subagent = BTreeMap::new();
         for subagent in &transcript.subagents {
             let sub_report = AnalyticsEngine::new().process_transcript(subagent);
-            let key = subagent
-                .subagent_role
-                .clone()
-                .unwrap_or_else(|| CompactString::from(subagent.session_id.as_str()));
+            let key =
+                subagent.subagent_role.clone().unwrap_or_else(|| CompactString::from(subagent.session_id.as_str()));
             by_subagent.insert(key, sub_report.attribution);
         }
 

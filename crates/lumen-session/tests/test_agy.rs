@@ -60,7 +60,9 @@ fn test_agy_resolve_transcript_path_bypasses_symlink_layer() {
     let path = AgyAdapter::resolve_transcript_path(brain_root, "conv-123");
     assert_eq!(
         path,
-        std::path::PathBuf::from("/Users/test/.gemini/antigravity-cli/brain/conv-123/.system_generated/logs/transcript.jsonl")
+        std::path::PathBuf::from(
+            "/Users/test/.gemini/antigravity-cli/brain/conv-123/.system_generated/logs/transcript.jsonl"
+        )
     );
     assert!(!path.to_string_lossy().contains("/.gemini/logs/"));
 }

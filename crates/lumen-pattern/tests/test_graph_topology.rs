@@ -52,11 +52,7 @@ fn test_calculate_monotonicity_free_function_detects_repeated_read_cycle() {
             idle_gap_count: 0,
         },
         economics: TokenEconomics::calculate(
-            &[TurnPricingInput {
-                usage: TurnTokenUsage::default(),
-                timestamp: Utc::now(),
-                tier: None,
-            }],
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
             "claude-3-5-sonnet-20241022",
             &PricingTable::seed(),
             None,

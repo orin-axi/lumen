@@ -4,7 +4,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
 use lumen_model::*;
 use lumen_session::*;
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{miette, IntoDiagnostic, Result};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -63,7 +63,12 @@ fn load_session(path: &Path) -> Result<CanonicalTranscript> {
     let sample = &buffer[..n];
 
     let orchestrator = detect_orchestrator(sample).ok_or_else(|| {
-        miette!("{}: {} ({})", IngestionError::UnrecognizedFormat, path.display(), "no known orchestrator fingerprint matched")
+        miette!(
+            "{}: {} ({})",
+            IngestionError::UnrecognizedFormat,
+            path.display(),
+            "no known orchestrator fingerprint matched"
+        )
     })?;
 
     match orchestrator {

@@ -131,7 +131,10 @@ fn test_opencode_pure_cache_read_turn_is_not_dropped() {
 
     let usage = transcript.turns[0].usage.as_ref().expect("pure cache-read turn must still record usage");
     assert_eq!(usage.cache_read_tokens, 5000, "real cache read tokens must not be dropped");
-    assert_eq!(transcript.economics.cache_read_tokens, 5000, "cache read tokens must reach the running total/economics");
+    assert_eq!(
+        transcript.economics.cache_read_tokens, 5000,
+        "cache read tokens must reach the running total/economics"
+    );
 }
 
 #[test]
@@ -146,5 +149,8 @@ fn test_opencode_pure_cache_write_turn_is_not_dropped() {
 
     let usage = transcript.turns[0].usage.as_ref().expect("pure cache-write turn must still record usage");
     assert_eq!(usage.cache_creation_tokens, 3000, "real cache write tokens must not be dropped");
-    assert_eq!(transcript.economics.cache_creation_tokens, 3000, "cache write tokens must reach the running total/economics");
+    assert_eq!(
+        transcript.economics.cache_creation_tokens, 3000,
+        "cache write tokens must reach the running total/economics"
+    );
 }

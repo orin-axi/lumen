@@ -905,10 +905,7 @@ fn test_token_usage_repository_empty_per_model_inserts_zero_rows() {
     assert_eq!(count, 0);
 }
 
-fn multi_model_economics(
-    sonnet_turns: u64,
-    opus_turns: u64,
-) -> TokenEconomics {
+fn multi_model_economics(sonnet_turns: u64, opus_turns: u64) -> TokenEconomics {
     use std::collections::HashMap;
     let mut per_model = HashMap::new();
     per_model.insert(
@@ -1039,13 +1036,12 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
     assert_eq!(detail.economics.cache_read_tokens, 5);
 
     let internal_id: i64 = conn
-        .query_row(
-            "SELECT id FROM sessions WHERE provider_session_id = ?1",
-            ["sess-economics-reupsert"],
-            |row| row.get(0),
-        )
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-economics-reupsert"], |row| {
+            row.get(0)
+        })
         .unwrap();
-    let row_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0))
+        .unwrap();
     assert_eq!(row_count, 1, "re-upsert must fully replace token_usage rows, not accumulate duplicates");
 }

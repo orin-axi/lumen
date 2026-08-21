@@ -15,9 +15,7 @@ impl<'a> TokenUsageRepository<'a> {
 
     fn resolve_session_id(&self, session_id: &str) -> Result<i64, StoreError> {
         self.conn
-            .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", params![session_id], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", params![session_id], |row| row.get(0))
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => {
                     StoreError::NotFound(format!("session with provider_session_id '{session_id}' not found"))
@@ -26,7 +24,11 @@ impl<'a> TokenUsageRepository<'a> {
             })
     }
 
-    pub fn insert_token_usage(&self, session_id: &str, economics: &lumen_model::TokenEconomics) -> Result<(), StoreError> {
+    pub fn insert_token_usage(
+        &self,
+        session_id: &str,
+        economics: &lumen_model::TokenEconomics,
+    ) -> Result<(), StoreError> {
         let internal_id = self.resolve_session_id(session_id)?;
 
         let mut stmt = self
@@ -69,7 +71,10 @@ impl<'a> TokenUsageRepository<'a> {
     /// model name. Note: `reasoning_tokens` has no backing column in `token_usage` and is not
     /// tracked by `insert_token_usage`, so it is always read back as 0 -- a separate,
     /// already-known gap not addressed here.
-    pub fn per_model_by_session(&self, session_id: i64) -> Result<HashMap<CompactString, lumen_model::ModelTokenSummary>, StoreError> {
+    pub fn per_model_by_session(
+        &self,
+        session_id: i64,
+    ) -> Result<HashMap<CompactString, lumen_model::ModelTokenSummary>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(

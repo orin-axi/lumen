@@ -668,12 +668,7 @@ fn test_token_usage_accumulator_multi_model_per_model_attribution() {
     assert_eq!(haiku.output_tokens, 200);
     assert_eq!(haiku.cache_creation_tokens, 100);
     assert_eq!(haiku.cache_read_tokens, 50);
-    assert!(
-        (haiku.cost_usd - haiku_cost).abs() < 1e-9,
-        "haiku cost_usd = {}, expected {}",
-        haiku.cost_usd,
-        haiku_cost
-    );
+    assert!((haiku.cost_usd - haiku_cost).abs() < 1e-9, "haiku cost_usd = {}, expected {}", haiku.cost_usd, haiku_cost);
 
     // Hand-computed from the seeded rates: sonnet input 3.00/M, output 15.00/M.
     let sonnet_cost = (2000.0 / 1_000_000.0) * 3.00 + (300.0 / 1_000_000.0) * 15.00;

@@ -3,8 +3,8 @@ use compact_str::CompactString;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use lumen_analysis::engine::AnalyticsEngine;
 use lumen_model::{
-    pricing, CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind,
-    TokenEconomics, ToolIntent, TurnPricingInput, TurnRole, TurnTokenUsage,
+    pricing, CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, TokenEconomics,
+    ToolIntent, TurnPricingInput, TurnRole, TurnTokenUsage,
 };
 use smallvec::smallvec;
 

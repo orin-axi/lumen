@@ -666,7 +666,7 @@ fn test_seeded_static_matches_fresh_seed_table() {
         ("gpt-4o", None, TokenRateKind::Reasoning),
         ("deepseek-r1", None, TokenRateKind::CacheWrite),
         ("qwen-2.5-coder-32b-instruct", None, TokenRateKind::CacheWrite), // exercises the 0.0 no-substitution path
-        ("totally-unrecognized-model-xyz", None, TokenRateKind::Input),  // exercises the sonnet fallback path
+        ("totally-unrecognized-model-xyz", None, TokenRateKind::Input),   // exercises the sonnet fallback path
     ];
 
     for (model, tier, kind) in cases {
