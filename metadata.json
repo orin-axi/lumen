@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0HBS5GDTHXR0KVEARHMBKPZ",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 11,
+  "checkpoints_count": 12,
   "files_touched": [
     "crates/lumen-session/src/adapters/claude.rs",
     "crates/lumen-session/tests/test_claude.rs"
@@ -15,14 +15,21 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 112,
+    "input_tokens": 131321,
     "cache_creation_tokens": 214310,
-    "cache_read_tokens": 8022510,
-    "output_tokens": 43711,
-    "api_call_count": 56,
+    "cache_read_tokens": 8543214,
+    "output_tokens": 49721,
+    "api_call_count": 66,
     "subagent_tokens": {
       "input_tokens": 428,
       "cache_creation_tokens": 527999,
