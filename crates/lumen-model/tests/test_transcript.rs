@@ -6,6 +6,7 @@ use smallvec::smallvec;
 #[test]
 fn test_canonical_transcript_roundtrip() {
     let fixed_ts = DateTime::from_timestamp(1771416000, 0).unwrap();
+    let pricing = PricingTable::seed();
 
     let transcript = CanonicalTranscript {
         session_id: CompactString::new("sess-123"),
@@ -20,7 +21,21 @@ fn test_canonical_transcript_roundtrip() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(1000, 200, 4000, 15000, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: 1000,
+                    output_tokens: 200,
+                    cache_creation_tokens: 4000,
+                    cache_read_tokens: 15000,
+                },
+                timestamp: fixed_ts,
+                tier: None,
+            }],
+            "claude-3-5-sonnet-20241022",
+            &pricing,
+            None,
+        ),
         turns: vec![CanonicalTurn {
             attribution: None,
             turn_index: 0,
@@ -65,6 +80,7 @@ fn test_canonical_transcript_roundtrip() {
 fn test_canonical_transcript_full_hierarchy_roundtrip() {
     let fixed_ts_start = DateTime::from_timestamp(1771416000, 0).unwrap();
     let fixed_ts_end = DateTime::from_timestamp(1771416015, 0).unwrap();
+    let pricing = PricingTable::seed();
 
     let child_subagent = CanonicalTranscript {
         session_id: CompactString::new("subagent-child-01"),
@@ -79,7 +95,21 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(5000, 1000, 0, 10000, "claude-3-5-haiku-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: 5000,
+                    output_tokens: 1000,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 10000,
+                },
+                timestamp: fixed_ts_start,
+                tier: None,
+            }],
+            "claude-3-5-haiku-20241022",
+            &pricing,
+            None,
+        ),
         turns: vec![CanonicalTurn {
             attribution: None,
             turn_index: 0,
@@ -110,7 +140,21 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
             idle_duration_ms: 3000,
             idle_gap_count: 1,
         },
-        economics: TokenEconomics::calculate(20000, 4000, 5000, 80000, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: 20000,
+                    output_tokens: 4000,
+                    cache_creation_tokens: 5000,
+                    cache_read_tokens: 80000,
+                },
+                timestamp: fixed_ts_start,
+                tier: None,
+            }],
+            "claude-3-5-sonnet-20241022",
+            &pricing,
+            None,
+        ),
         turns: vec![
             CanonicalTurn {
                 attribution: None,
