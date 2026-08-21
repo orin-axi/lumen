@@ -1,6 +1,6 @@
 # Contributing to Lumen
 
-Contributions to Lumen are welcome. This guide outlines the development environment setup, architectural invariants, and testing standards.
+Contributions to Lumen are welcome. This guide outlines the development environment setup, architectural invariants, and testing standards. By participating, you agree to abide by the [Code of Conduct](./CODE_OF_CONDUCT.md); found a security issue? See [SECURITY.md](./SECURITY.md) instead of opening a public issue.
 
 ---
 
