@@ -18,6 +18,10 @@ check: fmt-check lint
 lint:
     moon run :lint
 
+# ── Licensing / Dependency Policy ────────────────────────────────────────────
+deny:
+    moon run :deny
+
 fmt:
     moon run :format
 
@@ -44,4 +48,4 @@ hooks:
     @echo "Git pre-commit and pre-push hooks installed successfully."
 
 # ── CI Verification Pipeline ───────────────────────────────────────────────
-ci: fmt-check lint test
+ci: fmt-check lint deny test

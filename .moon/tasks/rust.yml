@@ -48,6 +48,17 @@ tasks:
       - "Cargo.lock"
       - "Cargo.toml"
 
+  # Layer-licensing containment (AGENTS.md section 1, CRITICAL RULE): enforces
+  # that lumen-model and lumen-session never depend on the FSL-1.1-MIT
+  # lumen-analysis/lumen-pattern/lumen-cli crates. See ../../deny.toml.
+  deny:
+    command: "cargo-deny"
+    args: ["check", "bans"]
+    inputs:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "/deny.toml"
+
   publish:
     command: "cargo"
     args: ["publish", "-p", "$project", "--no-verify"]

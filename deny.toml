@@ -1,0 +1,61 @@
+[graph]
+targets = []
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+ignore = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Layer-licensing containment (AGENTS.md section 1, CRITICAL RULE):
+#
+# lumen-model (Layer 1) and lumen-session (Layer 1.5) are MIT OR Apache-2.0
+# and must remain permissive and standalone. lumen-analysis, lumen-pattern,
+# and lumen-cli (Layer 2 / Layer 4) are FSL-1.1-MIT. If a Layer 1/1.5 crate
+# ever depends on a Layer 2/4 crate -- directly or transitively -- it would
+# transitively absorb FSL-licensed code into a crate promised as permissive.
+#
+# Each entry below bans the FSL crate from the dependency graph entirely,
+# except when it is a direct dependency of another Layer 2/4 crate that is
+# allowed to depend on it. lumen-model and lumen-session are deliberately
+# absent from every `wrappers` list, so any edge from either of them to one
+# of these crates is a bans violation.
+#
+# lumen-cli is not listed here: nothing in the workspace legitimately
+# depends on it (it is the top-level binary), so `wrappers` has no
+# non-empty value that would not itself be a violation, and cargo's own
+# cyclic-dependency check already makes a model/session -> lumen-cli edge
+# unrepresentable (lumen-cli always transitively depends back on both).
+deny = [
+    { crate = "lumen-analysis", wrappers = ["lumen-cli"] },
+    { crate = "lumen-pattern", wrappers = ["lumen-cli"] },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    # Layer 2 / Layer 4 crates (lumen-analysis, lumen-pattern, lumen-cli,
+    # lumen-store) are intentionally source-available under FSL-1.1-MIT.
+    # See the [bans] section above for the mechanism that keeps this
+    # license from leaking into Layer 1 / Layer 1.5 crates.
+    "FSL-1.1-MIT",
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
