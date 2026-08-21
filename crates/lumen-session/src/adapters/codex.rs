@@ -35,8 +35,9 @@ impl SessionAdapter for CodexAdapter {
     fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("codex-session");
         let model_family = CompactString::new("gpt-4o");
-        let started_at = Utc::now();
+        let mut started_at = Utc::now();
         let mut ended_at = started_at;
+        let mut has_start = false;
 
         let mut turns = Vec::new();
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
@@ -85,7 +86,12 @@ impl SessionAdapter for CodexAdapter {
 
             if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
                 if let Ok(ts) = DateTime::parse_from_rfc3339(ts_str) {
-                    ended_at = ts.with_timezone(&Utc);
+                    let utc_ts = ts.with_timezone(&Utc);
+                    if !has_start {
+                        started_at = utc_ts;
+                        has_start = true;
+                    }
+                    ended_at = utc_ts;
                 }
             }
 

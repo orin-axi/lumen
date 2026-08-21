@@ -198,6 +198,33 @@ fn test_codex_adapter_parse_failure_byte_offset_tracks_real_position() {
 }
 
 #[test]
+fn test_codex_adapter_wall_duration_reflects_real_log_timestamps() {
+    // Medium-severity adversarial finding: `started_at` was declared without `mut` and pinned
+    // to Utc::now() at parse time, never updated from real log timestamps (unlike
+    // claude.rs/agy.rs/opencode.rs, which all track a `has_start` flag and set `started_at` to
+    // the FIRST real timestamp seen). Since real logs are historical, `ended_at - started_at`
+    // (a later wall-clock time) was always negative and clamped to 0 via `.max(0)`, so every
+    // Codex session's wall_duration_ms/active_duration_ms was silently always 0.
+    //
+    // The fixture's real timestamps span 2026-08-20T10:00:00Z (first line) through
+    // 2026-08-20T10:00:15Z (last line) -- exactly 15 real seconds = 15000ms. This must be the
+    // EXACT value, proving started_at is genuinely the first timestamp seen, not just
+    // "not wall-clock-now".
+    let sample = real_codex_session_dump();
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_eq!(
+        transcript.timing.wall_duration_ms, 15000,
+        "wall_duration_ms must reflect the real elapsed time between the fixture's first \
+         (10:00:00Z) and last (10:00:15Z) timestamps, not be clamped to 0 by a started_at \
+         pinned to wall-clock parse time"
+    );
+    assert_eq!(transcript.timing.active_duration_ms, 15000);
+}
+
+#[test]
 fn test_codex_adapter_does_not_claim_precedence_over_claude_code() {
     // detect_orchestrator's ordered if-chain checks ClaudeCode markers first. A sample
     // containing BOTH ClaudeCode and Codex markers resolves to ClaudeCode; CodexAdapter's own
