@@ -78,3 +78,25 @@ pub struct FindingReadModel {
     pub title: String,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFactRecord {
+    pub turn_index: usize,
+    pub tool_name: String,
+    pub call_id: String,
+    pub intent_kind: String,
+    pub is_error: bool,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallReadModel {
+    pub id: i64,
+    pub session_id: i64,
+    pub turn_index: usize,
+    pub tool_name: String,
+    pub call_id: String,
+    pub intent_kind: String,
+    pub is_error: bool,
+    pub latency_ms: u64,
+}

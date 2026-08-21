@@ -152,6 +152,252 @@ fn test_findings_repository_insert_and_query() {
 }
 
 #[test]
+fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("tool_call_insert_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    let record = SessionFactRecord {
+        provider: "claude".to_string(),
+        provider_session_id: "sess-tool-1".to_string(),
+        model_family: "claude-3-5-sonnet-20241022".to_string(),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        started_at: Utc::now(),
+        ended_at: Utc::now(),
+        wall_duration_ms: 1000,
+        turn_count: 3,
+        economics: TokenEconomics {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            ephemeral_5m_tokens: 0,
+            ephemeral_1h_tokens: 0,
+            cache_hit_ratio: 0.0,
+            total_cost_usd: 0.01,
+            provided_cost_usd: None,
+            baseline_cost_no_cache_usd: 0.02,
+            net_savings_usd: 0.01,
+            efficiency_multiplier: 2.0,
+            per_model: std::collections::HashMap::new(),
+            reasoning_output_tokens: 0,
+        },
+        has_anomalies: false,
+    };
+    session_repo.upsert_session(&record).unwrap();
+
+    let internal_id: i64 = conn
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-tool-1"], |row| row.get(0))
+        .unwrap();
+
+    let tool_repo = ToolCallRepository::new(&conn);
+
+    // Empty slice must insert zero rows without error (CRIT-LUMEN-117).
+    tool_repo.insert_tool_calls(internal_id, &[]).expect("empty slice insert failed");
+    let count_after_empty: i64 =
+        conn.query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    assert_eq!(count_after_empty, 0);
+
+    let calls = vec![
+        ToolCallFactRecord {
+            turn_index: 0,
+            tool_name: "Read".to_string(),
+            call_id: "call-1".to_string(),
+            intent_kind: "read".to_string(),
+            is_error: false,
+            latency_ms: 10,
+        },
+        ToolCallFactRecord {
+            turn_index: 1,
+            tool_name: "Bash".to_string(),
+            call_id: "call-2".to_string(),
+            intent_kind: "exec".to_string(),
+            is_error: true,
+            latency_ms: 200,
+        },
+        ToolCallFactRecord {
+            turn_index: 2,
+            tool_name: "Read".to_string(),
+            call_id: "call-3".to_string(),
+            intent_kind: "read".to_string(),
+            is_error: false,
+            latency_ms: 5,
+        },
+    ];
+
+    tool_repo.insert_tool_calls(internal_id, &calls).expect("Insert tool calls failed");
+
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    assert_eq!(count, 3);
+
+    let listed = tool_repo.list_by_session(internal_id).expect("list_by_session failed");
+    assert_eq!(listed.len(), 3);
+    assert_eq!(listed[1].tool_name, "Bash");
+    assert!(listed[1].is_error);
+}
+
+#[test]
+fn test_tool_call_repository_counts_by_session() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("tool_call_counts_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    let record = SessionFactRecord {
+        provider: "claude".to_string(),
+        provider_session_id: "sess-tool-2".to_string(),
+        model_family: "claude-3-5-sonnet-20241022".to_string(),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        started_at: Utc::now(),
+        ended_at: Utc::now(),
+        wall_duration_ms: 1000,
+        turn_count: 5,
+        economics: TokenEconomics {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            ephemeral_5m_tokens: 0,
+            ephemeral_1h_tokens: 0,
+            cache_hit_ratio: 0.0,
+            total_cost_usd: 0.01,
+            provided_cost_usd: None,
+            baseline_cost_no_cache_usd: 0.02,
+            net_savings_usd: 0.01,
+            efficiency_multiplier: 2.0,
+            per_model: std::collections::HashMap::new(),
+            reasoning_output_tokens: 0,
+        },
+        has_anomalies: false,
+    };
+    session_repo.upsert_session(&record).unwrap();
+    let internal_id: i64 = conn
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-tool-2"], |row| row.get(0))
+        .unwrap();
+
+    let tool_repo = ToolCallRepository::new(&conn);
+    let calls = vec![
+        ToolCallFactRecord {
+            turn_index: 0,
+            tool_name: "Read".to_string(),
+            call_id: "c1".to_string(),
+            intent_kind: "read".to_string(),
+            is_error: false,
+            latency_ms: 10,
+        },
+        ToolCallFactRecord {
+            turn_index: 1,
+            tool_name: "Read".to_string(),
+            call_id: "c2".to_string(),
+            intent_kind: "read".to_string(),
+            is_error: true,
+            latency_ms: 15,
+        },
+        ToolCallFactRecord {
+            turn_index: 2,
+            tool_name: "Bash".to_string(),
+            call_id: "c3".to_string(),
+            intent_kind: "exec".to_string(),
+            is_error: true,
+            latency_ms: 300,
+        },
+        ToolCallFactRecord {
+            turn_index: 3,
+            tool_name: "Write".to_string(),
+            call_id: "c4".to_string(),
+            intent_kind: "write".to_string(),
+            is_error: false,
+            latency_ms: 20,
+        },
+    ];
+    tool_repo.insert_tool_calls(internal_id, &calls).unwrap();
+
+    let tool_counts = tool_repo.tool_counts_by_session(internal_id).expect("tool_counts_by_session failed");
+    assert_eq!(tool_counts.get("Read").copied(), Some(2));
+    assert_eq!(tool_counts.get("Bash").copied(), Some(1));
+    assert_eq!(tool_counts.get("Write").copied(), Some(1));
+    assert_eq!(tool_counts.len(), 3);
+
+    let error_counts = tool_repo.error_counts_by_session(internal_id).expect("error_counts_by_session failed");
+    assert_eq!(error_counts.get("Read").copied(), Some(1));
+    assert_eq!(error_counts.get("Bash").copied(), Some(1));
+    assert_eq!(error_counts.get("Write"), None);
+    assert_eq!(error_counts.len(), 2);
+}
+
+#[test]
+fn test_session_repository_get_session_populates_tool_counts_from_internal_id() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("session_tool_counts_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    let record = SessionFactRecord {
+        provider: "claude".to_string(),
+        provider_session_id: "sess-tool-3".to_string(),
+        model_family: "claude-3-5-sonnet-20241022".to_string(),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        started_at: Utc::now(),
+        ended_at: Utc::now(),
+        wall_duration_ms: 1000,
+        turn_count: 2,
+        economics: TokenEconomics {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            ephemeral_5m_tokens: 0,
+            ephemeral_1h_tokens: 0,
+            cache_hit_ratio: 0.0,
+            total_cost_usd: 0.01,
+            provided_cost_usd: None,
+            baseline_cost_no_cache_usd: 0.02,
+            net_savings_usd: 0.01,
+            efficiency_multiplier: 2.0,
+            per_model: std::collections::HashMap::new(),
+            reasoning_output_tokens: 0,
+        },
+        has_anomalies: false,
+    };
+    session_repo.upsert_session(&record).unwrap();
+    let internal_id: i64 = conn
+        .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-tool-3"], |row| row.get(0))
+        .unwrap();
+
+    let tool_repo = ToolCallRepository::new(&conn);
+    let calls = vec![
+        ToolCallFactRecord {
+            turn_index: 0,
+            tool_name: "Read".to_string(),
+            call_id: "c1".to_string(),
+            intent_kind: "read".to_string(),
+            is_error: false,
+            latency_ms: 10,
+        },
+        ToolCallFactRecord {
+            turn_index: 1,
+            tool_name: "Bash".to_string(),
+            call_id: "c2".to_string(),
+            intent_kind: "exec".to_string(),
+            is_error: true,
+            latency_ms: 300,
+        },
+    ];
+    tool_repo.insert_tool_calls(internal_id, &calls).unwrap();
+
+    let detail = session_repo.get_session("sess-tool-3").expect("get_session failed").expect("session not found");
+    assert_eq!(detail.tool_counts.get("Read").copied(), Some(1));
+    assert_eq!(detail.tool_counts.get("Bash").copied(), Some(1));
+    assert_eq!(detail.error_counts.get("Bash").copied(), Some(1));
+    assert_eq!(detail.error_counts.get("Read"), None);
+}
+
+#[test]
 fn test_read_only_mode_disallows_writes() {
     let dir = tempdir().unwrap();
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("readonly_test.db")).unwrap();

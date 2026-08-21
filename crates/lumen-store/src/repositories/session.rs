@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::error::StoreError;
 use crate::models::{SessionDetailReadModel, SessionFactRecord, SessionFilter, SessionSummaryReadModel};
+use crate::repositories::tool_call::ToolCallRepository;
 
 pub struct SessionRepository<'a> {
     conn: &'a Connection,
@@ -128,7 +129,9 @@ impl<'a> SessionRepository<'a> {
                 let efficiency: f32 = row.get(10)?;
                 let created_at = row.get(11)?;
 
-                Ok(SessionDetailReadModel {
+                Ok((
+                    id,
+                    SessionDetailReadModel {
                     summary: SessionSummaryReadModel {
                         id,
                         provider,
@@ -159,14 +162,24 @@ impl<'a> SessionRepository<'a> {
                     },
                     tool_counts: BTreeMap::new(),
                     error_counts: BTreeMap::new(),
-                })
+                    },
+                ))
             })
             .map_err(StoreError::Sqlite)?;
 
-        if let Some(res) = rows.next() {
-            Ok(Some(res.map_err(StoreError::Sqlite)?))
-        } else {
-            Ok(None)
-        }
+        let next_row = if let Some(res) = rows.next() { Some(res.map_err(StoreError::Sqlite)?) } else { None };
+        drop(rows);
+        drop(stmt);
+
+        let (id, mut detail) = match next_row {
+            Some(pair) => pair,
+            None => return Ok(None),
+        };
+
+        let tool_call_repo = ToolCallRepository::new(self.conn);
+        detail.tool_counts = tool_call_repo.tool_counts_by_session(id)?;
+        detail.error_counts = tool_call_repo.error_counts_by_session(id)?;
+
+        Ok(Some(detail))
     }
 }
