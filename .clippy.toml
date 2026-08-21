@@ -1,0 +1,12 @@
+msrv                         = "1.96"
+too-many-arguments-threshold = 6
+too-many-lines-threshold     = 150
+
+allow-unwrap-in-tests  = true
+allow-expect-in-tests  = true
+
+cognitive-complexity-threshold = 20
+
+disallowed-macros = [
+    { path = "std::dbg", reason = "debug macro must not ship in library code" },
+]

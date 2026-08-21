@@ -1,0 +1,56 @@
+# Lumen AI Agent Guidelines (`AGENTS.md`)
+
+This guide provides instructions, architectural rules, engineering invariants, and task runner workflows for AI coding agents (Antigravity, Claude, Cursor, Copilot, Codex) working on the Lumen codebase.
+
+---
+
+## 1. Repository Architecture & Crate Layers
+
+Lumen is a multi-orchestrator telemetry, session intelligence, and token economics engine written in Rust. It is structured into strict architectural layers:
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                          LUMEN CRATE LAYERS                            │
+├───────────────────────────────────┬────────────────────────────────────┤
+│ LAYER & CRATE                     │ LICENSE & PURPOSE                  │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ Layer 1: lumen-model              │ MIT / Apache-2.0                   │
+│                                   │ Canonical IR & Pricing Matrix      │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ Layer 1.5: lumen-session          │ MIT / Apache-2.0                   │
+│                                   │ Streaming Ingestion & Adapters     │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ Layer 2: lumen-analysis           │ FSL-1.1-MIT                        │
+│          lumen-pattern            │ 22 Accumulators, Trajectory DAG    │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ Layer 4: lumen-cli                │ FSL-1.1-MIT                        │
+│                                   │ Standalone CLI & Telemetry Tools   │
+└───────────────────────────────────┴────────────────────────────────────┘
+```
+
+> **CRITICAL RULE (Layer Licensing Boundaries)**: Layer 1 (`lumen-model`) and Layer 1.5 (`lumen-session`) MUST NOT depend on Layer 2 or Layer 4 crates (`lumen-analysis`, `lumen-pattern`, `lumen-cli`). Layer 1/1.5 crates must remain permissive (`MIT OR Apache-2.0`) and standalone.
+
+---
+
+## 2. Primary Task Runners & Verification Pipelines
+
+Always use `just` or `moon` task runners for building, testing, linting, and formatting.
+
+| Action | Primary Task Runner Command | Moon Engine Command |
+| :--- | :--- | :--- |
+| **Run Full Verification CI** | `just ci` | `moon run :format-check && moon run :lint && moon run :test` |
+| **Run Test Suite** | `just test` | `moon run :test` |
+| **Check Clippy Lints** | `just lint` | `moon run :lint` |
+| **Check Formatting** | `just fmt-check` | `moon run :format-check` |
+| **Format Code** | `just fmt` | `moon run :format` |
+
+---
+
+## 3. Strict Engineering Invariants
+
+1. **Safe Rust Only (`unsafe_code = "forbid"`)**: `unsafe` code blocks are strictly forbidden across all workspace crates.
+2. **Deterministic Token Accounting**: Token calculations must account for uncached input, 5m ephemeral write, 1h write, 0.10x cache read discount, and output tokens without division by zero.
+3. **Linear Streaming Pass $O(N)$**: Telemetry accumulators must operate in a single linear pass over the canonical turns without nested heap allocations.
+4. **Tarjan SCC Cycle Detection**: Cycle depth $\ge 3$ on identical target symbols with zero mutation must be flagged as circular loops.
+5. **Rich Diagnostic Cards (`miette`)**: User-facing CLI errors must derive `miette::Diagnostic`.
+6. **No Emoji Directive in Code & Comments**: Code comments and docs must remain technical, clean, and scannable.

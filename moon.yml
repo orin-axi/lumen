@@ -1,0 +1,41 @@
+$schema: "https://moonrepo.dev/schemas/project.json"
+
+language: rust
+
+tasks:
+  build:
+    script: "cargo build --workspace"
+    inputs:
+      - "crates/**/*"
+      - "Cargo.toml"
+
+  test:
+    script: "cargo test --workspace"
+    inputs:
+      - "crates/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+    deps:
+      - build
+
+  lint:
+    script: "cargo clippy --workspace --all-targets -- -D warnings"
+    inputs:
+      - "crates/**/*"
+      - "Cargo.toml"
+
+  format:
+    script: "cargo fmt --all"
+    inputs:
+      - "crates/**/*"
+
+  format-check:
+    script: "cargo fmt --all --check"
+    inputs:
+      - "crates/**/*"
+
+  audit:
+    script: "cargo deny check advisories"
+    inputs:
+      - "Cargo.lock"
+      - "Cargo.toml"

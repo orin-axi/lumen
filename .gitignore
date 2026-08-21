@@ -5,3 +5,4 @@ Cargo.lock
 *.log
 scratch/
 .system_generated/
+.moon/cache/

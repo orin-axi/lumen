@@ -1,0 +1,56 @@
+# Global tasks inherited by every project (all crates use the rust toolchain uniformly).
+tasks:
+  build:
+    command: "cargo"
+    args: ["build", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "Cargo.toml"
+
+  test:
+    command: "cargo"
+    args: ["test", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+      - "**/*.snap"
+      - "**/*.trycmd"
+
+  lint:
+    command: "cargo"
+    args: ["clippy", "-p", "$project", "--all-targets", "--", "-D", "warnings"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+
+  format:
+    command: "cargo"
+    args: ["fmt", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+
+  format-check:
+    command: "cargo"
+    args: ["fmt", "-p", "$project", "--", "--check"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+
+  audit:
+    command: "cargo-deny"
+    args: ["check", "advisories"]
+    inputs:
+      - "Cargo.lock"
+      - "Cargo.toml"
+
+  publish:
+    command: "cargo"
+    args: ["publish", "-p", "$project", "--no-verify"]
+    inputs:
+      - "src/**/*"
+      - "Cargo.toml"
