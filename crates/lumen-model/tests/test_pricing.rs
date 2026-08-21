@@ -646,3 +646,35 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
     );
     assert!((table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9);
 }
+
+/// Perf finding: adapters were calling `PricingTable::seed()` fresh on every single
+/// `parse_stream` invocation instead of reusing one shared instance, even though
+/// `TokenEconomics::calculate` takes `&PricingTable` specifically so callers could avoid that.
+/// `pricing::SEEDED` is a `LazyLock<PricingTable>` built once and reused. This test proves the
+/// shared static is a behaviorally identical drop-in for a fresh `PricingTable::seed()` call --
+/// the actual safety property worth testing, since "was an allocation avoided" isn't practically
+/// testable without a dedicated allocation-counting harness.
+#[test]
+fn test_seeded_static_matches_fresh_seed_table() {
+    let fresh = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let cases = [
+        ("claude-3-5-sonnet", None, TokenRateKind::Input),
+        ("claude-3-5-sonnet", None, TokenRateKind::Output),
+        ("claude-3-5-haiku", None, TokenRateKind::CacheRead),
+        ("gpt-4o", None, TokenRateKind::Reasoning),
+        ("deepseek-r1", None, TokenRateKind::CacheWrite),
+        ("qwen-2.5-coder-32b-instruct", None, TokenRateKind::CacheWrite), // exercises the 0.0 no-substitution path
+        ("totally-unrecognized-model-xyz", None, TokenRateKind::Input),  // exercises the sonnet fallback path
+    ];
+
+    for (model, tier, kind) in cases {
+        let fresh_rate = fresh.rate_for(model, tier, kind, as_of);
+        let shared_rate = pricing::SEEDED.rate_for(model, tier, kind, as_of);
+        assert_eq!(
+            shared_rate, fresh_rate,
+            "pricing::SEEDED must match a fresh PricingTable::seed() for ({model}, {tier:?}, {kind:?})"
+        );
+    }
+}

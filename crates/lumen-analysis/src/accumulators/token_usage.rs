@@ -1,6 +1,6 @@
 use chrono::Utc;
 use compact_str::CompactString;
-use lumen_model::{ModelTokenSummary, PricingTable, TokenEconomics, TurnPricingInput, TurnTokenUsage};
+use lumen_model::{pricing, ModelTokenSummary, TokenEconomics, TurnPricingInput, TurnTokenUsage};
 use std::collections::HashMap;
 
 use crate::traits::RawMessageAccumulator;
@@ -76,7 +76,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                 tier: None,
             }],
             &self.default_model,
-            &PricingTable::seed(),
+            &pricing::SEEDED,
             None,
         )
     }

@@ -35,6 +35,14 @@ fn seed_epoch() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
 }
 
+/// Shared, lazily-initialized seeded pricing table -- built once on first access and reused by
+/// every caller, instead of each adapter rebuilding a fresh ~40-row `PricingTable` on every
+/// single file it parses. `TokenEconomics::calculate` takes `&PricingTable` specifically so
+/// callers can share one instance like this; `PricingTable::seed()` itself remains a real,
+/// public, useful constructor (used by tests that build their own tables, and by this static
+/// itself) -- this is purely about hot-path call sites reusing it instead of rebuilding it.
+pub static SEEDED: std::sync::LazyLock<PricingTable> = std::sync::LazyLock::new(PricingTable::seed);
+
 impl PricingTable {
     /// Seeds the table with the canonical rate rows for the models this pass covers.
     pub fn seed() -> Self {

@@ -182,7 +182,7 @@ impl SessionAdapter for CodexAdapter {
             tier: service_tier.clone(),
         };
 
-        let economics = TokenEconomics::calculate(&[pricing_input], &model_family, &PricingTable::seed(), None);
+        let economics = TokenEconomics::calculate(&[pricing_input], &model_family, &pricing::SEEDED, None);
 
         Ok(CanonicalTranscript {
             session_id,

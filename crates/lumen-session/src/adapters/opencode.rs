@@ -226,7 +226,7 @@ impl SessionAdapter for OpenCodeAdapter {
                 tier: None,
             }],
             &model_family,
-            &PricingTable::seed(),
+            &pricing::SEEDED,
             last_accumulated_cost,
         );
 

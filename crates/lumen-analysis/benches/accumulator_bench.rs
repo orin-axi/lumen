@@ -3,7 +3,7 @@ use compact_str::CompactString;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use lumen_analysis::engine::AnalyticsEngine;
 use lumen_model::{
-    CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, PricingTable,
+    pricing, CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind,
     TokenEconomics, ToolIntent, TurnPricingInput, TurnRole, TurnTokenUsage,
 };
 use smallvec::smallvec;
@@ -51,7 +51,7 @@ fn synthetic_transcript(turn_count: usize) -> CanonicalTranscript {
         economics: TokenEconomics::calculate(
             &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
             "claude-3-5-sonnet-20241022",
-            &PricingTable::seed(),
+            &pricing::SEEDED,
             None,
         ),
         turns,

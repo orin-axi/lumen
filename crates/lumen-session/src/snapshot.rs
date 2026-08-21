@@ -1,4 +1,4 @@
-use lumen_model::{CanonicalTranscript, PricingTable, TokenEconomics, TurnPricingInput, TurnTokenUsage};
+use lumen_model::{pricing, CanonicalTranscript, TokenEconomics, TurnPricingInput, TurnTokenUsage};
 
 /// Merges pre-compaction snapshots with the final parse result using max() semantics.
 pub fn merge_precompact_snapshots(
@@ -36,7 +36,7 @@ pub fn merge_precompact_snapshots(
             tier: None,
         }],
         &merged.model_family,
-        &PricingTable::seed(),
+        &pricing::SEEDED,
         None,
     );
 

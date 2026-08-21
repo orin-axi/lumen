@@ -5,7 +5,7 @@ pub mod transcript;
 pub mod turn;
 
 pub use economics::{ModelTokenSummary, TokenEconomics, TurnPricingInput};
-pub use pricing::{PricingRate, PricingTable, TokenRateKind};
+pub use pricing::{PricingRate, PricingTable, TokenRateKind, SEEDED};
 pub use schema::SchemaCitation;
 pub use transcript::{
     CanonicalTranscript, ExecutionTiming, OrchestratorKind, ParseFailureRecord, TrajectoryAnomaly,

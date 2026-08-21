@@ -328,7 +328,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                 tier: None,
             }],
             &model_family,
-            &PricingTable::seed(),
+            &pricing::SEEDED,
             None,
         );
 
