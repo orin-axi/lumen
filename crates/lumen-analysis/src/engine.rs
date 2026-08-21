@@ -94,6 +94,18 @@ impl AnalyticsEngine {
         }
     }
 
+    /// Runs only the attribution accumulator over a transcript's turns. `process_transcript`'s
+    /// `by_subagent` map only ever keeps a subagent's `.attribution` field (see below), so running
+    /// the other 18 accumulators to completion for every subagent, only to discard their output,
+    /// was pure waste -- this is the minimal equivalent computation.
+    fn attribution_only(transcript: &CanonicalTranscript) -> AttributionMetrics {
+        let mut attribution = AttributionAccumulator::default();
+        for turn in &transcript.turns {
+            attribution.update(turn);
+        }
+        attribution.finalize()
+    }
+
     /// Single-pass execution of all accumulators over the canonical transcript.
     pub fn process_transcript(mut self, transcript: &CanonicalTranscript) -> AnalysisReport {
         for turn in &transcript.turns {
@@ -120,10 +132,9 @@ impl AnalyticsEngine {
 
         let mut by_subagent = BTreeMap::new();
         for subagent in &transcript.subagents {
-            let sub_report = AnalyticsEngine::new().process_transcript(subagent);
             let key =
                 subagent.subagent_role.clone().unwrap_or_else(|| CompactString::from(subagent.session_id.as_str()));
-            by_subagent.insert(key, sub_report.attribution);
+            by_subagent.insert(key, Self::attribution_only(subagent));
         }
 
         AnalysisReport {
