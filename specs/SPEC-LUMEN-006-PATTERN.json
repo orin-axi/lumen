@@ -3,59 +3,100 @@
   "$id": "spec@1",
   "id": "SPEC-LUMEN-006-PATTERN",
   "purpose": "Defines the graph-theoretical trajectory modeling, Tarjan SCC cycle loop detection, argument grounding scoring, and resolution monotonicity algorithms for Lumen.",
-  "scope": "Covers crates/lumen-pattern: TrajectoryGraph, TrajectoryNode, TrajectoryEdge, TarjanCycleDetector, compute_grounding_score, and calculate_monotonicity.",
+  "scope": "Covers crates/lumen-pattern: TrajectoryGraph, ToolNode, CircularLoopAnomaly, compute_grounding_score, compute_recovery_index, calculate_efficiency, and calculate_monotonicity.",
   "non_goals": [
     "Raw token pricing or financial accounting (delegated to lumen-model).",
     "Database persistence or query filtering (delegated to lumen-store)."
   ],
   "api_surface": [
     {
-      "name": "TrajectoryGraph",
-      "signature": "pub struct TrajectoryGraph { graph: petgraph::graph::DiGraph<TrajectoryNode, TrajectoryEdge> }; impl TrajectoryGraph { pub fn from_transcript(transcript: &CanonicalTranscript) -> Self; pub fn detect_cycles(&self) -> Vec<Vec<usize>>; pub fn calculate_monotonicity(&self) -> f32; pub fn compute_grounding_score(&self) -> f32; }",
-      "description": "Directed acyclic/cyclic graph representation of agent execution paths, tool dependencies, and state transitions.",
+      "name": "ToolNode",
+      "signature": "pub struct ToolNode { pub turn_index: usize, pub tool_name: CompactString, pub target_symbol: Option<CompactString>, pub target_file: Option<CompactString>, pub is_mutation: bool, pub had_error: bool }",
+      "description": "A single tool invocation node in the trajectory graph, carrying the grounded target file/symbol used for cycle and grounding-score analysis.",
       "error_conditions": []
     },
     {
-      "name": "TarjanCycleDetector",
-      "signature": "pub struct TarjanCycleDetector; impl TarjanCycleDetector { pub fn find_scc_cycles(graph: &TrajectoryGraph) -> Vec<CycleAnomaly>; }",
-      "description": "Executes Tarjan's strongly connected components algorithm to find cyclic tool loops and redundant file exploration.",
+      "name": "CircularLoopAnomaly",
+      "signature": "pub struct CircularLoopAnomaly { pub symbol: CompactString, pub cycle_depth: usize }",
+      "description": "Records a detected Tarjan SCC cycle of >= 3 nodes sharing an identical target_symbol with zero state mutations.",
       "error_conditions": []
+    },
+    {
+      "name": "TrajectoryGraph",
+      "signature": "pub struct TrajectoryGraph { pub graph: petgraph::graph::DiGraph<ToolNode, ()>, pub last_node: Option<NodeIndex>, pub total_mutations: usize, pub total_reads: usize }; impl TrajectoryGraph { pub fn new() -> Self; pub fn push_tool(&mut self, node: ToolNode) -> NodeIndex; pub fn detect_circular_loops(&self) -> Vec<CircularLoopAnomaly>; pub fn calculate_efficiency(&self) -> f32; pub fn calculate_monotonicity(&self) -> f32; }",
+      "description": "Directed graph representation of agent execution paths built by pushing ToolNodes in turn order; detect_circular_loops runs petgraph's Tarjan SCC to find cyclic tool loops and redundant file exploration.",
+      "error_conditions": []
+    },
+    {
+      "name": "compute_grounding_score",
+      "signature": "pub fn compute_grounding_score(transcript: &CanonicalTranscript) -> f32",
+      "description": "Computes Argument Grounding Score G = (Grounded Tool Args) / (Total Invocations). Returns 1.0 when total_tools == 0 (no division by zero).",
+      "error_conditions": ["Returns 1.0 (not NaN/panic) when total_tools == 0."]
+    },
+    {
+      "name": "compute_recovery_index",
+      "signature": "pub fn compute_recovery_index(transcript: &CanonicalTranscript) -> f32",
+      "description": "Computes the Error Recovery Index R = adaptive_error_pivots / total_error_events, where an adaptive error pivot is an error on turn i followed by no error on turn i+1. Returns 1.0 when total_error_events == 0 (no division by zero).",
+      "error_conditions": ["Returns 1.0 (not NaN/panic) when total_error_events == 0."]
     },
     {
       "name": "calculate_monotonicity",
       "signature": "pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32",
-      "description": "Computes the monotonicity coefficient M in [0.0, 1.0] measuring whether each turn moves monotonically closer to task resolution.",
+      "description": "Convenience helper that builds a TrajectoryGraph from a transcript's tool calls in turn order and computes the monotonicity coefficient M in [0.0, 1.0], measuring whether execution avoided circular exploration loops.",
       "error_conditions": []
     }
   ],
   "acceptance_criteria": [
     {
       "id": "CRIT-LUMEN-070",
-      "criterion": "WHEN a transcript contains 3 identical view_file invocations on the same path without interleaving mutations, THE SYSTEM SHALL identify a Tarjan SCC cyclic loop and emit a CycleAnomaly.",
+      "criterion": "WHEN a transcript contains 3 identical CodeSearch invocations sharing the same query (which grounds to target_symbol per ground_tool_intent, lib.rs:196-205) without interleaving mutations, THE SYSTEM SHALL identify a Tarjan SCC cyclic loop and emit a CircularLoopAnomaly.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Fixed two audit-confirmed defects (2026-08-20): (1) the real emitted type is CircularLoopAnomaly (lib.rs:18, api_surface line 19-23), not \"CycleAnomaly\" -- the wrong name was also independently leaking into SPEC-LUMEN-007-INSIGHTS's FindingGenerator signature, fixed there too. (2) The example was changed from a FileRead-based scenario (3 identical view_file invocations) to a CodeSearch-based one, because detect_circular_loops (lib.rs:88-107) only checks target_symbol for redundancy, never target_file -- confirmed by direct code read. FileRead/FileEdit ground exclusively on target_file (ground_tool_intent, lib.rs:198-199), so a repeated-FileRead cycle as originally worded would NOT actually be detected by current code; the example must use a tool that grounds on target_symbol (CodeSearch) to be a true statement. File-based redundancy detection (repeated reads of the same file) is a real, currently undetected gap -- not fixed here since it requires a lib.rs code change (checking target_symbol.or(target_file) rather than target_symbol alone), out of scope for a specs-only pass; tracked as a follow-up."
     },
     {
       "id": "CRIT-LUMEN-071",
-      "criterion": "WHEN computing resolution monotonicity M on a linear pass transcript with zero backtracking, THE SYSTEM SHALL return M = 1.0.",
+      "criterion": "WHEN calculate_monotonicity is invoked on a transcript where detect_circular_loops returns an empty Vec (no set of >= 3 tool invocations sharing an identical grounded target_symbol with no interleaving mutation, per CRIT-LUMEN-070), THE SYSTEM SHALL return M = 1.0.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "\"Zero backtracking\" was never defined anywhere in the spec (audit finding, 2026-08-20); rewritten to bind precisely to detect_circular_loops's actual empty-result condition, consistent with how CRIT-LUMEN-155 already describes the non-empty case."
     },
     {
       "id": "CRIT-LUMEN-072",
-      "criterion": "WHEN an agent encounters compiler errors and corrects them on the next turn, THE SYSTEM SHALL compute Error Recovery Index R = 1.0.",
+      "criterion": "WHEN compute_recovery_index(transcript) is invoked on a transcript where an error occurs on turn i and no error occurs on turn i+1 (1 adaptive error pivot out of 1 total error event), THE SYSTEM SHALL return Error Recovery Index R = adaptive_error_pivots / total_error_events = 1.0.",
       "is_error_case": false,
       "judgment_call": false
     },
     {
       "id": "CRIT-LUMEN-073",
-      "criterion": "WHEN compute_grounding_score is executed, THE SYSTEM SHALL compute the ratio of tool argument values grounded in prior user or tool outputs versus hallucinated values.",
+      "criterion": "WHEN compute_grounding_score(transcript) is invoked on a transcript with N total tool calls where G of them are FileRead/FileEdit calls with a non-empty path or CodeSearch calls with a non-empty query (every other ToolIntent variant -- FileCreate, FileDiscovery, TestExecution, VersionControl, SubagentSpawn, McpCall, Other -- counts as grounded unconditionally, per the real implementation), THE SYSTEM SHALL return G = grounded_tools / N.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "The prior wording (\"grounded in prior user or tool outputs versus hallucinated values\") both contradicted the api_surface's own stated formula (G = Grounded/Total Invocations, not Grounded/Hallucinated) and did not match the real implementation (lib.rs:131-161), which checks only for a non-empty path/query on 3 ToolIntent variants and treats every other variant as automatically grounded -- it never actually checks grounding against prior turns' outputs (audit finding, 2026-08-20). Rewritten to describe the real, buildable heuristic precisely, following the same bind-to-real-formula pattern already used for CRIT-LUMEN-072. If \"grounded against prior turn output\" is the intended long-term semantic, that requires an implementation change, not just a criterion rewording -- flagged, not silently absorbed into this wording."
     },
     {
       "id": "CRIT-LUMEN-074",
       "criterion": "IF a transcript has 0 or 1 turns, THE SYSTEM SHALL return monotonicity M = 1.0 and grounding score = 1.0 without dividing by zero.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-155",
+      "criterion": "WHEN calculate_monotonicity(transcript) is invoked on a transcript containing 3 consecutive tool invocations that share the same grounded target file or symbol with no interleaving mutation, THE SYSTEM SHALL return M < 1.0, reflecting a detected circular exploration loop.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "Status update, 2026-08-20: TrajectoryGraph now has a target_last_seen map (lib.rs:37-42) that closes a back-edge on target revisit, so push_tool no longer produces a strictly linear chain -- the 'known-failing (red)' status this criterion's spec-level reasoning previously described is stale; back-edge construction has since been implemented. This criterion itself is unchanged (its wording was already correct), only the historical status note elsewhere in this file needed correcting."
+    },
+    {
+      "id": "CRIT-LUMEN-170",
+      "criterion": "WHEN TrajectoryGraph::calculate_efficiency is invoked, THE SYSTEM SHALL return (total_mutations + total_reads * 0.5) / (total_mutations + total_reads); IF total_mutations + total_reads == 0, THE SYSTEM SHALL return 1.0 without dividing by zero.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "calculate_efficiency was declared in api_surface and implemented (lib.rs:109-115, with its own zero-division guard) but had zero acceptance criteria and was missing from scope -- audit finding, 2026-08-20. Both gaps fixed: added to scope above, and a criterion binding to the real weighted formula (mutation weight 1.0, read weight 0.5) plus its zero-division guard added here."
+    },
+    {
+      "id": "CRIT-LUMEN-171",
+      "criterion": "IF a Tarjan SCC component has exactly 2 nodes sharing an identical target_symbol with no interleaving mutation, THE SYSTEM SHALL NOT emit a CircularLoopAnomaly for it -- the >= 3 threshold in CRIT-LUMEN-070 is a strict lower bound, not an off-by-one-tolerant one.",
       "is_error_case": true,
       "judgment_call": false
     }
@@ -63,5 +104,5 @@
   "linked_requirement": "REQ-LUMEN-006",
   "linked_research": "RES-LUMEN-001",
   "spec_file_path": "specs/SPEC-LUMEN-006-PATTERN.json",
-  "reasoning": "Establishes graph-theoretical trajectory modeling, Tarjan SCC cycle detection, and mathematical quality indicators."
+  "reasoning": "Establishes graph-theoretical trajectory modeling, Tarjan SCC cycle detection, and mathematical quality indicators. CRIT-LUMEN-072 was rewritten (same id) to bind it to the real compute_recovery_index function/formula (crates/lumen-pattern/src/lib.rs:141-166) instead of untestable prose; the formula was already correctly implemented, only the api_surface entry and criterion wording were missing. CRIT-LUMEN-155's status as of 2026-08-19 was known-failing (red): calculate_monotonicity produced a strictly linear graph with no back-edges, so detect_circular_loops could never fire regardless of node content. STATUS UPDATE, 2026-08-20 (audit-confirmed via direct code read, crates/lumen-pattern/src/lib.rs:37-42,62-86): this has since been fixed -- TrajectoryGraph now carries a target_last_seen map that closes a back-edge whenever a target (target_symbol falling back to target_file) is revisited, giving Tarjan SCC an actual cycle to find. CRIT-LUMEN-155 should be treated as implemented, not red, going forward. Real-data research pass, 2026-08-20: OpenHands' real stuck-detector (a mature, 84k-star agent framework's production loop-detection code, not an analogy) uses five fixed pattern checks (identical action+observation repeat, error-streak-with-a-one-shot-corrective-nudge, agent monologue with no user interruption, period-2 A-B-A-B alternation specifically, and a context-window-error loop OpenHands itself marks as an unsolved TODO) rather than general graph-cycle detection. This confirms Lumen's Tarjan-SCC approach is directionally sound and, in one real dimension, MORE general (arbitrary-length cycles vs. OpenHands' fixed patterns) -- but OpenHands covers two failure categories Tarjan-SCC has no equivalent of: agent monologue (no user interruption for N consecutive turns) and live mid-loop intervention (a corrective nudge, not just post-hoc detection). No criteria are added for these here -- flagged as a possible follow-up spec addition if the user wants monologue/error-streak detection, not added speculatively without that decision."
 }

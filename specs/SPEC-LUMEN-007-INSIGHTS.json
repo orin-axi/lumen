@@ -6,13 +6,28 @@
   "scope": "Covers crates/lumen-insights: WorkflowClassifier, CategoryDetector, RtkOpportunityRule, FindingGenerator, BimodalClassifier, and RollupEngine.",
   "non_goals": [
     "Raw SQLite database table management (handled by lumen-store).",
-    "Active code execution or test running (handled by prism-core)."
+    "Active code execution or test running (handled by prism-core).",
+    "Persisting or incrementally updating discovered category clusters across process restarts (discover_fingerprint_corpus recomputes clustering from the full in-memory transcript corpus supplied on each call).",
+    "Replacing the ratio-threshold BimodalMode classification (CRIT-LUMEN-080, 081, 158) or the Jaccard-clique clustering (CRIT-LUMEN-156, 157) with an LLM-driven narrative-synthesis approach (see reasoning for the citation and rationale).",
+    "User-response-latency distribution (time from an assistant turn's end to the next user message) and multi-session/concurrent-session overlap detection (\"multi-clauding\") -- both real, both confirmed present in Claude Code's own Insights feature, both absent from Lumen's current single-session-scoped analysis model. Noted as legitimate candidate signals for a future spec, not built here."
   ],
   "api_surface": [
     {
       "name": "WorkflowClassifier",
-      "signature": "pub struct WorkflowClassifier; impl WorkflowClassifier { pub fn classify_seed(transcript: &CanonicalTranscript) -> Vec<CategoryScore>; pub fn discover_fingerprint(transcript: &CanonicalTranscript) -> Option<DiscoveredCategory>; pub fn classify_bimodal(transcript: &CanonicalTranscript) -> BimodalMode; }",
-      "description": "Classifies session transcripts into seed categories (feature_dev, bug_hunt, refactoring, test_authoring, eval) and discovers new category clusters.",
+      "signature": "pub struct WorkflowClassifier; impl WorkflowClassifier { pub fn classify_seed(transcript: &CanonicalTranscript) -> Vec<CategoryScore>; pub fn discover_fingerprint(transcript: &CanonicalTranscript, corpus: &[CanonicalTranscript]) -> Option<DiscoveredCategory>; pub fn discover_fingerprint_corpus(corpus: &[CanonicalTranscript]) -> Vec<DiscoveredCategory>; pub fn classify_bimodal(transcript: &CanonicalTranscript) -> BimodalMode; }",
+      "description": "Classifies session transcripts into seed categories (feature_dev, bug_hunt, refactoring, test_authoring, eval) and discovers new category clusters. discover_fingerprint looks up which cluster (if any) a single transcript belongs to within a supplied corpus; discover_fingerprint_corpus computes the full clustering over that corpus in one pass.",
+      "error_conditions": []
+    },
+    {
+      "name": "BimodalMode",
+      "signature": "pub enum BimodalMode { Acceleration, Exploration, Balanced }",
+      "description": "Classifies a session's dominant interaction pattern: Acceleration (high mutation density, low search activity), Exploration (high search activity, high turn count), or Balanced (neither threshold met).",
+      "error_conditions": []
+    },
+    {
+      "name": "DiscoveredCategory",
+      "signature": "pub struct DiscoveredCategory { pub member_count: usize, pub member_session_ids: Vec<CompactString>, pub tool_bigram_fingerprint: Vec<CompactString> }",
+      "description": "A dynamically discovered workflow cluster of >= 3 transcripts whose ordered tool-invocation sequences meet the pairwise similarity threshold in CRIT-LUMEN-156.",
       "error_conditions": []
     },
     {
@@ -23,23 +38,29 @@
     },
     {
       "name": "FindingGenerator",
-      "signature": "pub struct FindingGenerator; impl FindingGenerator { pub fn generate_findings(transcript: &CanonicalTranscript, loop_anomalies: &[CycleAnomaly]) -> Vec<StructuredFinding>; }",
-      "description": "Synthesizes structured findings containing severity, confidence, rule version, evidence JSON, and remediation recommendations.",
+      "signature": "pub enum FrictionType { BuggyCode, WrongApproach, ProcessHygieneLapse, Other }; pub struct FindingGenerator; impl FindingGenerator { pub fn generate_findings(transcript: &CanonicalTranscript, loop_anomalies: &[CircularLoopAnomaly]) -> Vec<StructuredFinding>; }",
+      "description": "Synthesizes structured findings containing severity, confidence, rule version, evidence JSON, friction_type classification, and remediation recommendations. FrictionType variants: BuggyCode (an implementation defect -- reserved for future producers; neither FindingGenerator nor RtkOpportunityRule currently detects code correctness, which is Prism's RedGreenGrader's job, not Lumen's), WrongApproach (a strategic/exploration issue, e.g. a detected circular loop -- the agent's method was unproductive, not necessarily buggy), ProcessHygieneLapse (a workflow/tooling habit issue, e.g. using a legacy CLI tool with a faster modern equivalent available), Other (does not fit the above three).",
+      "error_conditions": []
+    },
+    {
+      "name": "StructuredFinding",
+      "signature": "pub struct StructuredFinding { pub severity: Severity, pub confidence: f32, pub rule_or_model_version: CompactString, pub evidence_json: serde_json::Value, pub recommendation: String, pub friction_type: FrictionType }",
+      "description": "The common output shape both RtkOpportunityRule::evaluate and FindingGenerator::generate_findings produce.",
       "error_conditions": []
     }
   ],
   "acceptance_criteria": [
     {
       "id": "CRIT-LUMEN-080",
-      "criterion": "WHEN a session contains high tool mutation density and low search turn count, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Acceleration.",
+      "criterion": "WHEN a session's mutation_density (count of ToolIntent::FileEdit and ToolIntent::FileCreate calls divided by total tool calls in the session; ToolIntent::VersionControl is excluded from this ratio since its actions span both read-only and mutating operations) is >= 0.60 AND its search_turn_count (count of turns containing at least one ToolIntent::CodeSearch or ToolIntent::FileDiscovery call) is <= 2, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Acceleration.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": true
     },
     {
       "id": "CRIT-LUMEN-081",
-      "criterion": "WHEN a session contains high search tool density and high turn count, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Exploration.",
+      "criterion": "WHEN a session's search_turn_count (count of turns containing at least one ToolIntent::CodeSearch or ToolIntent::FileDiscovery call) is >= 6 AND its total turn_count is >= 15, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Exploration.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": true
     },
     {
       "id": "CRIT-LUMEN-082",
@@ -55,19 +76,57 @@
     },
     {
       "id": "CRIT-LUMEN-084",
-      "criterion": "WHEN structured findings are generated, THE SYSTEM SHALL populate evidence_json, confidence score in [0.0, 1.0], rule_or_model_version, and actionable recommendation text.",
+      "criterion": "WHEN RtkOpportunityRule::evaluate or FindingGenerator::generate_findings produces a StructuredFinding, THE SYSTEM SHALL populate evidence_json, confidence score in [0.0, 1.0], rule_or_model_version, and actionable recommendation text on every finding regardless of origin.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Narrowed to name the exact producing functions per audit finding (2026-08-20): the prior \"WHEN structured findings are generated\" was ambiguous about whether it governed RtkOpportunityRule::evaluate, FindingGenerator::generate_findings, or both. It governs both. The friction_type requirement (previously bundled into this criterion without a classification rule, making it untestable) is split out into CRIT-LUMEN-167 below."
     },
     {
       "id": "CRIT-LUMEN-085",
       "criterion": "WHEN computing periodic rollups, THE SYSTEM SHALL aggregate session count, total cost USD, active wall time, and finding counts by repository, category, and weekly period start.",
       "is_error_case": false,
       "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-156",
+      "criterion": "WHEN WorkflowClassifier::discover_fingerprint_corpus evaluates a corpus of transcripts and finds a maximal clique of >= 3 transcripts where every pair within the clique has Jaccard similarity >= 0.75 over the set of tool-name bigrams extracted from each transcript's ordered ToolIntent call sequence (complete-linkage clustering), THE SYSTEM SHALL emit one DiscoveredCategory per maximal qualifying clique with member_count equal to the clique size and member_session_ids listing every member transcript's session_id; a transcript belonging to more than one qualifying clique SHALL be assigned only to the largest, ties broken by lexically earliest session_id. WorkflowClassifier::discover_fingerprint(transcript, corpus) SHALL return Some(that DiscoveredCategory) for any transcript present in corpus that was assigned to a clique.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-157",
+      "criterion": "IF no maximal clique of >= 3 transcripts in the corpus meets the >= 0.75 pairwise tool-bigram similarity threshold, THE SYSTEM SHALL have discover_fingerprint_corpus return an empty Vec<DiscoveredCategory>, and discover_fingerprint(transcript, corpus) SHALL return None for every transcript in that corpus.",
+      "is_error_case": true,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-158",
+      "criterion": "WHEN a session's mutation_density, search_turn_count, and turn_count satisfy neither CRIT-LUMEN-080's Acceleration thresholds nor CRIT-LUMEN-081's Exploration thresholds, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Balanced.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-167",
+      "criterion": "WHEN a StructuredFinding is produced by RtkOpportunityRule::evaluate, THE SYSTEM SHALL set its friction_type to FrictionType::ProcessHygieneLapse (a legacy-tool-usage habit, not a code defect or a strategic misstep); WHEN produced by FindingGenerator::generate_findings from a non-empty loop_anomalies slice, THE SYSTEM SHALL set friction_type to FrictionType::WrongApproach (a circular-exploration loop is a strategic issue); FOR every other case, THE SYSTEM SHALL set friction_type to FrictionType::Other. FrictionType::BuggyCode is never assigned by either producer in the current scope (see StructuredFinding's api_surface description) -- it exists in the enum for future producers, not for these two.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Split out of CRIT-LUMEN-084 per audit finding (2026-08-20): the original wording required the friction_type field to exist without specifying a classification rule, making it satisfiable by always emitting Other or a random value -- untestable. This criterion gives a concrete, mechanical, per-producer default rule instead."
+    },
+    {
+      "id": "CRIT-LUMEN-168",
+      "criterion": "IF a session has 0 total tool calls, THE SYSTEM SHALL classify its bimodal mode as BimodalMode::Balanced without evaluating mutation_density (which would otherwise divide by zero) -- treated as satisfying CRIT-LUMEN-158's \"neither threshold met\" case by definition, not as a separate undefined state.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-169",
+      "criterion": "WHEN WorkflowClassifier::discover_fingerprint(transcript, corpus) is invoked for a transcript that IS present in corpus but was NOT assigned to any qualifying clique under CRIT-LUMEN-156's clustering (distinct from CRIT-LUMEN-157's case where no qualifying clique exists anywhere in the corpus), THE SYSTEM SHALL return None for that transcript, same as CRIT-LUMEN-157's no-clique-at-all case; IF the transcript argument is not present in corpus at all, THE SYSTEM SHALL also return None.",
+      "is_error_case": true,
+      "judgment_call": false
     }
   ],
   "linked_requirement": "REQ-LUMEN-007",
   "linked_research": "RES-LUMEN-001",
   "spec_file_path": "specs/SPEC-LUMEN-007-INSIGHTS.json",
-  "reasoning": "Establishes workflow categorization, bimodal theory modeling, RTK missed savings coaching, and structured finding generation."
+  "reasoning": "Establishes workflow categorization, bimodal theory modeling, RTK missed savings coaching, and structured finding generation. Real-data research pass, 2026-08-20: four classification philosophies are now on record for this spec's threshold/clustering design -- Lumen's own ratio-threshold (CRIT-080/081/158) plus Jaccard-clique clustering (CRIT-156/157), CodeBurn's validated tool-signal-primary regex rules, LangSmith's LLM-driven bottom-up trace clustering, and Claude Code's own built-in Insights feature (the highest-authority reference found, since it classifies the exact same underlying data this spec targets) which uses LLM-narrative synthesis plus THREE separate orthogonal classification axes (goal/intent type, session type, friction type) rather than one collapsed enum. `agent-traces` (github.com/davanstrien) additionally reports an empirical data point worth carrying forward: a session-health predictor reaching AUC 0.84 after just 2 turns using only behavioral features (tool-choice ratios, verbosity, error rates), before seeing final error counts -- relevant to how early a useful classification signal can be extracted. Google Business Messages' real, shipped session-closure/quality-gate model (message-gap timeout, rolling-28-day quality threshold) is a further real precedent for threshold-based design, congruent with Lumen's existing approach rather than contradicting it. Decision made this pass: keep the ratio-threshold/clustering mechanism as-is (no ground-truth-labeled dataset exists to validate a replacement, and LLM-synthesis introduces cost/latency/non-determinism disproportionate to this pass), but incorporate the one bounded, mechanical piece of the Claude Code Insights finding that doesn't require an algorithm change -- a friction_type classification dimension on StructuredFinding, with a concrete per-producer default rule (CRIT-LUMEN-167, split out from CRIT-LUMEN-084 after an audit pass found the field-without-a-rule version untestable)."
 }

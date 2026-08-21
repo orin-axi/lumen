@@ -1,0 +1,454 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan@1",
+  "id": "PLAN-LUMEN-005-ANALYSIS",
+  "spec_file_path": "specs/SPEC-LUMEN-005-ANALYSIS.json",
+  "linked_requirement": "REQ-LUMEN-005",
+  "summary": "Implementation plan for exhaustive test coverage of the 20 single-pass streaming accumulators (18 EntryAccumulator-based + 2 RawMessageAccumulator-based), schema extraction, API health, subagent attribution, and synthetic billing exclusions in lumen-analysis. Amended 2026-08-20: SpanMappingAccumulator (CRIT-153) was removed and OtelCorrelationAccumulator collapsed into a plain field copy (CRIT-152); CircuitBreakerAccumulator gained a recursive analyze_transcript entry point (CRIT-062); SchemaExtractorAccumulator was redesigned around a generic $schema/$id detector and pluggable validator registry with a tri-state result (CRIT-063); HookActivityAccumulator was reworked to consume a dedicated HookExecutionEvent instead of scanning transcript JSON (CRIT-139/140); AttributionAccumulator gained a by_agent bucket and by_subagent now keys on the new subagent_role field (CRIT-147/149); PermissionModeAccumulator (previously implemented with zero bound acceptance criteria) now has a dedicated test task (CRIT-172/173).",
+  "tasks": [
+    {
+      "id": "TASK-ANALYSIS-001",
+      "title": "API Health, MCP Affinity, Self-Correction & Synthetic Model Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-061",
+        "CRIT-LUMEN-065",
+        "CRIT-LUMEN-066",
+        "CRIT-LUMEN-067",
+        "CRIT-LUMEN-068"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_api_health_and_mcp_affinity_and_synthetic_exclusions asserting 429/5xx tracking, MCP ratio, self correction pivots, and exclusion of <synthetic> models from TokenUsageAccumulator.",
+        "expected_failure": "Tests fail if 429s are uncounted or if synthetic models appear in billing summaries.",
+        "implementation": "Validate and harden ApiHealthAccumulator, McpAffinityAccumulator, SelfCorrectionAccumulator, and TokenUsageAccumulator.",
+        "expected_pass": "All accumulator assertions pass cleanly."
+      },
+      "commit_message": "test(lumen-analysis): add API health, MCP affinity, and synthetic billing tests"
+    },
+    {
+      "id": "TASK-ANALYSIS-002",
+      "title": "Embedded Schema Extraction with Pluggable Validator Registry and Tri-State Results",
+      "covers_criteria": [
+        "CRIT-LUMEN-063"
+      ],
+      "files": [
+        "crates/lumen-model/src/schema.rs",
+        "crates/lumen-model/src/lib.rs",
+        "crates/lumen-analysis/src/accumulators/schema_extractor.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_schema_extractor_generic_detection_and_validator_registry to test_accumulators.rs: turn 0's entry.text contains an embedded `{\"$id\":\"spec@1\",\"purpose\":\"x\"}` block, with a SchemaValidator registered for schema_id \"spec@1\" that returns true from validate() -- expect a SchemaCitation{schema_id:\"spec@1\", turn_index:0, result: SchemaValidationResult::Valid}. Turn 1's text contains `{\"$schema\":\"changeset@1\",\"foo\":1}`, with a registered validator for \"changeset@1\" that returns false -- expect result: Invalid. Turn 2's text contains `{\"$id\":\"eval-report@1\",\"bar\":2}` with NO registered validator for that id -- expect result: UnrecognizedSchema. Also update the 4 existing `.is_valid`-based assertions already in this file (currently around lines 589, 633, 637, 684) to check `.result == SchemaValidationResult::Valid` / `SchemaValidationResult::Invalid` instead, since SchemaCitation.is_valid no longer exists after this task.",
+        "expected_failure": "Fails to compile: SchemaCitation still has a boolean is_valid field (not result: SchemaValidationResult), and SchemaValidator/SchemaValidationResult do not exist yet; the 4 pre-existing .is_valid assertions also fail to compile once the field is renamed.",
+        "implementation": "In crates/lumen-model/src/schema.rs: remove `is_valid: bool` and `summary: Option<CompactString>` from SchemaCitation; add `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)] pub enum SchemaValidationResult { Valid, Invalid, UnrecognizedSchema }` and add `pub result: SchemaValidationResult` to SchemaCitation in its place. Export it from crates/lumen-model/src/lib.rs by changing `pub use schema::SchemaCitation;` to `pub use schema::{SchemaCitation, SchemaValidationResult};`. In crates/lumen-analysis/src/accumulators/schema_extractor.rs: add `pub trait SchemaValidator: Send + Sync { fn schema_id(&self) -> &str; fn validate(&self, payload: &serde_json::Value) -> bool; }`. Change SchemaExtractorAccumulator to `{ pub validators: Vec<Box<dyn SchemaValidator>>, pub extracted: Vec<SchemaCitation> }` (Default still derives cleanly -- an empty Vec needs no bound on its element type). Add a private `fn extract_json_blocks(text: &str) -> Vec<serde_json::Value>` that scans text for every unconsumed `{`, and for each attempts to locate its matching `}` by walking forward tracking brace depth (ignoring braces inside unescaped-`\"`-delimited string literals so embedded JSON strings containing `{`/`}` don't desync the count), then tries `serde_json::from_str::<serde_json::Value>` on the resulting substring; keeps only successfully-parsed values that are JSON objects containing a string-valued `$schema` or `$id` key, and advances the scan past the consumed closing brace so a successfully-parsed block's own nested braces are not re-scanned as spurious separate blocks. Rewrite `update(&mut self, entry: &CanonicalTurn)`: if entry.text is Some, call extract_json_blocks on it (entry.text is the only field scanned per CRIT-063 -- tool_results.truncated_output stays out of scope, matching pre-amendment behavior); for each parsed block compute `schema_id = block.get(\"$id\").or_else(|| block.get(\"$schema\")).and_then(|v| v.as_str())`, skip the block if None; look up a validator in self.validators whose `schema_id()` equals it -- if found, `result = if validator.validate(&block) { Valid } else { Invalid }`; if none registered, `result = UnrecognizedSchema`; push `SchemaCitation { schema_id: CompactString::new(schema_id), turn_index: entry.turn_index, result }`. `finalize(self) -> Vec<SchemaCitation>` returns self.extracted unchanged. Export `SchemaValidator` alongside `SchemaExtractorAccumulator` from crates/lumen-analysis/src/accumulators/mod.rs. engine.rs's existing `schema_extractor: SchemaExtractorAccumulator` field/wiring needs no change: both the old and new shapes expose `EntryAccumulator<Output = Vec<SchemaCitation>>` via `.update(turn)`/`.finalize()`, and `SchemaExtractorAccumulator::default()` still constructs cleanly with an empty validators registry (meaning every schema block encountered during process_transcript reports UnrecognizedSchema until a future task registers Lumen's own 5 known-schema validators -- registering real Draft-07 validation for those 5 IDs remains out of scope per the spec's own non_goals)."
+      },
+      "commit_message": "feat(lumen-analysis): redesign SchemaExtractorAccumulator with generic $schema/$id detection and pluggable validator registry (CRIT-063)"
+    },
+    {
+      "id": "TASK-ANALYSIS-004",
+      "title": "CircuitBreakerAccumulator::analyze_transcript Recursive Stall Detection Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-062"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/circuit_breaker.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_circuit_breaker_analyze_transcript_recurses_into_subagents: build a parent CanonicalTranscript whose own turns produce 2 consecutive same-agent-pair SubagentSpawn rounds (no stall), and whose subagents field contains one child CanonicalTranscript whose own turns produce 3 consecutive same-agent-pair rounds (a real stall, its own turn_index relative to the CHILD's turn list). Call CircuitBreakerAccumulator::analyze_transcript(&parent). Assert: report.stalls has exactly 1 entry (the child's, turn_index unchanged -- not renumbered against the parent), report.max_observed_rounds == 3 (the maximum of parent's 2 and child's 3, not their sum), and report.tripped == true (recomputed after merging, since the parent's own 2 rounds alone would not trip). Also add test_circuit_breaker_analyze_transcript_flat_no_subagents asserting analyze_transcript on a transcript with an empty subagents field produces output identical to calling update() per turn then finalize() directly on a fresh accumulator -- analyze_transcript is a strict superset behavior when there is nothing to recurse into, not a divergent one.",
+        "expected_failure": "Fails to compile: CircuitBreakerAccumulator::analyze_transcript does not exist yet.",
+        "implementation": "Add to crates/lumen-analysis/src/accumulators/circuit_breaker.rs: `impl CircuitBreakerAccumulator { pub fn analyze_transcript(transcript: &lumen_model::CanonicalTranscript) -> CircuitBreakerReport { let mut acc = CircuitBreakerAccumulator::default(); for turn in &transcript.turns { acc.update(turn); } let mut report = acc.finalize(); for subagent in &transcript.subagents { let sub_report = CircuitBreakerAccumulator::analyze_transcript(subagent); report.stalls.extend(sub_report.stalls); report.max_observed_rounds = report.max_observed_rounds.max(sub_report.max_observed_rounds); } report.tripped = report.max_observed_rounds > 2; report } }`. Stalls are appended in encounter order (the parent's own stalls first, then each subagent's stalls in transcript.subagents order) -- a flat concatenation, no dedup or reorder, per CRIT-062. report.tripped MUST be recomputed after the merge loop, not reused from the parent-only finalize() call, since a subagent-only stall can trip the merged report even when the parent alone does not. This is a new associated function only -- CircuitBreakerAccumulator remains one of CRIT-LUMEN-060's 18 in-loop EntryAccumulators via its existing unchanged update()/finalize(), still called per top-level turn inside AnalyticsEngine::process_transcript's loop. Wiring AnalyticsEngine to prefer analyze_transcript's recursive output over the current flat per-turn-loop result for AnalysisReport.circuit_breaker is explicitly out of scope for this task -- no acceptance criterion requires that engine-level change."
+      },
+      "commit_message": "feat(lumen-analysis): add CircuitBreakerAccumulator::analyze_transcript recursive subagent stall detection (CRIT-062)"
+    },
+    {
+      "id": "TASK-ANALYSIS-005",
+      "title": "TurnDurationAccumulator Latency Percentile Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-064"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_turn_duration_percentiles asserting p50/p95/avg latency are computed correctly across a known set of assistant turn timestamps.",
+        "expected_failure": "Test fails if percentiles are miscomputed (e.g. off-by-one in sorted-index selection) or non-assistant turns are included.",
+        "implementation": "Validate and harden TurnDurationAccumulator's percentile computation.",
+        "expected_pass": "test_turn_duration_percentiles passes."
+      },
+      "commit_message": "test(lumen-analysis): verify turn duration percentile calculations"
+    },
+    {
+      "id": "TASK-ANALYSIS-022",
+      "title": "Add AttributionSource Enum and CanonicalTurn.attribution Field (Cross-Crate Plumbing)",
+      "covers_criteria": [],
+      "files": [
+        "crates/lumen-model/src/turn.rs",
+        "crates/lumen-session/src/adapters/claude.rs",
+        "crates/lumen-session/src/adapters/agy.rs",
+        "crates/lumen-session/src/adapters/opencode.rs",
+        "crates/lumen-session/src/adapters/codex.rs",
+        "crates/lumen-analysis/benches/accumulator_bench.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs",
+        "crates/lumen-pattern/tests/test_graph_topology.rs",
+        "crates/lumen-model/tests/test_transcript.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Run `cargo check --workspace` after adding the field; the 25 existing CanonicalTurn struct-literal CONSTRUCTION sites (run `grep -rn \"CanonicalTurn {\" --include=*.rs .` then exclude the `pub struct CanonicalTurn {` definition and any `fn ... -> CanonicalTurn {` return-type signature -- those are not construction sites) fail to compile with 'missing field `attribution`' errors.",
+        "expected_failure": "cargo check --workspace fails with E0063 missing-field errors at each of the 25 real construction sites across lumen-model, lumen-session, lumen-analysis, and lumen-pattern.",
+        "implementation": "Add `pub enum AttributionSource { Root, Plugin { name: CompactString }, Skill { name: CompactString, plugin: Option<CompactString> } }` and `pub attribution: Option<AttributionSource>` to CanonicalTurn in crates/lumen-model/src/turn.rs. Add `attribution: None` to each of the 25 existing real construction struct-literal construction sites across lumen-session's 4 adapters, lumen-analysis's bench and test_accumulators.rs, lumen-pattern's test_graph_topology.rs, and lumen-model's turn.rs/test_transcript.rs. No adapter is expected to actually populate real attribution yet -- adapter-level population from Skill tool-call names or plugin-scoped tool namespaces is separate follow-up work not covered by this task, matching the deferral pattern already used for otel_request_ids/otel_span_id in TASK-018/020. The AttributionSource::Agent variant added later this pass (CRIT-147) is deliberately NOT added here -- it is introduced directly by TASK-ANALYSIS-006, the task that also adds the match arm consuming it, to avoid landing a non-exhaustive match in the already-implemented AttributionAccumulator between this task and that one.",
+        "expected_pass": "cargo check --workspace compiles cleanly with the new field defaulted to None at every existing construction site."
+      },
+      "commit_message": "chore(lumen-model): add AttributionSource enum and CanonicalTurn.attribution field"
+    },
+    {
+      "id": "TASK-ANALYSIS-023",
+      "title": "Add subagent_role Field to CanonicalTranscript (Cross-Crate Plumbing)",
+      "covers_criteria": [],
+      "files": [
+        "crates/lumen-model/src/transcript.rs",
+        "crates/lumen-model/tests/test_transcript.rs",
+        "crates/lumen-session/src/adapters/claude.rs",
+        "crates/lumen-session/src/adapters/agy.rs",
+        "crates/lumen-session/src/adapters/opencode.rs",
+        "crates/lumen-session/src/adapters/codex.rs",
+        "crates/lumen-session/src/snapshot.rs",
+        "crates/lumen-session/tests/test_snapshot_merge.rs",
+        "crates/lumen-analysis/benches/accumulator_bench.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs",
+        "crates/lumen-analysis/tests/test_analysis_pipeline.rs",
+        "crates/lumen-pattern/tests/test_graph_topology.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Run `cargo check --workspace` after adding the field -- subagent_role and otel_conversation_id are independent fields with no ordering dependency between them, this task does NOT require TASK-ANALYSIS-018 to have run first (vector:challenger finding, 2026-08-21: an earlier draft wrongly claimed it did, which is false relative to this plan's real task array position -- TASK-ANALYSIS-023 executes well before TASK-ANALYSIS-018); the 16 real CanonicalTranscript struct-literal CONSTRUCTION sites (run `rg -n \"CanonicalTranscript \\{\" --type rust .` then exclude the `pub struct CanonicalTranscript {` definition and the two `-> CanonicalTranscript {` return-type signatures in lumen-session/src/snapshot.rs and lumen-analysis/benches/accumulator_bench.rs -- those are not construction sites) fail to compile with 'missing field `subagent_role`' errors.",
+        "expected_failure": "cargo check --workspace fails with E0063 missing-field errors at each of the 16 real construction sites across lumen-model, lumen-session, lumen-analysis, and lumen-pattern.",
+        "implementation": "Add `pub subagent_role: Option<CompactString>` to CanonicalTranscript in crates/lumen-model/src/transcript.rs. Add `subagent_role: None` to each of the 16 existing real construction sites -- the same 16 physical CanonicalTranscript construction sites TASK-ANALYSIS-018 will LATER touch (that task runs after this one in the plan's real order) to add otel_conversation_id. No adapter is expected to actually populate a real value in this task -- reading the real `<worker>` sibling-filename convention into this field is SPEC-LUMEN-002-SESSION's CRIT-LUMEN-026, tracked in PLAN-LUMEN-002-SESSION, not this plan; this task only makes the field exist on the IR struct so lumen-analysis's AttributionAccumulator (TASK-ANALYSIS-006) has something to key on. TASK-ANALYSIS-006's own test fixture is expected to set a literal `subagent_role: Some(\"reviewer\".into())` on its subagent-transcript test fixture when that later task runs -- this task's job is only to make the field exist and default every site to None.",
+        "expected_pass": "cargo check --workspace compiles cleanly with the new field defaulted to None at every existing construction site."
+      },
+      "commit_message": "chore(lumen-model): add subagent_role field to CanonicalTranscript (CRIT-149)"
+    },
+    {
+      "id": "TASK-ANALYSIS-006",
+      "title": "Subagent-Role-Keyed Attribution & AttributionSource::Agent Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-069",
+        "CRIT-LUMEN-147",
+        "CRIT-LUMEN-148",
+        "CRIT-LUMEN-149"
+      ],
+      "files": [
+        "crates/lumen-model/src/turn.rs",
+        "crates/lumen-analysis/src/accumulators/attribution.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_subagent_and_plugin_skill_attribution: turn A has attribution=Some(AttributionSource::Plugin{name:\"foo\"}) with usage totaling 100 tokens (expect by_plugin[\"foo\"]==100); turn B has attribution=Some(AttributionSource::Skill{name:\"bar\",plugin:None}) with 50 tokens (expect by_skill[\"bar\"]==50); turn C has attribution=None with 30 tokens and turn D has attribution=Some(AttributionSource::Root) with 20 tokens (expect unattributed_tokens==50, covering CRIT-LUMEN-148's None-and-Root-both-unattributed case explicitly); turn E has attribution=Some(AttributionSource::Agent{name:\"reviewer-bot\"}) with 25 tokens (expect by_agent[\"reviewer-bot\"]==25, and unattributed_tokens unaffected by it). Separately, construct a CanonicalTranscript whose subagents field contains one child CanonicalTranscript with subagent_role = Some(\"reviewer\".into()) (requires TASK-ANALYSIS-023) and a single 40-token attributed turn, and assert AnalyticsEngine::process_transcript's AnalysisReport.by_subagent[\"reviewer\"] == 40. Add a second child transcript with subagent_role = None and a single 15-token attributed turn; assert AnalysisReport.by_subagent[\"unknown\"] == 15 (the None-role fallback bucket per CRIT-149).",
+        "expected_failure": "Test fails if attribution buckets are wrong, if None and Root are not both counted as unattributed, if the new Agent variant/by_agent bucket is missing, or if by_subagent is still keyed by session_id instead of subagent_role (with a None-role fallback to \"unknown\").",
+        "implementation": "Requires TASK-ANALYSIS-022's AttributionSource enum/CanonicalTurn.attribution field and TASK-ANALYSIS-023's CanonicalTranscript.subagent_role field to already exist. AttributionAccumulator already exists (crates/lumen-analysis/src/accumulators/attribution.rs) with EntryAccumulator<Output = AttributionMetrics> and by_plugin/by_skill/unattributed_tokens; it is already wired into engine.rs's per-turn loop and AnalysisReport, and by_subagent recursion over transcript.subagents already exists in engine.rs (currently keyed by subagent.session_id). This task's changes: (1) add `Agent { name: CompactString }` as a fourth variant to `AttributionSource` in crates/lumen-model/src/turn.rs. (2) In attribution.rs, add `pub by_agent: BTreeMap<CompactString, u64>` to both AttributionMetrics and AttributionAccumulator, and add a `Some(AttributionSource::Agent { name }) => { *self.by_agent.entry(name.clone()).or_insert(0) += tokens; }` arm to update()'s match (now 4 arms: Plugin, Skill, Agent, and `Some(Root) | None` unchanged as the unattributed catch-all per CRIT-148); thread by_agent through finalize(). (3) In crates/lumen-analysis/src/engine.rs's process_transcript, change the by_subagent insertion key from `CompactString::from(subagent.session_id.as_str())` to `subagent.subagent_role.clone().unwrap_or_else(|| CompactString::const_new(\"unknown\"))` per CRIT-149's None-role fallback rule."
+      },
+      "commit_message": "feat(lumen-analysis): add AttributionSource::Agent variant and key by_subagent on subagent_role (CRIT-147/148/149)"
+    },
+    {
+      "id": "TASK-ANALYSIS-007",
+      "title": "ArtifactsAccumulator Dedup & Empty-Path Skip Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-126",
+        "CRIT-LUMEN-127"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_artifacts_accumulator_dedup_and_skip_empty asserting: FileRead/FileCreate/FileEdit intents with non-empty paths land in files_read/files_created/files_edited respectively while empty-path variants and non-file ToolIntent variants (e.g. CodeSearch, McpCall) are skipped; and a path appearing in two categories (e.g. read then edited) is counted once in total_unique_files while remaining present in both category sets.",
+        "expected_failure": "Test fails if empty-path calls are inserted, if non-file intents leak into any set, or if total_unique_files double-counts/undercounts a path present in multiple categories.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/artifacts.rs and confirm ArtifactsAccumulator::update already guards each FileRead/FileCreate/FileEdit arm with `if !path.is_empty()` (lines 29-38) and that finalize() unions all three BTreeSets before taking .len() for total_unique_files (lines 43-51). No source change is expected; the implementation already satisfies both criteria.",
+        "expected_pass": "test_artifacts_accumulator_dedup_and_skip_empty passes without modifying artifacts.rs."
+      },
+      "commit_message": "test(lumen-analysis): verify artifacts accumulator dedup and empty-path skip (CRIT-126/127)"
+    },
+    {
+      "id": "TASK-ANALYSIS-008",
+      "title": "AutonomyAccumulator Streak Flush & Autonomy Index Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-128",
+        "CRIT-LUMEN-129"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_autonomy_streak_flush_and_index asserting: a System-role turn between two Assistant turns neither breaks nor extends the streak (current_streak keeps accumulating across it), a User turn flushes a non-zero current_streak into streak_lengths and resets it to 0, and after finalize max_autonomous_streak/avg_autonomous_streak/total_streaks reflect the flushed streak_lengths while autonomy_index = assistant_turns / total_turns computed over ALL roles (User+Assistant+ToolResult+System). Also explicitly assert that a TurnRole::ToolResult turn extends current_streak and increments assistant_turns identically to a TurnRole::Assistant turn (both roles share the same match arm in autonomy.rs), not just implicitly via the autonomy_index denominator.",
+        "expected_failure": "Test fails if a System turn resets or extends current_streak, if the trailing open streak is not flushed at finalize, or if autonomy_index's denominator excludes System turns.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/autonomy.rs and confirm the TurnRole::System arm is a no-op (line 40), the finalize() flush-then-compute ordering (lines 44-57), and that total_turns is incremented unconditionally at the top of update() (line 27) before the per-role match. No source change is expected; the implementation already satisfies both criteria.",
+        "expected_pass": "test_autonomy_streak_flush_and_index passes without modifying autonomy.rs."
+      },
+      "commit_message": "test(lumen-analysis): verify autonomy streak flush, System no-op, and full-role autonomy_index (CRIT-128/129)"
+    },
+    {
+      "id": "TASK-ANALYSIS-009",
+      "title": "ContextGrowthAccumulator Missing-Usage Skip & Zero-Growth Floor Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-130",
+        "CRIT-LUMEN-131",
+        "CRIT-LUMEN-132"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_context_growth_skips_missing_usage_and_zero_growth_floor asserting: a turn with usage=None is excluded from turn_count entirely and does not overwrite initial_prompt_tokens; the first usage-bearing turn (previous_prompt_tokens starts at 0) contributes zero to total_growth/max_jump_tokens even though it has a positive prompt_tokens; a later usage turn whose prompt_tokens does not exceed the prior usage turn's also contributes zero growth; and avg_growth_per_turn == 0.0 when turn_count <= 1, computed as total_growth / (turn_count - 1) otherwise.",
+        "expected_failure": "Test fails if a None-usage turn increments turn_count, if the first usage turn's prompt_tokens value is (incorrectly) treated as growth, if a non-increasing prompt_tokens produces a negative/nonzero jump, or if avg_growth_per_turn divides by zero at turn_count<=1.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/context_growth.rs and confirm the `if let Some(usage) = entry.usage` guard skips the entire body (including turn_count) when usage is None (line 30), the growth branch requires both `prompt > previous_prompt_tokens` AND `previous_prompt_tokens > 0` (line 36), and finalize()'s avg_growth guards `turn_count > 1` (line 51). No source change is expected; the implementation already satisfies all three criteria.",
+        "expected_pass": "test_context_growth_skips_missing_usage_and_zero_growth_floor passes without modifying context_growth.rs."
+      },
+      "commit_message": "test(lumen-analysis): verify context growth None-usage skip and zero-growth floor (CRIT-130/131/132)"
+    },
+    {
+      "id": "TASK-ANALYSIS-010",
+      "title": "StatsAccumulator Mutually-Exclusive Roles & UTF-8 Byte Length Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-133",
+        "CRIT-LUMEN-134"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_stats_mutually_exclusive_roles_and_byte_length asserting: exactly one of user_turns/assistant_turns/tool_result_turns/system_turns increments per turn matching entry.role while total_turns increments for every turn; and total_text_characters accumulates text.len() (UTF-8 byte length) for Some(text) turns -- including a multi-byte UTF-8 string where char count and byte length differ -- and adds nothing for a None-text turn.",
+        "expected_failure": "Test fails if two role counters increment for one turn, if total_turns and the per-role sum diverge, or if total_text_characters uses a char count instead of byte length for multi-byte text.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/stats.rs and confirm the exhaustive non-overlapping match on entry.role (lines 35-40) and that `text.len()` is used, not `text.chars().count()` (line 46). No source change is expected; the implementation already satisfies both criteria.",
+        "expected_pass": "test_stats_mutually_exclusive_roles_and_byte_length passes without modifying stats.rs."
+      },
+      "commit_message": "test(lumen-analysis): verify stats mutually-exclusive role counters and UTF-8 byte length (CRIT-133/134)"
+    },
+    {
+      "id": "TASK-ANALYSIS-011",
+      "title": "ToolInventoryAccumulator Last-Call-Wins & Running-Key Error Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-135",
+        "CRIT-LUMEN-136"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_tool_inventory_last_call_wins_and_running_error_key asserting: a turn with multiple tool_calls in list order leaves last_tool_name set to the final call's tool_name; a tool_result with is_error=true increments errors_by_tool keyed by the accumulator's running last_tool_name (not any per-result identifier); and an is_error=true result observed before any tool_call has ever run (last_tool_name still None) is dropped without incrementing any errors_by_tool entry.",
+        "expected_failure": "Test fails if last_tool_name reflects the first call instead of the last, if errors_by_tool is keyed by something other than the running last_tool_name, or if an error is (incorrectly) recorded under a None key.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/tool_inventory.rs and confirm the tool_calls loop unconditionally overwrites last_tool_name each iteration (line 29) and the tool_results loop only increments errors_by_tool inside `if let Some(tool) = &self.last_tool_name` (lines 33-37). No source change is expected; the implementation already satisfies both criteria.",
+        "expected_pass": "test_tool_inventory_last_call_wins_and_running_error_key passes without modifying tool_inventory.rs."
+      },
+      "commit_message": "test(lumen-analysis): verify tool inventory last-call-wins and running-key error attribution (CRIT-135/136)"
+    },
+    {
+      "id": "TASK-ANALYSIS-024",
+      "title": "PermissionModeAccumulator Manual-Approval Detection and Auto-Accept-Rate Tests",
+      "covers_criteria": [
+        "CRIT-LUMEN-172",
+        "CRIT-LUMEN-173"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_permission_mode_manual_approval_and_auto_accept_rate: feed a PermissionModeAccumulator 3 non-User-role turns each with tool_calls.len()==2 (expect auto_accepted_actions to reach 6), a User-role turn with text=Some(\"yes\".into()) (expect manual_approval_prompts==1), a User-role turn with text=Some(\"  proceed  \".into()) (leading/trailing whitespace trimmed before the exact-match check -- expect manual_approval_prompts==2), a User-role turn with text=Some(\"Yes\".into()) (capitalized -- case-sensitive exact match means this must NOT increment either counter), a User-role turn with text=Some(\"looks good to me\".into()) (not one of the four exact strings -- must NOT increment), and a User-role turn with a non-empty tool_calls (2 calls) and no text (per CRIT-172, tool_calls on a User-role turn are never added to auto_accepted_actions regardless of count -- only non-User roles contribute). Assert after finalize(): auto_accepted_actions == 6, manual_approval_prompts == 2, auto_accept_rate == 6.0/8.0. Add a second, separately-constructed freshly-defaulted PermissionModeAccumulator with zero turns processed; assert finalize().auto_accept_rate == 1.0 (CRIT-173's explicit zero-denominator default, not 0.0 or NaN).",
+        "expected_failure": "Test fails if a User-role turn's tool_calls are (incorrectly) added to auto_accepted_actions, if the case-sensitive/exact-match/trim rules for the four approval strings are not honored precisely, or if a fresh accumulator's auto_accept_rate is 0.0 instead of 1.0.",
+        "implementation": "Read crates/lumen-analysis/src/accumulators/permission_mode.rs and confirm update()'s `if entry.role == TurnRole::User` branch only matches `text.trim()` against the four exact literals \"y\"/\"yes\"/\"ok\"/\"proceed\" (case-sensitive, no partial/contains match) and never touches tool_calls, while the `else` branch adds `entry.tool_calls.len()` (not 1) to auto_accepted_actions for any non-User role with a non-empty tool_calls (lines 22-32); confirm finalize()'s zero-denominator branch returns 1.0, not 0.0 (line 37). No source change is expected; the real implementation (already shipped, uncovered by any acceptance criterion until this spec pass) already satisfies both criteria exactly as written.",
+        "expected_pass": "test_permission_mode_manual_approval_and_auto_accept_rate passes without modifying permission_mode.rs."
+      },
+      "commit_message": "test(lumen-analysis): bind tests to already-implemented PermissionModeAccumulator manual-approval and auto-accept-rate logic (CRIT-172/173)"
+    },
+    {
+      "id": "TASK-ANALYSIS-012",
+      "title": "Implement FlowAccumulator with Permission-Break Streak Tracking",
+      "covers_criteria": [
+        "CRIT-LUMEN-137",
+        "CRIT-LUMEN-138"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/flow.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_flow_accumulator_permission_break_and_ratio to test_accumulators.rs: build a FlowAccumulator; feed 3 turns with tool_calls.len()==2 each (streak should reach 6), then a turn with 1 tool_call whose paired tool_results contains is_error=true with error_class = Some(\"Permission_Denied\".into()) (mixed case, must match case-insensitively against \"permission\"), then 2 more turns with tool_calls.len()==1 each. Assert: after the permission-error turn, streak_lengths contains 6 and permission_blocks == 1 (the error turn's own 1 tool_call is NOT added to current_streak per the reset-on-permission-error rule, but IS added to total_tool_calls since that counter is unconditional); finalize() flushes the trailing streak of 2, longest_streak == 6, avg_streak_len == 4.0 ((6+2)/2), and flow_ratio == 8.0/9.0 (sum of streak_lengths >= 2, i.e. 6+2=8, divided by total_tool_calls observed = 2+2+2+1+1+1 = 9).",
+        "expected_failure": "Fails to compile: FlowAccumulator does not exist yet.",
+        "implementation": "Create FlowAccumulator in crates/lumen-analysis/src/accumulators/flow.rs implementing EntryAccumulator<Output = FlowMetrics> with fields current_streak: usize, streak_lengths: Vec<usize>, permission_blocks: usize, total_tool_calls: usize. In update(): always add entry.tool_calls.len() to total_tool_calls; if entry.tool_results contains an entry with is_error && error_class.as_deref().is_some_and(|c| c.to_lowercase().contains(\"permission\")), flush current_streak (if >0) into streak_lengths, increment permission_blocks, reset current_streak to 0 (do NOT add this turn's tool_calls to current_streak); otherwise add entry.tool_calls.len() to current_streak. In finalize(): flush a trailing non-zero current_streak into streak_lengths, then set longest_streak = streak_lengths.iter().max().copied().unwrap_or(0), avg_streak_len = mean of streak_lengths (0.0 if empty), flow_ratio = streak_lengths.iter().filter(|&&n| n >= 2).sum::<usize>() as f64 / total_tool_calls as f64 (0.0 if total_tool_calls == 0). Export FlowAccumulator/FlowMetrics from mod.rs. Wire into engine.rs: add a `flow: FlowAccumulator` field, initialize in new(), call self.flow.update(turn) in the per-turn loop, add `flow: FlowMetrics` to AnalysisReport and set it from self.flow.finalize().",
+        "expected_pass": "test_flow_accumulator_permission_break_and_ratio passes; existing test_analysis_pipeline.rs tests still pass unmodified since flow is an additive report field."
+      },
+      "commit_message": "feat(lumen-analysis): implement FlowAccumulator with permission-break streak tracking (CRIT-137/138)"
+    },
+    {
+      "id": "TASK-ANALYSIS-013",
+      "title": "Implement HookActivityAccumulator over Dedicated HookExecutionEvent Stream",
+      "covers_criteria": [
+        "CRIT-LUMEN-139",
+        "CRIT-LUMEN-140"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/hook_activity.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Replace test_hook_activity_accumulator_block_rate_and_duration's raw-JSON update_raw()/json!({...}) fixture with a dedicated-event fixture: construct 3 HookExecutionEvent values directly -- HookExecutionEvent { hook_event_type: \"PreToolUse\".into(), duration_ms: 100, blocked: false }, HookExecutionEvent { hook_event_type: \"PreToolUse\".into(), duration_ms: 150, blocked: true }, HookExecutionEvent { hook_event_type: \"PostToolUse\".into(), duration_ms: 50, blocked: true } -- and feed each to accumulator.update_from_hook_event(&event). Assert after finalize(): hook_invocations == 3, by_event[\"PreToolUse\"] == 2, by_event[\"PostToolUse\"] == 1, total_duration_ms == 300, blocked_count == 2, block_rate == 2.0/3.0, avg_duration_ms == 100.0. Retain the existing zero-invocation default assertion (block_rate == 0.0, avg_duration_ms == 0.0 on a freshly-defaulted accumulator's finalize()) unchanged.",
+        "expected_failure": "Fails to compile: HookActivityAccumulator::update_from_hook_event and the HookExecutionEvent type do not exist yet; the old update_raw(&serde_json::Value)/RawMessageAccumulator impl no longer matches this criterion's real source.",
+        "implementation": "Rewrite crates/lumen-analysis/src/accumulators/hook_activity.rs: add `pub struct HookExecutionEvent { pub hook_event_type: CompactString, pub duration_ms: u64, pub blocked: bool }` (Debug, Clone, Serialize, Deserialize). Remove the `impl RawMessageAccumulator for HookActivityAccumulator` block entirely -- HookActivityAccumulator no longer scans raw JSON for hookEventName/durationMs/decision/permissionDecision keys, confirmed this session to match zero genuine records in a real Claude Code transcript. Replace it with inherent methods: `impl HookActivityAccumulator { pub fn update_from_hook_event(&mut self, event: &HookExecutionEvent) { self.hook_invocations += 1; *self.by_event.entry(event.hook_event_type.clone()).or_insert(0) += 1; self.total_duration_ms += event.duration_ms; if event.blocked { self.blocked_count += 1; } } pub fn finalize(mut self) -> Self { if self.hook_invocations > 0 { self.block_rate = self.blocked_count as f64 / self.hook_invocations as f64; self.avg_duration_ms = self.total_duration_ms as f64 / self.hook_invocations as f64; } else { self.block_rate = 0.0; self.avg_duration_ms = 0.0; } self } }` (struct fields hook_invocations/by_event/total_duration_ms/blocked_count/block_rate/avg_duration_ms are unchanged from the existing implementation). Remove the now-unused `use crate::traits::RawMessageAccumulator;` import. It remains unwired from engine.rs::process_transcript by design -- no dedicated HookExecutionEvent source is confirmed available from any adapter yet; mapping a real per-orchestrator hook-event source (an OTel execute_hook span, or an adapter-native event such as OpenHands' HookExecutionEvent) into this type is separate follow-up work, matching CRIT-140's all-zero-when-unavailable error condition.",
+        "expected_pass": "test_hook_activity_accumulator_block_rate_and_duration passes with the new HookExecutionEvent-based fixture; engine.rs is unmodified."
+      },
+      "commit_message": "feat(lumen-analysis): rework HookActivityAccumulator to consume dedicated HookExecutionEvent instead of scanning transcript JSON (CRIT-139/140)"
+    },
+    {
+      "id": "TASK-ANALYSIS-014",
+      "title": "Implement PrLinkAccumulator with VCS-vs-Text Source Tracking",
+      "covers_criteria": [
+        "CRIT-LUMEN-141",
+        "CRIT-LUMEN-142"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/pr_link.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_pr_link_accumulator_vcs_vs_text_source to test_accumulators.rs: turn 0 has a tool_call with intent ToolIntent::VersionControl{action:\"push\"} paired (same call_id) with a tool_result whose truncated_output = Some(\"Created https://github.com/acme/widgets/pull/42 successfully\".into()); turn 1 has no tool_calls and text = Some(\"see github.com/acme/widgets/pull/42?tab=files for details\".into()) (same PR restated in text only); turn 2 has entry.text = Some(\"also check github.com/acme/other/pull/7\".into()) with no paired VersionControl tool_call. Assert after finalize(): pr_urls == {\"acme/widgets#42\", \"acme/other#7\"} (deduplicated -- turn 1 does not add a second entry), first_pr_turn_index == Some(0), and linked_via_vcs_tool == 1 (only turn 0's match, sourced from a VersionControl-paired tool_result, counts; turns 1 and 2's text-only matches do not). The github.com marker is the complete v1 known-hosts list (CRIT-141) -- no other host is matched by design; gitlab.com/merge_requests recognition is a documented non_goal.",
+        "expected_failure": "Fails to compile: PrLinkAccumulator does not exist yet.",
+        "implementation": "Create PrLinkAccumulator in crates/lumen-analysis/src/accumulators/pr_link.rs implementing EntryAccumulator<Output = PrLinkMetrics> with fields pr_urls: BTreeSet<CompactString>, first_pr_turn_index: Option<usize>, linked_via_vcs_tool: usize. Write a private helper `fn find_pr_matches(text: &str) -> Vec<(CompactString, CompactString, CompactString)>` (owner, repo, digits) that scans for the literal substring \"github.com/\" (the entire v1 known-hosts list per CRIT-141), then splits the remainder on '/': owner = segment 0, repo = segment 1, expects segment 2 == \"pull\", then takes the leading ASCII-digit run of segment 3 as the PR number (stopping at the first non-digit, discarding any trailing path/query/fragment); skip a candidate if owner or repo is empty or segment 2 != \"pull\" (no regex crate is available in the workspace -- use manual splitting). In update(): build a call_id -> &ToolIntent lookup from entry.tool_calls; for each tool_result, if truncated_output is Some, run find_pr_matches and for each match insert \"{owner}/{repo}#{digits}\" into pr_urls, set first_pr_turn_index = Some(entry.turn_index) if still None, and increment linked_via_vcs_tool iff the result's call_id maps to a tool_call whose intent is ToolIntent::VersionControl; separately run find_pr_matches over entry.text (if Some) and insert matches into pr_urls / set first_pr_turn_index the same way but never increment linked_via_vcs_tool for text-sourced matches. In finalize(): return the three fields as PrLinkMetrics. Export from mod.rs. Wire into engine.rs: add a `pr_link: PrLinkAccumulator` field, initialize, call .update(turn) in the loop, add `pr_link: PrLinkMetrics` to AnalysisReport.",
+        "expected_pass": "test_pr_link_accumulator_vcs_vs_text_source passes."
+      },
+      "commit_message": "feat(lumen-analysis): implement PrLinkAccumulator with VCS-vs-text source tracking (CRIT-141/142)"
+    },
+    {
+      "id": "TASK-ANALYSIS-015",
+      "title": "Implement FuzzyToolsAccumulator with Levenshtein-Clustered Typo Detection",
+      "covers_criteria": [
+        "CRIT-LUMEN-143",
+        "CRIT-LUMEN-144",
+        "CRIT-LUMEN-154"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/fuzzy_tools.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_fuzzy_tools_clustering_and_typo_rate to test_accumulators.rs: feed turns whose tool_calls use tool_name values \"view_file\" x5, \"veiw_file\" x2 (transposition, distance 2, len>=5 so threshold=2 -- variant), \"grep\" x3, \"grpe\" x1 (distance 2 but len<5 so threshold=1 -- must NOT cluster as a variant, becomes its own canonical), and \"bash\" x1. Assert counts and total_tool_calls (== 12) are populated during update() per CRIT-154. After finalize(): one cluster has canonical \"view_file\" (count 5, sorted first by -count) with variant \"veiw_file\" (count 2); \"grep\" (count 3) is its own cluster with no variants (since \"grpe\" fails the len<5/threshold=1 test at distance 2); \"grpe\" and \"bash\" are singleton clusters. typo_call_count == 2 (only veiw_file's count), typo_rate == 2.0/12.0.",
+        "expected_failure": "Fails to compile: FuzzyToolsAccumulator does not exist yet.",
+        "implementation": "Create FuzzyToolsAccumulator in crates/lumen-analysis/src/accumulators/fuzzy_tools.rs implementing EntryAccumulator<Output = FuzzyToolsMetrics> with fields counts: BTreeMap<CompactString, usize>, total_tool_calls: usize. In update(): for each call in entry.tool_calls, increment counts[call.tool_name]; add entry.tool_calls.len() to total_tool_calls once per turn. Write a private `fn levenshtein(a: &str, b: &str) -> usize` using standard O(len_a*len_b) dynamic programming (no new crate dependency -- strsim/levenshtein are not in the workspace Cargo.toml). In finalize(): collect counts into a Vec<(CompactString, usize)>, sort by (Reverse(count), name); walk the sorted list with a visited BTreeSet; for each unvisited name, start a new cluster (canonical = name), mark visited, then scan the REMAINING sorted list in order and assign each still-unvisited candidate as a variant of this cluster (marking it visited) iff 0 < levenshtein(canonical, candidate) <= threshold where threshold = 1 if candidate.len() < 5 else 2; push the finished cluster (ToolCluster { canonical, variants: Vec<(CompactString, usize)> }). Compute typo_call_count as the sum of variant counts across all clusters, and typo_rate = typo_call_count as f64 / total_tool_calls as f64 (0.0 if total_tool_calls == 0). Export FuzzyToolsAccumulator/FuzzyToolsMetrics/ToolCluster from mod.rs. Wire into engine.rs: add a `fuzzy_tools: FuzzyToolsAccumulator` field, initialize, .update(turn) in the loop, add `fuzzy_tools: FuzzyToolsMetrics` to AnalysisReport.",
+        "expected_pass": "test_fuzzy_tools_clustering_and_typo_rate passes."
+      },
+      "commit_message": "feat(lumen-analysis): implement FuzzyToolsAccumulator with Levenshtein-clustered typo detection (CRIT-143/144/154)"
+    },
+    {
+      "id": "TASK-ANALYSIS-016",
+      "title": "Implement TrajectoryDagAccumulator with Intent-to-Node Mapping",
+      "covers_criteria": [
+        "CRIT-LUMEN-145",
+        "CRIT-LUMEN-146"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/trajectory_dag.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_trajectory_dag_intent_mapping_and_had_error to test_accumulators.rs: one turn with 4 tool_calls: FileEdit{path:\"a.rs\",..} (expect is_mutation=true, target_file=Some(\"a.rs\"), target_symbol=None), CodeSearch{query:\"foo\",..} (expect target_symbol=Some(\"foo\"), target_file=None, is_mutation=false), VersionControl{action:\"commit\"} (expect is_mutation=true, target_file=None, target_symbol=None), VersionControl{action:\"status\"} (expect is_mutation=false, target_file=None, target_symbol=None); and 1 tool_result matching the FileEdit call's call_id with is_error=true (expect had_error=true on that node) while the other 3 calls have no matching tool_result in the turn (expect had_error=false, defaulted).",
+        "expected_failure": "Fails to compile: TrajectoryDagAccumulator does not exist yet.",
+        "implementation": "Create TrajectoryDagAccumulator in crates/lumen-analysis/src/accumulators/trajectory_dag.rs implementing EntryAccumulator<Output = Vec<ToolNode>> (mirroring SchemaExtractorAccumulator's Vec-as-Output pattern) with field nodes: Vec<ToolNode>, where ToolNode { call_id: CompactString, tool_name: CompactString, target_file: Option<CompactString>, target_symbol: Option<CompactString>, is_mutation: bool, had_error: bool }. In update(): for each call in entry.tool_calls, match call.intent: FileRead{path,..}|FileEdit{path,..}|FileCreate{path} => target_file=Some(path.clone()), target_symbol=None, is_mutation = matches!(call.intent, ToolIntent::FileEdit{..} | ToolIntent::FileCreate{..}); CodeSearch{query,..} => target_file=None, target_symbol=Some(query.clone()), is_mutation=false; VersionControl{action} if action == \"commit\" || action == \"push\" => target_file=None, target_symbol=None, is_mutation=true; all other intents (FileDiscovery, TestExecution, SubagentSpawn, McpCall, Other, VersionControl with any other action) => target_file=None, target_symbol=None, is_mutation=false. Look up entry.tool_results for a result with result.call_id == call.call_id in the SAME turn; had_error = that result's is_error, or false if no match. Push the ToolNode. finalize() returns self.nodes. Export ToolNode/TrajectoryDagAccumulator from mod.rs. Wire into engine.rs: add a `trajectory_dag: TrajectoryDagAccumulator` field, initialize, .update(turn) in the loop, add `trajectory_dag: Vec<ToolNode>` to AnalysisReport.",
+        "expected_pass": "test_trajectory_dag_intent_mapping_and_had_error passes."
+      },
+      "commit_message": "feat(lumen-analysis): implement TrajectoryDagAccumulator with intent-to-node mapping (CRIT-145/146)"
+    },
+    {
+      "id": "TASK-ANALYSIS-017",
+      "title": "Implement TimelineAccumulator for Assistant Streaks and Idle-Gap Detection",
+      "covers_criteria": [
+        "CRIT-LUMEN-150",
+        "CRIT-LUMEN-151"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/timeline.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_timeline_accumulator_assistant_streaks_and_idle_gaps to test_accumulators.rs: 3 consecutive Assistant-role turns at t0, t0+1s, t0+2s (streak of 3), then a User-role turn at t0+2s+6min (>5min gap since the last Assistant turn -- expect idle_gap_count==1, and the streak closes: assistant_streak_count==1, longest_streak_turns==3), then 2 more consecutive Assistant turns each 1s apart (no new idle gap, gap < 5min). Assert longest_idle_gap_ms/total_idle_ms equal the single 6-minute gap in milliseconds, and last_timestamp always advances to the most recent turn's timestamp even across the small sub-5-minute gaps.",
+        "expected_failure": "Fails to compile: TimelineAccumulator does not exist yet.",
+        "implementation": "Create TimelineAccumulator in crates/lumen-analysis/src/accumulators/timeline.rs implementing EntryAccumulator<Output = Self> (fields double as the report, mirroring HookActivityAccumulator's self-as-output shape) with fields current_streak: usize, assistant_streak_count: usize, longest_streak_turns: usize, idle_gap_count: usize, total_idle_ms: i64, longest_idle_gap_ms: i64, last_timestamp: Option<DateTime<Utc>>. In update(): if entry.role == TurnRole::Assistant, current_streak += 1; else if current_streak > 0, close it -- assistant_streak_count += 1, longest_streak_turns = longest_streak_turns.max(current_streak), current_streak = 0 (per CRIT-150 this close only happens on an observed role transition; do not add a second close at finalize -- the criterion does not specify a trailing-streak flush the way autonomy/flow do). Then, independent of the role branch: if let Some(prev) = self.last_timestamp, compute gap = (entry.timestamp - prev).num_milliseconds(); if gap > 300_000 (5 minutes), idle_gap_count += 1, total_idle_ms += gap, longest_idle_gap_ms = longest_idle_gap_ms.max(gap); unconditionally set self.last_timestamp = Some(entry.timestamp) regardless of gap size. finalize(self) -> Self returns self unchanged. Export from mod.rs. Wire into engine.rs: add a `timeline: TimelineAccumulator` field, initialize, .update(turn) in the loop, add `timeline: TimelineAccumulator` to AnalysisReport.",
+        "expected_pass": "test_timeline_accumulator_assistant_streaks_and_idle_gaps passes."
+      },
+      "commit_message": "feat(lumen-analysis): implement TimelineAccumulator for assistant streaks and idle-gap detection (CRIT-150/151)"
+    },
+    {
+      "id": "TASK-ANALYSIS-018",
+      "title": "Replace otel_request_ids with otel_conversation_id on CanonicalTranscript (Cross-Crate Plumbing)",
+      "covers_criteria": [],
+      "files": [
+        "crates/lumen-model/src/transcript.rs",
+        "crates/lumen-model/tests/test_transcript.rs",
+        "crates/lumen-session/src/adapters/claude.rs",
+        "crates/lumen-session/src/adapters/agy.rs",
+        "crates/lumen-session/src/adapters/opencode.rs",
+        "crates/lumen-session/src/adapters/codex.rs",
+        "crates/lumen-session/src/snapshot.rs",
+        "crates/lumen-session/tests/test_snapshot_merge.rs",
+        "crates/lumen-analysis/benches/accumulator_bench.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs",
+        "crates/lumen-analysis/tests/test_analysis_pipeline.rs",
+        "crates/lumen-pattern/tests/test_graph_topology.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Run `cargo check --workspace` after replacing the field; the 16 real CanonicalTranscript struct-literal CONSTRUCTION sites (run `rg -n \"CanonicalTranscript \\{\" --type rust .` then exclude the `pub struct CanonicalTranscript {` definition and the two `-> CanonicalTranscript {` return-type signatures in lumen-session/src/snapshot.rs and lumen-analysis/benches/accumulator_bench.rs -- those are not construction sites) fail to compile with 'missing field `otel_conversation_id`' / unknown-field `otel_request_ids` errors.",
+        "expected_failure": "cargo check --workspace fails with E0063/E0560 errors at each of the 16 real construction sites across lumen-model, lumen-session, lumen-analysis, and lumen-pattern.",
+        "implementation": "In crates/lumen-model/src/transcript.rs, replace `pub otel_request_ids: SmallVec<[CompactString; 2]>` with `pub otel_conversation_id: Option<CompactString>` on CanonicalTranscript (SmallVec remains imported/used elsewhere in this file for extracted_schemas/detected_anomalies, so the import is not removed). At each of the 16 real construction sites, replace `otel_request_ids: SmallVec::new()` with `otel_conversation_id: None`. Per CRIT-LUMEN-152's error_conditions, a fallback UUID/trace id/content hash SHALL NOT be synthesized as a substitute, so None is the only correct default absent a real source-native conversation/thread id; no adapter is expected to actually populate a real value in this task (reading e.g. Claude Code's requestId or Codex's thread_id into this field is separate per-adapter follow-up work).",
+        "expected_pass": "cargo check --workspace compiles cleanly with the new field defaulted to None at every existing construction site."
+      },
+      "commit_message": "chore(lumen-model): replace otel_request_ids with singular otel_conversation_id on CanonicalTranscript (CRIT-152 field-shape correction)"
+    },
+    {
+      "id": "TASK-ANALYSIS-019",
+      "title": "Copy otel_conversation_id Through to AnalysisReport (Plain Field Passthrough, No Accumulator)",
+      "covers_criteria": [
+        "CRIT-LUMEN-152"
+      ],
+      "files": [
+        "crates/lumen-analysis/src/accumulators/otel_correlation.rs",
+        "crates/lumen-analysis/src/accumulators/mod.rs",
+        "crates/lumen-analysis/src/engine.rs",
+        "crates/lumen-analysis/tests/test_accumulators.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Replace test_otel_correlation_reads_transcript_field's OtelCorrelationAccumulator::finalize(&transcript) call (which asserted session_id/request_ids/request_id_count on a dedicated OtelCorrelationReport) with a direct assertion on AnalyticsEngine's own output: construct a minimal CanonicalTranscript with otel_conversation_id = Some(\"conv-abc\".into()); call AnalyticsEngine::new().process_transcript(&transcript); assert report.otel_conversation_id == Some(CompactString::from(\"conv-abc\")). Add a second assertion with otel_conversation_id = None on the input transcript, asserting report.otel_conversation_id == None (no synthesized fallback).",
+        "expected_failure": "Fails to compile: OtelCorrelationAccumulator/OtelCorrelationReport no longer exist (this task deletes them) and AnalysisReport has no otel_conversation_id field yet; requires TASK-ANALYSIS-018's field to already exist on CanonicalTranscript.",
+        "implementation": "Delete crates/lumen-analysis/src/accumulators/otel_correlation.rs entirely -- CRIT-152 is now a zero-logic field copy, not a pass-participating component, per the spec's own reasoning ('no FURTHER aggregation happens at THIS layer'). Remove `pub mod otel_correlation;` and `pub use otel_correlation::{OtelCorrelationAccumulator, OtelCorrelationReport};` from crates/lumen-analysis/src/accumulators/mod.rs. In crates/lumen-analysis/src/engine.rs: remove the `OtelCorrelationAccumulator, OtelCorrelationReport` import, remove the `otel_correlation: OtelCorrelationReport` field from AnalysisReport and replace it with `pub otel_conversation_id: Option<CompactString>`, and in process_transcript's AnalysisReport construction replace `otel_correlation: OtelCorrelationAccumulator::finalize(transcript),` with `otel_conversation_id: transcript.otel_conversation_id.clone(),` -- a direct field read, no accumulator call.",
+        "expected_pass": "The rewritten otel_conversation_id passthrough test passes; no OtelCorrelationAccumulator/OtelCorrelationReport symbol remains anywhere in the crate."
+      },
+      "commit_message": "refactor(lumen-analysis): remove OtelCorrelationAccumulator, copy otel_conversation_id through as a plain field (CRIT-152)"
+    },
+    {
+      "id": "TASK-ANALYSIS-003",
+      "title": "Pipeline Single-Pass & Zero-Allocation Performance Test",
+      "covers_criteria": [
+        "CRIT-LUMEN-060"
+      ],
+      "files": [
+        "crates/lumen-analysis/tests/test_analysis_pipeline.rs"
+      ],
+      "tdd_steps": {
+        "failing_test": "Add test_single_pass_zero_allocation asserting the 18 EntryAccumulator-based accumulators (13 already-wired going into this task: the original 11 pre-existing in engine.rs, plus schema_extractor -- already wired per TASK-002's own text, not a new insertion point -- plus attribution -- already wired per TASK-006's own text, only its by_subagent keying logic changed, not its wiring -- and 5 genuinely newly-wired this pass: flow via TASK-012, pr_link via TASK-014, fuzzy_tools via TASK-015, trajectory_dag via TASK-016, timeline via TASK-017; 13+5=18 total. span_mapping is no longer among them since CRIT-LUMEN-153/SpanMappingAccumulator was removed. Corrected narrative, vector:challenger finding 2026-08-21: an earlier draft mistakenly counted schema_extractor and attribution as 'newly engine-wired' when both were already wired -- the final total of 18 was right, the breakdown was wrong, which could mislead whoever audits engine.rs diffs during this task into expecting 6 new insertion points when only 5 exist.) process a session stream in one linear pass via AnalyticsEngine::process_transcript, using a global allocator guard (or allocation-counting harness) to assert zero heap allocations occur in the per-turn inner loop. Separately assert (via a comment or a second small test) that token_usage and hook_activity are intentionally NOT invoked by process_transcript's per-turn loop -- token_usage is a RawMessageAccumulator over raw pre-parse JSON, and hook_activity (per TASK-013's redesign) consumes a dedicated HookExecutionEvent stream via update_from_hook_event -- neither fits inside the CanonicalTurn-based per-turn loop. otel_conversation_id is explicitly NOT part of this count at all -- it is a plain field copy from CanonicalTranscript (CRIT-152), not an accumulator, so there is nothing to exempt or include.",
+        "expected_failure": "Test fails if any of the 18 in-loop accumulators allocates inside its update() hot path, if process_transcript iterates the turn stream more than once, or if any of the 7 newly-wired accumulators (schema_extractor/attribution/flow/pr_link/fuzzy_tools/trajectory_dag/timeline) is missing from AnalysisReport's fields.",
+        "implementation": "Audit AnalyticsEngine::process_transcript and each of the 18 in-loop accumulators' update() for stray allocations (e.g. temporary Vec/String construction) in the inner loop; fix any found. Confirm token_usage and hook_activity remain outside process_transcript's per-turn loop by design, and confirm no SpanMappingAccumulator/span_mapping accumulator, field, or import remains anywhere in lumen-analysis (CRIT-LUMEN-153 was removed this pass; this plan no longer contains a task implementing it).",
+        "expected_pass": "test_single_pass_zero_allocation passes with 0 recorded allocations during the timed pass."
+      },
+      "commit_message": "test(lumen-analysis): assert single-pass O(N) zero-allocation invariant across 18 accumulators (count corrected 19->18)"
+    }
+  ]
+}

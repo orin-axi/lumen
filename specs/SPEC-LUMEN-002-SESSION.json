@@ -4,17 +4,13 @@
   "id": "SPEC-LUMEN-002-SESSION",
   "purpose": "Defines the zero-copy streaming ingestion engine, auto-fingerprinting detector, and orchestrator adapters for parsing Claude Code, Antigravity (AGY), Codex, and OpenCode session logs into CanonicalTranscript representations.",
   "scope": "Covers crates/lumen-session: SessionAdapter trait, AdapterCapabilities, fingerprint detection, ClaudeCodeAdapter, AgyAdapter, CodexAdapter, OpenCodeAdapter, PreCompact snapshot merge, and IngestionError.",
-  "non_goals": [
-    "Database persistence, schema migrations, or queue supervisors (delegated to session-daemon).",
-    "Evaluation assertion grading or pass/fail decisions (delegated to prism-grader)."
-  ],
   "api_surface": [
     {
       "name": "SessionAdapter",
       "signature": "pub trait SessionAdapter: Send + Sync { fn name(&self) -> &'static str; fn matches_fingerprint(&self, sample: &str) -> bool; fn capabilities(&self) -> AdapterCapabilities; fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError>; }",
       "description": "Streaming parser trait implemented by orchestrator adapters to project newline-delimited logs into CanonicalTranscript.",
       "error_conditions": [
-        "IngestionError::MalformedJson if JSON line fails to parse",
+        "IngestionError::MalformedJson is reserved for a whole-input failure (e.g. the reader yields non-UTF8 bytes before any line boundary is found, or the sample is empty when a non-empty stream was expected) -- a single malformed LINE within an otherwise-readable stream is never this error; it is skipped and recorded per CRIT-LUMEN-025 instead, and parse_stream continues.",
         "IngestionError::UnrecognizedFormat if log sample does not match known orchestrators"
       ]
     },
@@ -37,20 +33,28 @@
       "signature": "pub fn merge_precompact_snapshots(final_transcript: CanonicalTranscript, snapshots: &[TurnTokenUsage]) -> CanonicalTranscript",
       "description": "Applies the max() cumulative token merge invariant across pre-compaction snapshots to prevent double-counting on compacted sessions.",
       "error_conditions": []
+    },
+    {
+      "name": "synthetic_50mb_session",
+      "signature": "pub fn synthetic_50mb_session(orchestrator: OrchestratorKind, seed: u64) -> impl BufRead",
+      "description": "Deterministic (seeded) fixture generator in crates/lumen-fixtures that programmatically expands a real corpus template (e.g. real_claude_session_dump()) to at least 50MB, in-memory, for CRIT-LUMEN-029 benchmarking without requiring a checked-in binary fixture. Return type intentionally deviates from the other corpus/*.rs fixtures (which return &'static str literals): this fixture is generated/owned data, not a static string, since a 50MB literal is impractical to check in.",
+      "error_conditions": []
     }
   ],
   "acceptance_criteria": [
     {
       "id": "CRIT-LUMEN-020",
-      "criterion": "WHEN a session file starts with Claude Code permission or mode headers, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::ClaudeCode in under 1 millisecond.",
+      "criterion": "WHEN a session file's first 2048 bytes contain the JSON keys \"sessionId\" and \"parentUuid\" together (real, confirmed top-level fields present on Claude Code JSONL entries -- verified this session against this conversation's own real transcript and the lumen-fixtures corpus), THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::ClaudeCode in under 1 millisecond.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Audit finding (2026-08-20): this was the one detection criterion never tightened to literal bytes while every sibling (021/106/107/166) was. Tightened using fields already confirmed real and used elsewhere this session (lumen-fixtures's real_claude_session_dump fixture carries sessionId/parentUuid per line). Whether these two keys specifically appear within the file's FIRST line/2048 bytes (as opposed to being real fields present somewhere in the file generally) has not been re-verified with a fresh byte-offset check -- flagged as a residual, narrower open item rather than left as vague prose."
     },
     {
       "id": "CRIT-LUMEN-021",
-      "criterion": "WHEN a session file starts with AGY step_index and source headers, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::Antigravity in under 1 millisecond.",
+      "criterion": "WHEN a session file's first 2048 bytes contain the JSON key \"step_index\" alongside a \"source\" value of \"USER_EXPLICIT\" or \"MODEL\", THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::Antigravity in under 1 millisecond.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "The field names step_index/source were already correct, but the exact value vocabulary (USER_EXPLICIT|MODEL, not e.g. user|assistant) had never been checked against a real file until this session -- verified directly by reading a live ~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl on 2026-08-20. Tightened from a vague \"AGY headers\" description to the exact bytes now confirmed real."
     },
     {
       "id": "CRIT-LUMEN-022",
@@ -60,33 +64,37 @@
     },
     {
       "id": "CRIT-LUMEN-023",
-      "criterion": "WHEN ClaudeCodeAdapter parses message.usage, THE SYSTEM SHALL extract input_tokens, output_tokens, cache_creation_input_tokens, and cache_read_input_tokens.",
+      "criterion": "WHEN ClaudeCodeAdapter parses message.usage, THE SYSTEM SHALL extract input_tokens, output_tokens, cache_creation_input_tokens, and cache_read_input_tokens; a missing (absent) usage or missing individual field defaults to 0 via ordinary Option handling. Note: input_tokens/output_tokens are NOT among the fields CRIT-LUMEN-163 requires explicit-JSON-null rejection for -- ccusage's real corruption-check list (the source of CRIT-LUMEN-163) does not include them, so no real evidence exists that Claude Code ever emits them as explicit null; if that changes, CRIT-LUMEN-163's field list should be extended, not this criterion.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Audit finding (2026-08-20): CRIT-LUMEN-163's explicit-null-rejection list omits input_tokens/output_tokens, which this criterion requires extracting -- left genuinely undefined for a null value on those two fields. Clarified rather than silently expanding CRIT-163's field list without real evidence those two fields are ever null in practice."
     },
     {
       "id": "CRIT-LUMEN-024",
-      "criterion": "WHEN merging pre-compaction snapshots, THE SYSTEM SHALL compute input_tokens = max(final_input, max(snapshot_inputs)) and cache_read_tokens = max(final_cache_read, max(snapshot_cache_reads)).",
+      "criterion": "WHEN merging pre-compaction snapshots, THE SYSTEM SHALL compute input_tokens = max(final_input, max(snapshot_inputs)) and cache_read_tokens = max(final_cache_read, max(snapshot_cache_reads)); IF snapshots is empty, THE SYSTEM SHALL return final_transcript unchanged (an empty max-set contributes nothing, not zero).",
       "is_error_case": false,
       "judgment_call": false
     },
     {
       "id": "CRIT-LUMEN-025",
-      "criterion": "IF a JSONL log contains corrupted, truncated, or non-UTF8 lines, THE SYSTEM SHALL skip the malformed line, record a warning, and continue parsing without panicking.",
+      "criterion": "IF a JSONL log contains corrupted, truncated, or non-UTF8 lines, THE SYSTEM SHALL skip the malformed line, record a parse-failure entry (session_id, line number, raw byte offset, and the parse error) that SURVIVES the parse_stream call -- returned alongside or attached to the CanonicalTranscript, so a caller can inspect it, not merely logged to stderr and discarded -- and continue parsing without panicking. Durable cross-process persistence of that record (e.g. to a SQLite store) is out of scope for lumen-session itself; see non_goals.",
       "is_error_case": true,
-      "judgment_call": false
+      "judgment_call": true,
+      "reasoning": "The prior wording (\"record a warning\") was verified this session to describe behavior no adapter actually implements -- claude.rs:60-66 silently `continue`s with no warning recorded at all, and ccusage's real adapters (common/jsonl.rs) do the same industry-wide. Audit finding (2026-08-20): \"durable, queryable\" overclaimed relative to what this criterion's own reasoning permitted (an in-memory Vec) and relative to non_goals' delegation to a crate (\"session-daemon\") that doesn't exist in this workspace -- the real crates are lumen-store (SPEC-LUMEN-003-STORE) and lumen-daemon (SPEC-LUMEN-004-DAEMON), now named correctly in non_goals below. Reworded to require only what lumen-session itself can own: a record that survives the call, not a claim about cross-process durability this crate doesn't control."
     },
     {
       "id": "CRIT-LUMEN-026",
-      "criterion": "WHEN subagent metadata files (*.meta.json) exist in the subagents/ directory, THE SYSTEM SHALL link each child subagent transcript to its parent tool_use_id and record its spawnDepth.",
+      "criterion": "WHEN ClaudeCodeAdapter encounters a real top-level is_sidechain: bool field on a JSONL entry, THE SYSTEM SHALL treat entries with is_sidechain=true as belonging to a subagent/parallel-conversation branch distinct from the main chain; WHEN a sibling subagents/<worker>.jsonl file exists alongside a session's main transcript file, THE SYSTEM SHALL parse it as a child CanonicalTranscript linked via parent_session_id to the parent session AND set that child transcript's subagent_role to the real <worker> path segment (see SPEC-LUMEN-001-MODEL's CanonicalTranscript.subagent_role), so SPEC-LUMEN-005-ANALYSIS's AttributionAccumulator recursion (CRIT-LUMEN-149) has a concrete role to key on. An is_sidechain=true entry with no corresponding subagents/<worker>.jsonl file, or a subagents/<worker>.jsonl file with no is_sidechain entries referencing it, SHALL NOT be treated as an error -- THE SYSTEM SHALL simply leave that entry/file unlinked (no parent_session_id/subagent_role assignment from this rule) rather than failing the parse.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": true,
+      "reasoning": "The prior wording (*.meta.json files carrying tool_use_id/spawnDepth) was never verified against real data and does not match what was actually confirmed this session: ccusage's real, cross-validated Claude adapter keys subagent detection on a real top-level is_sidechain boolean field PLUS separate sibling subagents/<worker>.jsonl transcript files -- not a *.meta.json sidecar. Linkage now targets CanonicalTranscript.parent_session_id, which already exists in the IR (crates/lumen-model/src/transcript.rs:14), rather than a tool_use_id/spawnDepth pair that was never confirmed to exist in real data. Audit finding (2026-08-20) added the orphaned-entry/orphaned-file non-error clause, previously unspecified."
     },
     {
       "id": "CRIT-LUMEN-027",
-      "criterion": "WHEN AgyAdapter parses a PLANNER_RESPONSE step containing thinking blocks, THE SYSTEM SHALL extract the reasoning text into CanonicalTurn.text.",
+      "criterion": "WHEN AgyAdapter parses a step whose type is \"PLANNER_RESPONSE\", THE SYSTEM SHALL extract that step's thinking field into CanonicalTurn.text when present, and SHALL extract each entry of that step's tool_calls array (name plus args, where each arg value is itself a JSON-encoded string requiring a second parse pass -- e.g. \"DirectoryPath\":\"\\\"/Users/gabe/...\\\"\") into CanonicalToolCall entries. IF the second (inner) JSON parse pass on an arg value fails, THE SYSTEM SHALL retain that arg's raw, unparsed string value rather than dropping the argument or failing the whole tool_call/entry.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Confirmed correct in shape by direct read of a real transcript.jsonl this session (2026-08-20) -- PLANNER_RESPONSE entries do carry step_index/source/type/status/created_at plus thinking and tool_calls[]. Extended from thinking-only to also require tool_calls extraction (previously undocumented) and to flag the double-JSON-encoding of tool_call args as a real, confirmed parsing gotcha, not a hypothetical one. Audit finding (2026-08-20) added the inner-parse-failure fallback, previously unspecified."
     },
     {
       "id": "CRIT-LUMEN-028",
@@ -96,10 +104,131 @@
     },
     {
       "id": "CRIT-LUMEN-029",
-      "criterion": "WHEN memory-mapped file parsing is requested on a 50MB session file, THE SYSTEM SHALL parse all turns in under 35 milliseconds.",
+      "criterion": "WHEN memory-mapped file parsing is requested on a 50MB session file, THE SYSTEM SHALL parse all turns in under 35 milliseconds, as measured by the CRIT-LUMEN-116 criterion benchmark (crates/lumen-session/benches/) running on whatever hardware executes it -- this is a relative regression-guard bound tracked against that benchmark's own recorded baseline over time, not an absolute cross-machine hardware guarantee (no specific CI/dev hardware spec is asserted).",
       "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Audit finding (2026-08-20): the bound had no stated hardware/CI baseline, making it non-reproducible across machines as literally worded. Scoped honestly as a relative regression guard tied to CRIT-LUMEN-116's own benchmark rather than fabricating a specific hardware spec that was never actually pinned down."
+    },
+    {
+      "id": "CRIT-LUMEN-106",
+      "criterion": "WHEN a session file's first 2048 bytes contain the JSON substring \"event_msg\" or \"response_item\" alongside a top-level \"type\" key, and no ClaudeCode or Antigravity fingerprint markers matched first, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::Codex via detect_orchestrator.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "The prior wording (choices/prompt_tokens/thread_id) fingerprinted a raw OpenAI Chat Completions API shape confirmed this session, via a real local ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl file, to not exist in real Codex CLI output -- real rollout lines use the envelope {timestamp, ordinal, type, payload} with type values event_msg/response_item/custom_tool_call/function_call, cross-validated independently by ccusage's real Rust Codex adapter (byte-matches literally on \"type\":\"event_msg\"/\"type\":\"token_count\")."
+    },
+    {
+      "id": "CRIT-LUMEN-107",
+      "criterion": "WHEN a session file's first 2048 bytes begin with the 16-byte SQLite file magic header \"SQLite format 3\\0\", and no ClaudeCode, Antigravity, or Codex fingerprint markers matched first, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::OpenCode via detect_orchestrator against the current, SQLite-backed OpenCode generation (session/message/part/event tables).",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "The prior wording (\"action\":\"run\"/\"observation\":) fingerprinted an action/observation/source JSONL shape confirmed this session, via CodeBurn's own source comment plus direct inspection of a real local ~/.local/share/opencode/opencode.db, to have zero basis in any real OpenCode version, ever. Current OpenCode is SQLite-backed, not JSONL, so byte-content fingerprinting must key on the SQLite file magic rather than a JSON substring."
+    },
+    {
+      "id": "CRIT-LUMEN-108",
+      "criterion": "WHEN CodexAdapter::matches_fingerprint or OpenCodeAdapter::matches_fingerprint is invoked on any sample, THE SYSTEM SHALL return exactly the boolean that detect_orchestrator(sample) == Some(OrchestratorKind::Codex) (respectively Some(OrchestratorKind::OpenCode)) would return, so the two independently-coded detection paths cannot drift apart.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "The prior known-drift gap (spaced vs. unspaced action:run) is moot now that CRIT-LUMEN-107's ground truth is the SQLite magic header rather than an action/observation substring -- this criterion is restated as the general drift-prevention rule without a carried-forward bug."
+    },
+    {
+      "id": "CRIT-LUMEN-109",
+      "criterion": "WHEN CodexAdapter::parse_stream reads a line whose \"type\" is \"event_msg\" and whose payload.type is \"item_completed\", THE SYSTEM SHALL append one CanonicalTurn with turn.role set to TurnRole::User when payload.item.type == \"UserMessage\", TurnRole::Assistant when payload.item.type == \"AgentMessage\", or TurnRole::ToolResult when payload.item.type == \"CommandExecution\" or \"Reasoning\"; FOR any other payload.item.type value, THE SYSTEM SHALL append the turn with TurnRole::System rather than dropping it or erroring, since a future/uncatalogued item type is a real possibility, not a malformed-line case. THE SYSTEM SHALL set turn.text from the item's text content when present, and SHALL set CanonicalTranscript.session_id from the thread_id carried on this same item_completed payload (thread_id does not appear at the envelope's top level in real Codex output). Replaces the prior stub, which always returned session_id=\"codex-session\" with zero turns regardless of input, and the prior criterion's wrong assumption that turns derive from a choices[] array.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Rewritten against the real Codex CLI rollout format, verified this session both against a live local ~/.codex/sessions/.../rollout-*.jsonl file and cross-validated via ccusage's real Rust Codex adapter (which reaches the same event_msg/item_completed structure). Codex also emits a second, distinct custom_tool_call/custom_tool_call_output (and separately function_call/function_call_output) pair for tool invocations, not covered by this criterion -- tracked as a follow-up, not fabricated here without a directly-observed example of that specific pair's full shape. Audit finding (2026-08-20) added the explicit TurnRole::System default for uncatalogued item types, previously silently unspecified."
+    },
+    {
+      "id": "CRIT-LUMEN-110",
+      "criterion": "WHEN CodexAdapter::parse_stream reads a line whose \"type\" is \"event_msg\" and whose payload.type is \"token_count\" AND that payload carries a total_token_usage object, THE SYSTEM SHALL read it (not a per-line delta) and set TokenEconomics.input_tokens/output_tokens to the LATEST such reading observed (last-write, not summed -- Codex's token_count events are already cumulative running totals, unlike OpenCodeAdapter's per-line deltas), keeping reasoning_output_tokens (when present on the payload) as a value distinct from output_tokens rather than folded into it. IF a token_count payload lacks total_token_usage, THE SYSTEM SHALL leave input_tokens/output_tokens at their last-known value (no update, not a reset to zero). Replaces the prior stub's unconditional TokenEconomics::calculate(0, 0, 0, 0, ...) and the prior criterion's wrong assumption of an OpenAI-style prompt_tokens/completion_tokens shape summed across lines.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Rewritten against the real Codex CLI format (event_msg/token_count carrying a cumulative total_token_usage/last_token_usage pair, verified directly against a live local rollout file). The cumulative-not-summed distinction matters: naively summing per-line token_count values as if they were deltas (the OpenCodeAdapter pattern) would massively over-count, since Codex already reports running totals. reasoning_output_tokens as a distinct field is a new finding from ccusage's real Codex adapter, not previously represented anywhere in Lumen's model. Audit finding (2026-08-20) added the missing-total_token_usage fallback, previously unspecified."
+    },
+    {
+      "id": "CRIT-LUMEN-162",
+      "criterion": "WHEN CodexAdapter::parse_stream reads a line whose \"type\" is \"event_msg\" and whose payload.type is \"thread_settings_applied\", THE SYSTEM SHALL record payload.thread_settings.service_tier (e.g. \"Standard\", \"Fast\") on the transcript's economics/attribution data so downstream pricing lookups can select the correct cost tier for that session's remaining turns.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "New finding from ccusage's real Codex adapter (rust/adapters/codex/src/parser.rs): a real, per-session cost-tier concept Lumen's model has no equivalent of today. Exact field placement (which struct carries service_tier) is left to implementation; the criterion establishes that this signal must be captured, not dropped."
+    },
+    {
+      "id": "CRIT-LUMEN-111",
+      "criterion": "WHEN OpenCodeAdapter processes a session's rows from the real message table (current SQLite generation, ~/.local/share/opencode/opencode.db-shaped), THE SYSTEM SHALL sum that table's precomputed tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, and tokens_cache_write columns (and the message table's own cost column, stored as TokenEconomics.provided_cost_usd per CRIT-LUMEN-160) into transcript-level TokenEconomics -- these are already-aggregated per-message values maintained by OpenCode itself, not deltas requiring independent computation.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Rewritten against real column names confirmed this session via direct sqlite3 inspection of a live opencode.db (message table carries precomputed cost/tokens_* columns) -- replaces the prior invented accumulated_cost/input_tokens JSONL-line shape, which matched no real OpenCode format. The message/part table's exact column-level layout for turn role and tool-call content (needed for CRIT-LUMEN-112 through 114 below) was not fully characterized this session -- only the token/cost columns were directly verified -- so those criteria are marked as needing one further direct sqlite3 inspection pass before implementation, rather than having their exact column names guessed here."
+    },
+    {
+      "id": "CRIT-LUMEN-112",
+      "criterion": "WHEN OpenCodeAdapter processes the current SQLite generation, THE SYSTEM SHALL derive each CanonicalTurn's role and text by joining the message and part tables on session/message id (part holds the message's content payload per real schema; the exact column names for role and text/tool-call discrimination require one further direct sqlite3 inspection of a live opencode.db before this criterion can specify literal field names -- tracked as an open item, not fabricated here).",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Honestly incomplete rather than guessed: this session confirmed the real table names (session/message/part/event) and the token/cost column names on message, via direct sqlite3 inspection, but did not inspect part's column layout closely enough to specify exact role/tool-call field names without repeating the same unverified-inference mistake this whole pass exists to correct."
+    },
+    {
+      "id": "CRIT-LUMEN-113",
+      "criterion": "WHEN OpenCodeAdapter processes the LEGACY, pre-1.1, file-based generation (storage/session|message|part/*.json, one JSON object per file rather than SQLite), THE SYSTEM SHALL apply the same message/part join semantics as CRIT-LUMEN-112 adapted to file-based storage, sharing one role/type shape confirmed common to both generations by ccusage's real adapter source -- exact field names carry the same open-item caveat as CRIT-LUMEN-112 pending direct inspection of a real legacy-generation sample file (none was available on this machine, which only has the current SQLite generation installed).",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "The legacy generation could not be directly verified this session since only a current-generation opencode.db exists on this machine -- flagged honestly as unverified rather than reusing the old, already-disproven action/observation shape."
+    },
+    {
+      "id": "CRIT-LUMEN-114",
+      "criterion": "WHEN OpenCodeAdapter processes a session (either generation), THE SYSTEM SHALL derive tool-call error state from the event table (real table confirmed present in the current SQLite schema) rather than a JSONL \"observation\" field, which does not exist in any real OpenCode format checked this session.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Replaces the prior invented \"observation\" field with the real event table now confirmed present -- exact column-level detail for error/is_error carries the same open-item caveat as CRIT-LUMEN-112."
+    },
+    {
+      "id": "CRIT-LUMEN-115",
+      "criterion": "IF a row/record in an OpenCode source (SQLite query result or legacy JSON file) is malformed or fails to deserialize into the expected shape, THE SYSTEM SHALL skip it and record a durable, queryable parse-failure entry (per the redesigned CRIT-LUMEN-025) before continuing -- this is CRIT-LUMEN-025's system-wide malformed-record requirement made explicitly testable against OpenCodeAdapter.",
+      "is_error_case": true,
       "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-116",
+      "criterion": "THE SYSTEM SHALL provide a synthetic_50mb_session(orchestrator: OrchestratorKind, seed: u64) fixture generator in crates/lumen-fixtures that deterministically expands a real corpus template to at least 50MB without any binary fixture file being checked into the repository, and a criterion benchmark in crates/lumen-session/benches/ SHALL assert that parse_stream over that generated fixture completes in under 35 milliseconds, providing the concrete measurement path CRIT-LUMEN-029 currently lacks. NOTE: this benchmarks parse_stream's actual current reader path (a buffered line reader); it does not itself require memory-mapped I/O, since memmap2 is a declared lumen-session dependency (Cargo.toml) that is not yet used by any parsing code path -- CRIT-LUMEN-029's \"memory-mapped\" framing is aspirational relative to the current implementation, a pre-existing gap outside this amendment's scope to resolve.",
+      "is_error_case": false,
+      "judgment_call": true
+    },
+    {
+      "id": "CRIT-LUMEN-163",
+      "criterion": "IF a ClaudeCodeAdapter JSONL entry has one of id, cwd, model, sessionId, requestId, version, costUSD, or either cache-token field present but explicitly set to JSON null (not merely absent), THE SYSTEM SHALL treat that entry as malformed per CRIT-LUMEN-025 rather than treating the null as a valid empty/zero value.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "reasoning": "New, real corruption mode confirmed via ccusage's cross-validated Claude adapter (has_unsupported_null_field, lib.rs:868): Claude Code itself sometimes emits these fields as explicit JSON null, not just omits them -- never previously represented in Lumen's model, which would silently misparse null as a default/zero value instead of rejecting the line."
+    },
+    {
+      "id": "CRIT-LUMEN-164",
+      "criterion": "WHEN ClaudeCodeAdapter parses a session's entries, THE SYSTEM SHALL set CanonicalTranscript.otel_conversation_id (a SINGULAR, session-level field -- see the redesigned otel_conversation_id in SPEC-LUMEN-005-ANALYSIS) from the FIRST non-sidechain entry's requestId encountered in file order that carries one; once set from that entry, THE SYSTEM SHALL NOT overwrite it from any later entry's requestId, even when later entries carry a different requestId value (requestId is a real, per-API-call field, not a stable per-conversation value, so a session's entries legitimately carry many different requestId values across turns -- this rule is the explicit reduction from many-per-session to one-per-session). Sidechain entries (is_sidechain=true) are skipped entirely when searching for this first value, matching the real tie-break preference confirmed in ccusage's Claude adapter (should_replace_deduped_entry, lib.rs:539: non-sidechain always wins over sidechain).",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "requestId is a real, already-present top-level field (confirmed via ccusage's cross-validated adapter), a cleaner native answer than the otel_request_ids side-channel-scanning design it replaces. Audit finding (2026-08-20), confirmed as a real internal contradiction: the prior wording only specified a tie-break for the sidechain-vs-non-sidechain collision case, but requestId is per-API-call, not per-conversation, so a full precedence rule was needed to reduce potentially-many-per-session values down to the one singular otel_conversation_id SPEC-LUMEN-005-ANALYSIS's field actually requires -- 'first non-sidechain requestId wins, never overwritten' is that rule, now stated explicitly rather than left implicit."
+    },
+    {
+      "id": "CRIT-LUMEN-165",
+      "criterion": "WHEN AgyAdapter locates a session's real transcript, THE SYSTEM SHALL read from ~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript.jsonl directly (or an equivalent already-resolved path) rather than through the ~/.gemini/logs/<id>.jsonl symlink layer, since the symlink is a convenience flattening view, not a guaranteed-present source in every install. THE SYSTEM SHALL treat the sibling ~/.gemini/logs/<id>.json (no \"l\") summary file -- a structurally different, precomputed Gemini-API role/parts[].text shape -- as out of scope for this adapter (see non_goals).",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Provenance fully resolved this session: Google discontinued Gemini CLI for Antigravity CLI (2026-05-19/06-18 transition per Google's own developer blog), and ~/.gemini/logs/*.jsonl was confirmed via direct ls -la on this machine to be a symlink farm into antigravity-cli/brain/, not an independent source."
+    },
+    {
+      "id": "CRIT-LUMEN-166",
+      "criterion": "WHEN a session file's first 2048 bytes contain the JSON key \"usageMetadata\" with nested promptTokenCount/candidatesTokenCount/thoughtsTokenCount/cachedContentTokenCount/totalTokenCount fields, and no ClaudeCode, Antigravity, Codex, or OpenCode fingerprint markers matched first, THE SYSTEM SHALL identify the orchestrator as OrchestratorKind::Qwen via detect_orchestrator, reading real session files from ~/.qwen/projects/<project>/chats/<file>.jsonl.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "New orchestrator support: ccusage's real Qwen adapter confirms Qwen Code is a real, distinct, actively-used format whose usage fields are named identically to Google's Gemini API response schema (confirming Qwen Code's CLI lineage is Gemini-CLI-derived) -- previously entirely unrepresented; OrchestratorKind (crates/lumen-model/src/transcript.rs:27-34) needs a new Qwen variant added alongside the existing ClaudeCode/Antigravity/Codex/OpenCode/Kimi/GenericOtel set."
     }
+  ],
+  "non_goals": [
+    "Database persistence, schema migrations, or queue supervisors, INCLUDING durable cross-process storage of the parse-failure records CRIT-LUMEN-025 requires -- delegated to lumen-store (SPEC-LUMEN-003-STORE) and lumen-daemon (SPEC-LUMEN-004-DAEMON), not a crate named \"session-daemon\", which does not exist in this workspace (audit-corrected, 2026-08-20).",
+    "Evaluation assertion grading or pass/fail decisions (delegated to prism-grader).",
+    "Checking a physical 50MB-or-larger binary session-log fixture into the git repository for CRIT-LUMEN-029 benchmarking; the fixture is instead generated deterministically at benchmark time by crates/lumen-fixtures's synthetic_50mb_session generator.",
+    "Parsing the sibling ~/.gemini/logs/<id>.json (no \"l\") Antigravity summary file (a structurally different, precomputed Gemini API role/parts[].text shape) -- CRIT-LUMEN-165 targets the real transcript.jsonl only.",
+    "Full Kimi adapter criteria: OrchestratorKind::Kimi already exists in lumen-model but this pass does not add fingerprint/parsing criteria for it, despite real format details now known (~/.kimi/sessions/<group>/<session>/wire.jsonl, two incompatible wire-schemas actively coexisting, timestamp-gated model/pricing cutoffs) -- scoped out of this pass, tracked as a follow-up.",
+    "QwenAdapter turn/usage parsing criteria: CRIT-LUMEN-166 adds only fingerprint detection (OrchestratorKind::Qwen) this pass -- detect_orchestrator can now return a Qwen variant that no adapter yet claims to fully parse (turn extraction, usageMetadata token mapping). Parallel gap to the Kimi entry above, acknowledged explicitly (audit finding, 2026-08-20) rather than left implicit; a follow-up pass adds the parsing criteria.",
+    "Full byte-level fingerprint/parse criteria for the OpenCode legacy (pre-1.1) file-based generation and the exact part-table column layout for the current SQLite generation -- no real sample of either was available to inspect directly this session (see CRIT-LUMEN-112/113's reasoning); a follow-up pass with real sample data is required before those criteria's literal field names can be finalized.",
+    "Real Codex custom_tool_call/custom_tool_call_output and function_call/function_call_output tool-invocation parsing -- confirmed to exist as a second, distinct pair alongside the item_completed turn structure CRIT-LUMEN-109 covers, but not directly observed in full shape this session."
   ],
   "linked_requirement": "REQ-LUMEN-002",
   "linked_research": "RES-LUMEN-001",

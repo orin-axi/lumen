@@ -3,17 +3,19 @@
   "$id": "spec@1",
   "id": "SPEC-LUMEN-001-MODEL",
   "purpose": "Defines the canonical domain primitives, token economics, pricing matrix, and intermediate representation (IR) types for the Lumen session intelligence and Prism evaluation platforms.",
-  "scope": "Covers crates/lumen-model: CanonicalTranscript, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage, ModelPricing, TokenEconomics, ModelTokenSummary, ExecutionTiming, TrajectoryAnomaly, and SchemaCitation.",
+  "scope": "Covers crates/lumen-model: CanonicalTranscript, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage, PricingRate, PricingTable, TokenEconomics, ModelTokenSummary, ExecutionTiming, TrajectoryAnomaly, and SchemaCitation. ModelPricing (the hardcoded per-model match-statement type) is removed from scope this pass, replaced by PricingTable -- see PricingRate/PricingTable's api_surface entry.",
   "non_goals": [
     "Log file ingestion, disk I/O, or format parsing (delegated to lumen-session).",
     "Stateful metric accumulation or anomaly detection algorithms (delegated to lumen-analysis and lumen-pattern).",
-    "Evaluation assertion grading or test execution (delegated to prism-grader)."
+    "Evaluation assertion grading or test execution (delegated to prism-grader).",
+    "Extended-TTL (1-hour) prompt cache pricing tiers for the six non-Anthropic providers (GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini): none of these providers publish a selectable 1h-cache rate today, so no criterion can be written that is verifiable against a real published price. TokenEconomics.ephemeral_1h_tokens is intentionally unpopulated (hardcoded to 0) pending a future Anthropic-specific 1h-cache criterion, which would be scoped separately since Anthropic is the only provider with a real, selectable extended-TTL cache tier.",
+    "Re-verifying the specific per-provider dollar rate VALUES in PricingTable::seed() against current published pricing: this pass corrects only the pricing ARCHITECTURE (hardcoded match statement -> versioned, timestamped rate table), carrying forward the exact same dollar amounts CRIT-LUMEN-002 through 105 already specify. Those values were already flagged in an earlier research pass as possibly stale versus real published rates for the six non-Anthropic providers; this pass does not re-research or correct them -- a dedicated pricing-refresh pass (ideally sourced from a live feed per OpenRouter/LiteLLM, researched 2026-08-20) is required separately before the seed values themselves can be trusted as accurate."
   ],
   "api_surface": [
     {
       "name": "CanonicalTranscript",
-      "signature": "pub struct CanonicalTranscript { pub session_id: CompactString, pub parent_session_id: Option<CompactString>, pub orchestrator: OrchestratorKind, pub model_family: CompactString, pub timing: ExecutionTiming, pub economics: TokenEconomics, pub turns: Vec<CanonicalTurn>, pub subagents: Vec<CanonicalTranscript>, pub extracted_schemas: SmallVec<[SchemaCitation; 4]>, pub detected_anomalies: SmallVec<[TrajectoryAnomaly; 4]> }",
-      "description": "Universal normalized transcript representation holding the complete conversation tree, subagent hierarchy, token economics, and extracted schema artifacts.",
+      "signature": "pub struct CanonicalTranscript { pub session_id: CompactString, pub parent_session_id: Option<CompactString>, pub subagent_role: Option<CompactString>, pub orchestrator: OrchestratorKind, pub model_family: CompactString, pub timing: ExecutionTiming, pub economics: TokenEconomics, pub turns: Vec<CanonicalTurn>, pub subagents: Vec<CanonicalTranscript>, pub extracted_schemas: SmallVec<[SchemaCitation; 4]>, pub detected_anomalies: SmallVec<[TrajectoryAnomaly; 4]> }",
+      "description": "Universal normalized transcript representation holding the complete conversation tree, subagent hierarchy, token economics, and extracted schema artifacts. subagent_role (new this pass) is Some(<worker>) for a transcript reached via CanonicalTranscript.subagents, where <worker> is the real path segment from the sibling subagents/<worker>.jsonl filename that produced it (SPEC-LUMEN-002-SESSION's CRIT-LUMEN-026), and None for a root/non-subagent transcript -- this is the concrete source SPEC-LUMEN-005-ANALYSIS's by_subagent (CRIT-LUMEN-149) keys on, closing a previously-undefined 'subagent role' reference (audit finding, 2026-08-20). Deliberately NOT a call_id correlation back to the parent's specific ToolIntent::SubagentSpawn invocation -- no real data confirming that correlation is directly available was found this session, so this field only claims what the real sibling-filename convention actually supports.",
       "error_conditions": [
         "Deserialization error if JSON payload violates field types"
       ]
@@ -25,19 +27,29 @@
       "error_conditions": []
     },
     {
-      "name": "ModelPricing",
-      "signature": "pub struct ModelPricing { pub input_base_per_m: f64, pub cache_write_per_m: f64, pub cache_read_per_m: f64, pub output_per_m: f64 }; impl ModelPricing { pub const CLAUDE_3_5_SONNET: Self; pub const CLAUDE_3_5_HAIKU: Self; pub const CLAUDE_OPUS: Self; pub const GPT_4O: Self; pub const DEEPSEEK_R1: Self; pub const QWEN_2_5_CODER: Self; pub const KIMI_K1_5: Self; pub const GLM_4_PLUS: Self; pub const GEMINI_2_0_FLASH: Self; pub const GEMINI_2_0_PRO: Self; pub fn from_model_name(name: &str) -> Self; pub fn compute_cost(&self, usage: &TurnTokenUsage) -> f64; pub fn compute_baseline_cost(&self, usage: &TurnTokenUsage) -> f64; }",
-      "description": "Pricing rate matrix computing exact USD costs per turn and cold-cache baseline costs across major commercial LLM model families.",
+      "name": "ToolIntent",
+      "signature": "pub enum ToolIntent { FileRead { path: CompactString, line_range: Option<(usize, usize)> }, FileEdit { path: CompactString, lines_added: usize, lines_removed: usize }, FileCreate { path: CompactString }, CodeSearch { tool: CompactString, query: CompactString, is_ast: bool }, FileDiscovery { tool: CompactString, pattern: CompactString }, TestExecution { runner: CompactString, target_suite: Option<CompactString> }, VersionControl { action: CompactString }, SubagentSpawn { agent_type: CompactString, description: CompactString }, McpCall { server: CompactString, method: CompactString }, Other { raw_name: CompactString } }",
+      "description": "The closed set of typed tool-call intents every adapter normalizes raw tool invocations into. Named in this spec's scope since its original authoring but never given its own api_surface entry -- CRIT-LUMEN-022 (SPEC-LUMEN-002-SESSION) and several SPEC-LUMEN-005/006 criteria reference ToolIntent variants with no definition anywhere to bind against (audit finding, 2026-08-20). This entry is the ground truth those criteria bind to.",
+      "error_conditions": []
+    },
+    {
+      "name": "PricingRate / PricingTable",
+      "signature": "pub enum TokenRateKind { Input, CacheWrite, CacheRead, Output }; pub struct PricingRate { pub model: CompactString, pub tier: Option<CompactString>, pub kind: TokenRateKind, pub rate_per_m: f64, pub effective_from: DateTime<Utc>, pub effective_until: Option<DateTime<Utc>> }; pub struct PricingTable { pub rates: Vec<PricingRate> }; impl PricingTable { pub fn seed() -> Self; pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64; }",
+      "description": "Versioned exchange-rate-style pricing lookup: rate_for selects the PricingRate row for (model, tier, kind) whose [effective_from, effective_until) window contains as_of -- the token-generating turn's own timestamp, never the current wall-clock time -- so historical costs stay correct after a provider changes prices. Replaces the removed ModelPricing hardcoded match statement entirely (ModelPricing is out of scope this pass, see scope); PricingTable::seed() ships the same rate values ModelPricing previously hardcoded, now as dated rows instead of match arms. model matching normalizes raw provider-versioned strings (e.g. \"claude-3-5-sonnet-20241022\") to the seeded canonical keys (e.g. \"claude-3-5-sonnet\") the same way CRIT-LUMEN-002 through 105's per-provider recognition already requires -- this pass does not change that normalization behavior, only where the resulting rate is looked up. tier is Some(\"fast\")/Some(\"standard\")/etc. for orchestrators reporting a cost-tier signal (e.g. Codex's service_tier, SPEC-LUMEN-002-SESSION's CRIT-LUMEN-162) and None otherwise; a None-tier row is the default used when the caller has no tier signal to pass. Cross-validated against Langfuse's real Price/PricingTier tables and ccusage's timestamp-gated Kimi pricing cutoff (both real systems, researched 2026-08-20).",
       "error_conditions": [
-        "Defaults to CLAUDE_3_5_SONNET rates if model string is unrecognized"
+        "IF the requested model string matches no PricingRate row's model field at all (genuinely unrecognized model), THE SYSTEM SHALL fall back to CLAUDE_3_5_SONNET's seeded rate for the requested kind at as_of (CRIT-LUMEN-008).",
+        "IF the requested model string DOES match at least one PricingRate row (recognized model) but no row exists for the specific (tier, kind, as_of) combination requested -- e.g. a provider with no seeded CacheWrite rate at all -- THE SYSTEM SHALL return 0.0 for that kind rather than substituting another model's rate (CRIT-LUMEN-161); this is distinct from the unrecognized-model case above.",
+        "IF more than one row matches the same (model, tier, kind) with overlapping or identical effective_from windows (an authoring error), THE SYSTEM SHALL select the row with the latest effective_from, and among ties on effective_from, the row appearing LAST in PricingTable.rates' vector order (deterministic, since row declaration order is stable)."
       ]
     },
     {
       "name": "TokenEconomics",
-      "signature": "pub struct TokenEconomics { pub input_tokens: u64, pub output_tokens: u64, pub cache_creation_tokens: u64, pub cache_read_tokens: u64, pub ephemeral_5m_tokens: u64, pub ephemeral_1h_tokens: u64, pub cache_hit_ratio: f32, pub total_cost_usd: f64, pub baseline_cost_no_cache_usd: f64, pub net_savings_usd: f64, pub efficiency_multiplier: f32, pub per_model: HashMap<CompactString, ModelTokenSummary> }; impl TokenEconomics { pub fn calculate(input_tokens: u64, output_tokens: u64, cache_creation_tokens: u64, cache_read_tokens: u64, model_name: &str) -> Self; }",
-      "description": "Aggregated session economics calculating exact financial costs, prompt cache hit ratios, net USD savings, and financial efficiency multipliers.",
+      "signature": "pub struct TurnPricingInput { pub usage: TurnTokenUsage, pub timestamp: DateTime<Utc>, pub tier: Option<CompactString> }; pub struct TokenEconomics { pub input_tokens: u64, pub output_tokens: u64, pub cache_creation_tokens: u64, pub cache_read_tokens: u64, pub ephemeral_5m_tokens: u64, pub ephemeral_1h_tokens: u64, pub cache_hit_ratio: f32, pub total_cost_usd: f64, pub provided_cost_usd: Option<f64>, pub baseline_cost_no_cache_usd: f64, pub net_savings_usd: f64, pub efficiency_multiplier: f32, pub per_model: HashMap<CompactString, ModelTokenSummary> }; impl TokenEconomics { pub fn calculate(turns: &[TurnPricingInput], model_name: &str, pricing: &PricingTable, provided_cost_usd: Option<f64>) -> Self; }",
+      "description": "Aggregated session economics. calculate takes one TurnPricingInput per turn (not pre-summed session totals) and computes total_cost_usd as the SUM of each turn's cost, each priced via PricingTable::rate_for at THAT turn's own timestamp/tier -- required so a session whose turns straddle a price-change boundary (or a Codex service_tier change) is priced correctly on both sides of the boundary, which a single session-level as_of could not represent. input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens on the returned TokenEconomics remain the simple sums across all turns (unaffected by the pricing redesign). provided_cost_usd carries the source's own reported cost (e.g. Claude Code's real costUSD field, confirmed present via ccusage) verbatim alongside the independently computed total_cost_usd, mirroring Langfuse's raw-vs-canonicalized twin-field pattern -- enables drift detection, never used to override total_cost_usd.",
       "error_conditions": [
-        "Sets cache_hit_ratio to 0.0 and efficiency_multiplier to 1.0 if total prompt tokens is zero"
+        "Sets cache_hit_ratio to 0.0 and efficiency_multiplier to 1.0 if total prompt tokens is zero",
+        "Sets provided_cost_usd to None when the source record carries no provider-reported cost field, never defaulting it to 0.0",
+        "An empty turns slice returns a zeroed TokenEconomics (0 cost, 0 tokens), not an error"
       ]
     }
   ],
@@ -68,9 +80,10 @@
     },
     {
       "id": "CRIT-LUMEN-005",
-      "criterion": "WHEN computing prompt cache hit ratio H, THE SYSTEM SHALL calculate H = (cache_read_tokens / (input_tokens + cache_creation_tokens + cache_read_tokens)) * 100.0.",
+      "criterion": "WHEN computing cache_hit_ratio H, THE SYSTEM SHALL calculate H = (cache_read_tokens / (input_tokens + cache_creation_tokens + cache_read_tokens)) * 100.0 -- H is deliberately stored on a 0-100 percentage scale despite the field's \"ratio\" name (confirmed matching the real implementation, crates/lumen-model/src/economics.rs:45-46), not a 0.0-1.0 fraction.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Audit finding (2026-08-20): the field name (\"ratio\") and the *100.0 formula appeared to contradict each other with no clarifying text. Verified directly against real code that the percentage scale is the actual, deliberate, already-implemented behavior -- the spec text is amended to state this explicitly rather than the formula being changed."
     },
     {
       "id": "CRIT-LUMEN-006",
@@ -86,9 +99,10 @@
     },
     {
       "id": "CRIT-LUMEN-008",
-      "criterion": "WHEN an unrecognized model string is passed to ModelPricing::from_model_name, THE SYSTEM SHALL default to Claude 3.5 Sonnet pricing rates.",
+      "criterion": "WHEN PricingTable::rate_for is invoked with a model string that matches NO PricingRate row's model field at all (genuinely unrecognized, not merely missing one specific kind -- see CRIT-LUMEN-161 for that distinct case), THE SYSTEM SHALL default to CLAUDE_3_5_SONNET's seeded rates for the requested kind at as_of.",
       "is_error_case": true,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Rewritten off ModelPricing::from_model_name, which is removed this pass (see scope), onto PricingTable::rate_for -- the single entry point now responsible for all fallback behavior. Audit finding (2026-08-20): the original wording left two independent, potentially-diverging unrecognized-model code paths (this criterion and the new CRIT-LUMEN-161) with no criterion reconciling them; this rewrite plus CRIT-LUMEN-161's narrowing to a distinct case closes that gap by construction -- there is exactly one fallback entry point now, with two clearly distinct trigger conditions."
     },
     {
       "id": "CRIT-LUMEN-009",
@@ -101,6 +115,68 @@
       "criterion": "WHEN TurnTokenUsage calculates prompt_tokens, THE SYSTEM SHALL return the sum of input_tokens, cache_creation_tokens, and cache_read_tokens.",
       "is_error_case": false,
       "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-099",
+      "criterion": "WHEN computing Claude Opus costs, THE SYSTEM SHALL bill uncached inputs at $15.00/M, cache creation writes at $18.75/M (1.25x), cache reads at $1.50/M (0.10x), and output tokens at $75.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-100",
+      "criterion": "WHEN computing GPT-4o costs, THE SYSTEM SHALL bill uncached inputs at $2.50/M, cache creation writes at $2.50/M (same as the uncached input rate), cache reads at $1.25/M, and output tokens at $10.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-101",
+      "criterion": "WHEN computing DeepSeek R1 costs, THE SYSTEM SHALL bill uncached inputs at $0.55/M, cache creation writes at $0.55/M (same as the uncached input rate), cache reads at $0.14/M, and output tokens at $2.19/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-102",
+      "criterion": "WHEN computing Kimi K1.5 costs, THE SYSTEM SHALL bill uncached inputs at $0.50/M, cache creation writes at $0.50/M (same as the uncached input rate), cache reads at $0.10/M, and output tokens at $2.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-103",
+      "criterion": "WHEN computing GLM-4-Plus costs, THE SYSTEM SHALL bill uncached inputs at $1.40/M, cache creation writes at $1.40/M (same as the uncached input rate), cache reads at $0.20/M, and output tokens at $1.40/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-104",
+      "criterion": "WHEN computing Gemini 2.0 Flash costs, THE SYSTEM SHALL bill uncached inputs at $0.10/M, cache creation writes at $0.10/M (same as the uncached input rate), cache reads at $0.025/M, and output tokens at $0.40/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-105",
+      "criterion": "WHEN computing Gemini 2.0 Pro costs, THE SYSTEM SHALL bill uncached inputs at $1.25/M, cache creation writes at $1.25/M (same as the uncached input rate), cache reads at $0.30/M, and output tokens at $5.00/M.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-159",
+      "criterion": "WHEN PricingTable::rate_for(model, tier, kind, as_of) is invoked for a RECOGNIZED model (at least one row exists with a matching model field), THE SYSTEM SHALL select the PricingRate row for that (model, tier, kind) whose effective_from is less than or equal to as_of AND whose effective_until is either None or strictly greater than as_of, using the CALLING TURN's own recorded timestamp as as_of -- never the current wall-clock time -- so that a session's cost reflects the rate in effect when the tokens were actually billed, not today's rate. IF more than one row matches with overlapping/identical windows (an authoring error, not a normal case), THE SYSTEM SHALL select the row with the latest effective_from, and among ties on effective_from, the row appearing LAST in PricingTable.rates' declaration order.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Establishes the exchange-rate lookup semantics for the recognized-model case specifically (CRIT-LUMEN-008 and CRIT-LUMEN-161 cover the two distinct unrecognized/missing-kind fallback cases). Audit fixes (2026-08-20): (1) the tie-break was previously incomplete for identical effective_from values -- added a fully deterministic secondary key (vector declaration order); (2) TokenEconomics::calculate now takes per-turn TurnPricingInput (see api_surface) specifically so as_of can be each turn's own timestamp, not one value for an entire multi-turn session that might straddle a price-change boundary -- the prior single-as_of signature could not represent that case correctly regardless of how this criterion was worded, so the API itself was fixed, not just this criterion's text. Design confirmed directly by the user (2026-08-20) using an FX historical-rate-lookup analogy, cross-validated against Langfuse's real Price/PricingTier schema and ccusage's Kimi timestamp-gated pricing cutoff."
+    },
+    {
+      "id": "CRIT-LUMEN-160",
+      "criterion": "IF a raw usage record supplied to TokenEconomics::calculate carries a provider-reported cost value (e.g. Claude Code's real costUSD field), THE SYSTEM SHALL store it verbatim in TokenEconomics.provided_cost_usd; THE SYSTEM SHALL NOT use provided_cost_usd to override, blend with, or short-circuit the independently computed total_cost_usd -- the two fields exist to be compared for drift, not merged.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-161",
+      "criterion": "IF PricingTable::rate_for is invoked for a RECOGNIZED model (at least one row matches the model field) that has no PricingRate row at all for the specific (tier, kind) requested -- e.g. Qwen 2.5 Coder (CRIT-LUMEN-004), which has no seeded CacheWrite rate for any tier or time window -- THE SYSTEM SHALL return 0.0 for that kind, and SHALL NOT substitute CLAUDE_3_5_SONNET's or any other model's rate for it.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "reasoning": "Audit finding (2026-08-20): the prior wording conflated this case (a real, recognized provider that genuinely never bills for a given token kind) with CRIT-LUMEN-008's genuinely-unrecognized-model case, both falling back to Sonnet's rate -- which would incorrectly apply Anthropic cache-write pricing to a provider (e.g. Qwen) that may not bill cache writes at all. Split into two distinct, independently testable criteria: CRIT-LUMEN-008 (model wholly unrecognized -> Sonnet fallback) and this one (model recognized, this specific kind absent -> 0.0)."
     }
   ],
   "linked_requirement": "REQ-LUMEN-001",

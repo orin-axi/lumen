@@ -2,14 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "spec@1",
   "id": "SPEC-LUMEN-005-ANALYSIS",
-  "purpose": "Defines the 22 single-pass streaming accumulators and telemetry analytics engine for computing behavioral, economic, and operational metrics across agent transcripts in O(N) linear time.",
-  "scope": "Covers crates/lumen-analysis: RawMessageAccumulator and EntryAccumulator traits, 22 accumulators (token_usage, circuit_breaker, mcp_affinity, flow, turn_duration, tool_inventory, context_growth, permission_mode, hook_activity, api_health, pr_link, fuzzy_tools, attribution, self_correction, autonomy, schema_extractor, stats, timeline, artifacts, otel_correlation, span_mapping, trajectory_dag), and subagent attribution.",
+  "purpose": "Defines the 20 single-pass streaming accumulators and telemetry analytics engine for computing behavioral, economic, and operational metrics across agent transcripts in O(N) linear time.",
+  "scope": "Covers crates/lumen-analysis: RawMessageAccumulator and EntryAccumulator traits, 20 accumulators (token_usage, circuit_breaker, mcp_affinity, flow, turn_duration, tool_inventory, context_growth, permission_mode, hook_activity, api_health, pr_link, fuzzy_tools, attribution, self_correction, autonomy, schema_extractor, stats, timeline, artifacts, trajectory_dag), and subagent attribution. otel_correlation and span_mapping were removed in the 2026-08-20 real-data correction pass: otel_conversation_id (see api_surface) is now a plain field on CanonicalTranscript read directly rather than warranting a dedicated accumulator, and SpanMappingAccumulator was found to duplicate the pre-existing call_id field once compared directly against the real OTel semantic-conventions-genai registry.",
   "non_goals": [
     "Log file format parsing or I/O streaming (handled by lumen-session).",
     "Tarjan SCC cycle graph algorithms (handled by lumen-pattern).",
     "Writing to disk or external databases (pure computation engine).",
     "Genuine Draft-07 JSON Schema payload validation in SchemaExtractorAccumulator -- deferred pending resolution of where the 5 known schemas (spec@1, plan@1, changeset@1, eval-report@1, finding-report@1) should live relative to this repo, and creation of the still-nonexistent eval-report@1 schema.",
-    "Arena-based string interning or other zero-copy accumulation architecture to eliminate the inherent BTreeMap/BTreeSet/Vec ownership allocations in artifacts.rs, tool_inventory.rs, fuzzy_tools.rs, attribution.rs, and trajectory_dag.rs -- these are necessary to build deduplicated/aggregated output at all, not avoidable waste, and eliminating them is a substantially larger architectural investment than this spec contemplated."
+    "Arena-based string interning or other zero-copy accumulation architecture to eliminate the inherent BTreeMap/BTreeSet/Vec ownership allocations in artifacts.rs, tool_inventory.rs, fuzzy_tools.rs, attribution.rs, and trajectory_dag.rs -- these are necessary to build deduplicated/aggregated output at all, not avoidable waste, and eliminating them is a substantially larger architectural investment than this spec contemplated.",
+    "GitLab merge_requests URL recognition in PrLinkAccumulator (CRIT-LUMEN-141) -- github.com/pull/{digits} is the complete v1 known-hosts pattern; GitLab support is a real, deferred gap, not silently absent.",
+    "Full output-struct/finalize()/edge-case specification for TurnDurationAccumulator (CRIT-LUMEN-064), ApiHealthAccumulator (065), McpAffinityAccumulator (066), and SelfCorrectionAccumulator (067) -- each currently has exactly one terse update-time criterion with no finalize criterion or zero-denominator edge case, unlike the richer pattern established for ContextGrowthAccumulator/FlowAccumulator. Pre-existing gap, not introduced by this pass; flagged for a dedicated follow-up (audit finding, 2026-08-20)."
   ],
   "api_surface": [
     {
@@ -33,69 +35,59 @@
       "error_conditions": []
     },
     {
+      "name": "PermissionModeAccumulator",
+      "signature": "pub struct PermissionMetrics { pub auto_accepted_actions: usize, pub manual_approval_prompts: usize, pub auto_accept_rate: f32 }; pub struct PermissionModeAccumulator { pub auto_accepted_actions: usize, pub manual_approval_prompts: usize }; impl EntryAccumulator for PermissionModeAccumulator { type Output = PermissionMetrics; fn update(&mut self, entry: &CanonicalTurn); fn finalize(self) -> PermissionMetrics; }",
+      "description": "Approximates a session's autonomy-vs-manual-gating balance from turn-level signal alone (no real per-orchestrator permission-mode event exists in transcript data, per this session's HookActivityAccumulator findings -- this is a coarser, best-effort heuristic, not a claim of reading a real permission-system event). Was implemented (crates/lumen-analysis/src/accumulators/permission_mode.rs) and counted in this spec's accumulator total but had zero acceptance criteria anywhere in this file until this fix (audit finding, 2026-08-20).",
+      "error_conditions": [
+        "auto_accept_rate defaults to 1.0 when auto_accepted_actions + manual_approval_prompts == 0 (see CRIT-LUMEN-172)"
+      ]
+    },
+    {
       "name": "CircuitBreakerAccumulator",
-      "signature": "pub struct CircuitBreakerAccumulator { pub max_observed_rounds: usize, pub stalls: Vec<CircuitStallEvent> }; impl CircuitBreakerAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> CircuitBreakerReport; }",
-      "description": "Tracks multi-agent consensus iterations (e.g. Drafter and Auditor) and detects review stalls exceeding 2 rounds.",
+      "signature": "pub struct CircuitStallEvent { pub agent_pair: CompactString, pub observed_rounds: usize, pub turn_index: usize }; pub struct CircuitBreakerReport { pub max_observed_rounds: usize, pub stalls: Vec<CircuitStallEvent>, pub tripped: bool }; pub struct CircuitBreakerAccumulator { pub max_observed_rounds: usize, pub stalls: Vec<CircuitStallEvent> }; impl CircuitBreakerAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> CircuitBreakerReport; pub fn analyze_transcript(transcript: &CanonicalTranscript) -> CircuitBreakerReport; }",
+      "description": "Tracks multi-agent consensus iterations (e.g. Drafter and Auditor) and detects review stalls exceeding 2 rounds. CircuitStallEvent carries turn_index (real field, confirmed via crates/lumen-analysis/src/accumulators/circuit_breaker.rs) identifying WHERE in its own transcript the stall occurred -- when a stall is merged up from a subagent transcript during recursion, that turn_index is relative to the subagent's own turns, not the parent's, since CircuitStallEvent carries no separate subagent/session identifier; distinguishing which subagent a merged stall came from requires cross-referencing the CircuitBreakerReport's own recursion structure, not the event itself. analyze_transcript recurses into CanonicalTranscript.subagents (which already models an arbitrary-depth tree via parent_session_id, crates/lumen-model/src/transcript.rs:14,20) so that stalls occurring across real subagent hierarchies are detected, not just within one flat turn list -- mirrors the recursion pattern CRIT-LUMEN-149 already establishes for AttributionAccumulator.",
       "error_conditions": []
     },
     {
       "name": "SchemaExtractorAccumulator",
-      "signature": "pub struct SchemaExtractorAccumulator { pub extracted: Vec<SchemaCitation> }; impl SchemaExtractorAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> Vec<SchemaCitation>; }",
-      "description": "Extracts and validates embedded JSON schema artifacts (spec@1, plan@1, changeset@1, eval-report@1) against Draft-07 schemas.",
+      "signature": "pub enum SchemaValidationResult { Valid, Invalid, UnrecognizedSchema }; pub trait SchemaValidator: Send + Sync { fn schema_id(&self) -> &str; fn validate(&self, payload: &serde_json::Value) -> bool; } pub struct SchemaExtractorAccumulator { pub validators: Vec<Box<dyn SchemaValidator>>, pub extracted: Vec<SchemaCitation> }; impl SchemaExtractorAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> Vec<SchemaCitation>; } pub struct SchemaCitation { pub schema_id: CompactString, pub turn_index: usize, pub result: SchemaValidationResult }",
+      "description": "Generic $schema/$id-driven extraction with a pluggable per-schema-ID validator registry, tri-state result (Valid/Invalid/UnrecognizedSchema) instead of a boolean. Detection is generic (any embedded JSON block carrying a $schema or $id key), not hardcoded to Lumen's own 5 known schema IDs -- other plugin ecosystems will use different schema formats entirely, so the extraction layer must not assume any specific ecosystem's vocabulary. Validators register per schema_id; a schema ID with no registered validator yields UnrecognizedSchema (not Invalid -- absence of a validator is not evidence of a malformed payload).",
       "error_conditions": [
-        "Flags is_valid = false if extracted JSON violates schema"
+        "UnrecognizedSchema when no SchemaValidator is registered for the extracted schema_id -- distinct from Invalid, which requires a registered validator that actually rejected the payload"
       ]
     },
     {
       "name": "AttributionSource / CanonicalTurn.attribution",
-      "signature": "pub enum AttributionSource { Root, Plugin { name: CompactString }, Skill { name: CompactString, plugin: Option<CompactString> } }  // new field: CanonicalTurn.attribution: Option<AttributionSource>",
-      "description": "Tags each canonical turn with its originating plugin/skill (or Root), populated by adapters from Skill tool-call names or plugin-scoped tool namespaces, so AttributionAccumulator can key token spend by source (CRIT-LUMEN-147, 148).",
+      "signature": "pub enum AttributionSource { Root, Plugin { name: CompactString }, Skill { name: CompactString, plugin: Option<CompactString> }, Agent { name: CompactString } }  // new field: CanonicalTurn.attribution: Option<AttributionSource>",
+      "description": "Tags each canonical turn with its originating plugin/skill (or Root), populated by adapters from Skill tool-call names or plugin-scoped tool namespaces, so AttributionAccumulator can key token spend by source (CRIT-LUMEN-147, 148). Plugin/Skill remain correct and unchanged for Lumen's own plugin ecosystem (confirmed by the user directly: our own plugins/skills/MCPs do have this predictable, structured shape). The new Agent variant is the ecosystem-agnostic fallback for orchestrators with no Lumen-plugin concept at all -- sourced from the real gen_ai.agent.name/gen_ai.workflow.name OTel attributes (verified directly against the real semantic-conventions-genai registry) -- so an orchestrator whose attribution shape genuinely differs from Lumen's own plugins gets a real, non-fabricated source instead of being forced into Plugin/Skill or silently dropped to Root.",
       "error_conditions": [
-        "Adapters that cannot determine an origin MUST leave attribution as None; AttributionAccumulator treats None the same as Root (unattributed_tokens), never fabricating a Plugin/Skill name."
+        "Adapters that cannot determine any origin (neither a Lumen plugin/skill match nor a gen_ai.agent.name/workflow.name value) MUST leave attribution as None; AttributionAccumulator treats None the same as Root (unattributed_tokens), never fabricating a Plugin/Skill/Agent name."
       ]
     },
     {
-      "name": "CanonicalTranscript.otel_request_ids",
-      "signature": "pub otel_request_ids: SmallVec<[CompactString; 2]>  // new field on CanonicalTranscript",
-      "description": "Collects requestId/request_id values scanned from raw message envelopes at parse time (by the lumen-session adapter) so OtelCorrelationAccumulator can map session_id to the request ids it produced (CRIT-LUMEN-152), without re-scanning raw JSON at the analysis layer.",
+      "name": "CanonicalTranscript.otel_conversation_id",
+      "signature": "pub otel_conversation_id: Option<CompactString>  // replaces the removed otel_request_ids: SmallVec<[CompactString; 2]>",
+      "description": "The session's real, native conversation/thread identifier (Claude Code's requestId, Codex's thread_id, Antigravity's conversation-id-as-directory-name), populated at parse time by the lumen-session adapter from a source-native field -- singular, matching the real OTel gen_ai.conversation.id attribute's actual per-session cardinality (verified directly against github.com/open-telemetry/semantic-conventions-genai's model/gen-ai/registry.yaml), not a collected list. Replaces both otel_request_ids (wrong shape -- a session has one conversation id, not a small accumulated list) and, together with CanonicalToolCall/CanonicalToolResult.call_id, the removed otel_span_id/SpanMappingAccumulator (redundant -- the real gen_ai.tool.call.id attribute is functionally identical to Lumen's pre-existing call_id field, confirmed by direct comparison against the same registry; no new correlation mechanism was needed).",
       "error_conditions": [
-        "Absent or non-string requestId/request_id keys are skipped, never inserted as empty strings or defaulted values."
-      ]
-    },
-    {
-      "name": "CanonicalToolResult.otel_span_id",
-      "signature": "pub otel_span_id: Option<CompactString>  // new field on CanonicalToolResult",
-      "description": "Optional OTel span identifier correlated with a tool_use_id/call_id, enabling SpanMappingAccumulator to map call_id -> span_id (CRIT-LUMEN-153).",
-      "error_conditions": [
-        "When no span id is present in the raw envelope for a tool result, otel_span_id MUST be None (not an empty string), which the accumulator counts toward unmapped_tool_use_count."
+        "MUST be None when the source has no native conversation/thread id available -- per the real registry's own explicit rule, a fallback UUID, trace id, or content hash SHALL NOT be synthesized as a substitute."
       ]
     },
     {
       "name": "HookActivityAccumulator",
-      "signature": "pub struct HookActivityAccumulator { pub hook_invocations: usize, pub by_event: BTreeMap<CompactString, usize>, pub total_duration_ms: u64, pub blocked_count: usize }; impl HookActivityAccumulator { pub fn update_raw(&mut self, message: &serde_json::Value); pub fn finalize(self) -> Self; }",
-      "description": "Tracks lifecycle hook execution counts by event name, cumulative duration, and permission-block rate from raw hook messages.",
-      "error_conditions": []
-    },
-    {
-      "name": "SpanMappingAccumulator",
-      "signature": "pub struct SpanMappingAccumulator { pub mapped: BTreeMap<CompactString, CompactString>, pub unmapped_tool_use_count: usize }; impl SpanMappingAccumulator { pub fn update(&mut self, entry: &CanonicalTurn); pub fn finalize(self) -> Self; }",
-      "description": "Maps tool call_id to correlated OTel span_id where present, counting unmapped tool invocations.",
-      "error_conditions": []
-    },
-    {
-      "name": "OtelCorrelationAccumulator",
-      "signature": "pub struct OtelCorrelationAccumulator; impl OtelCorrelationAccumulator { pub fn finalize(transcript: &CanonicalTranscript) -> OtelCorrelationReport; } pub struct OtelCorrelationReport { pub session_id: CompactString, pub request_ids: Vec<CompactString>, pub request_id_count: usize }",
-      "description": "Reads CanonicalTranscript.otel_request_ids (populated at parse time, not re-scanned) and emits a per-session OTel request-id correlation report.",
-      "error_conditions": []
+      "signature": "pub struct HookActivityAccumulator { pub hook_invocations: usize, pub by_event: BTreeMap<CompactString, usize>, pub total_duration_ms: u64, pub blocked_count: usize }; impl HookActivityAccumulator { pub fn update_from_hook_event(&mut self, event: &HookExecutionEvent); pub fn finalize(self) -> Self; } pub struct HookExecutionEvent { pub hook_event_type: CompactString, pub duration_ms: u64, pub blocked: bool }",
+      "description": "Tracks lifecycle hook execution counts by event name, cumulative duration, and permission-block rate from a dedicated hook-event source (an OTel execute_hook span, or an adapter-native hook event such as OpenHands' HookExecutionEvent), not from scanning message JSON for hookEventName -- confirmed this session, via a real 2894-line Claude Code transcript containing zero genuine hookEventName-shaped records, that hook telemetry does not live embedded in transcript text.",
+      "error_conditions": [
+        "Where no hook-event source is available for a given orchestrator (mapping not yet confirmed for Codex/OpenCode/Antigravity), HookActivityAccumulator SHALL report all-zero counts rather than fabricating activity from transcript text."
+      ]
     }
   ],
   "acceptance_criteria": [
     {
       "id": "CRIT-LUMEN-060",
-      "criterion": "WHEN processing a session stream, THE SYSTEM SHALL execute the 19 EntryAccumulator-based accumulators in a single linear pass over the parsed turns in O(N) time. Heap allocation in the inner loop SHALL be minimized and reviewed statically per accumulator, not verified via a custom global allocator: this workspace sets unsafe_code = \"forbid\" (Cargo.toml), and implementing Rust's GlobalAlloc trait requires an unsafe impl block, making a runtime allocation-counting harness structurally impossible to build here. token_usage and hook_activity are exempt by design: both are RawMessageAccumulators operating on raw pre-parse JSON messages, invoked independently of AnalyticsEngine::process_transcript, not inside its per-turn loop. otel_correlation is exempt by design: it reads the whole CanonicalTranscript once, post-loop, rather than per-turn.",
+      "criterion": "WHEN processing a session stream, THE SYSTEM SHALL execute the 18 EntryAccumulator-based accumulators in a single linear pass over the parsed turns in O(N) time. Heap allocation in the inner loop SHALL be minimized and reviewed statically per accumulator, not verified via a custom global allocator: this workspace sets unsafe_code = \"forbid\" (Cargo.toml), and implementing Rust's GlobalAlloc trait requires an unsafe impl block, making a runtime allocation-counting harness structurally impossible to build here. token_usage and hook_activity are exempt by design: both are RawMessageAccumulators operating on raw pre-parse JSON messages, invoked independently of AnalyticsEngine::process_transcript, not inside its per-turn loop.",
       "is_error_case": false,
       "judgment_call": false,
-      "reasoning": "Originally worded as requiring an empirically-measured zero-heap-allocation guarantee. A static audit (2026-08-20, during TASK-ANALYSIS-003) found 6 apparent violations. On closer engineering review, these split into two genuinely different categories: (1) AVOIDABLE, now fixed: circuit_breaker.rs called format!(\"parent->{agent_type}\") on every SubagentSpawn call, allocating a throwaway String before wrapping it in CompactString -- replaced with direct construction via CompactString::const_new(\"parent->\") + std::fmt::Write, which uses CompactString's own inline buffer when the result fits (compact_str 0.8 supports fmt::Write directly). pr_link.rs's unconditional per-turn BTreeMap::collect() was similarly found and fixed earlier in the same pass. (2) INHERENT, not a defect: artifacts.rs, tool_inventory.rs, fuzzy_tools.rs, attribution.rs, and trajectory_dag.rs each clone CompactString data into an owned BTreeMap/BTreeSet/Vec that must outlive the borrowed per-turn CanonicalTurn data and persist until finalize() -- this is the necessary cost of building any deduplicated or aggregated accumulator output at all, not wasted work. Eliminating these would require a fundamentally different architecture (e.g. arena-based string interning), which is a substantially larger investment than this criterion contemplated and is not undertaken here."
+      "reasoning": "Originally worded as requiring an empirically-measured zero-heap-allocation guarantee. A static audit (2026-08-20, during TASK-ANALYSIS-003) found 6 apparent violations. On closer engineering review, these split into two genuinely different categories: (1) AVOIDABLE, now fixed: circuit_breaker.rs called format!(\"parent->{agent_type}\") on every SubagentSpawn call, allocating a throwaway String before wrapping it in CompactString -- replaced with direct construction via CompactString::const_new(\"parent->\") + std::fmt::Write, which uses CompactString's own inline buffer when the result fits (compact_str 0.8 supports fmt::Write directly). pr_link.rs's unconditional per-turn BTreeMap::collect() was similarly found and fixed earlier in the same pass. (2) INHERENT, not a defect: artifacts.rs, tool_inventory.rs, fuzzy_tools.rs, attribution.rs, and trajectory_dag.rs each clone CompactString data into an owned BTreeMap/BTreeSet/Vec that must outlive the borrowed per-turn CanonicalTurn data and persist until finalize() -- this is the necessary cost of building any deduplicated or aggregated accumulator output at all, not wasted work. Eliminating these would require a fundamentally different architecture (e.g. arena-based string interning), which is a substantially larger investment than this criterion contemplated and is not undertaken here. Audit finding (2026-08-20): count corrected 19 -> 18 (this pass removed SpanMappingAccumulator, one of the 19 EntryAccumulator-based accumulators, dropping the real count by one -- the criterion's number was left stale) and the dangling otel_correlation per-turn-loop exemption clause was deleted, since OtelCorrelationAccumulator no longer exists as an accumulator at all (CRIT-LUMEN-152 is now a plain field-copy, not a pass-participating component -- there is nothing left to exempt)."
     },
     {
       "id": "CRIT-LUMEN-061",
@@ -105,16 +97,17 @@
     },
     {
       "id": "CRIT-LUMEN-062",
-      "criterion": "WHEN CircuitBreakerAccumulator detects consecutive review handoffs between the same agent pair, THE SYSTEM SHALL increment the round counter and flag a CircuitStallEvent if rounds exceed 2.",
+      "criterion": "WHEN CircuitBreakerAccumulator::analyze_transcript detects consecutive review handoffs between the same agent pair within a single CanonicalTranscript's turns, THE SYSTEM SHALL increment the round counter and flag a CircuitStallEvent if rounds exceed 2; WHEN transcript.subagents is non-empty, THE SYSTEM SHALL recurse analyze_transcript into each subagent CanonicalTranscript, APPEND every subagent's stalls onto the overall CircuitBreakerReport.stalls (a flat concatenation, not deduplicated or reordered), and set the merged report's max_observed_rounds to the MAXIMUM of the parent transcript's own max_observed_rounds and every recursed subagent's max_observed_rounds (not a sum) -- so a single deeply-stuck subagent is visible in the top-level max even if the parent transcript itself never stalled.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": true,
+      "reasoning": "The recursion requirement is new this pass: confirmed structurally necessary three independent ways (Langfuse's self-referencing parent_observation_id, OpenHands' parent_id event tree, ccusage's real is_sidechain field plus sibling subagent files, all researched 2026-08-20). The fix connects to IR structure that already exists (CanonicalTranscript.subagents, crates/lumen-model/src/transcript.rs:20) rather than inventing new fields, and mirrors the recursion pattern CRIT-LUMEN-149 already establishes for AttributionAccumulator. Audit finding (2026-08-20): the original wording specified merging 'stalls' but was silent on max_observed_rounds -- now explicit (max-across-levels, not sum), and CircuitStallEvent/CircuitBreakerReport's real fields are now defined in api_surface so an implementer can see turn_index is relative to whichever transcript level produced it."
     },
     {
       "id": "CRIT-LUMEN-063",
-      "criterion": "WHEN SchemaExtractorAccumulator encounters an embedded JSON block whose text contains a known schema ID (spec@1, plan@1, changeset@1, eval-report@1, finding-report@1) alongside a fenced ```json block or a raw {\"$schema\"...} marker, THE SYSTEM SHALL record a SchemaCitation with is_valid=true; otherwise is_valid=false.",
+      "criterion": "WHEN SchemaExtractorAccumulator scans a turn's entry.text field (the only field scanned -- tool_results.truncated_output is out of scope this pass, matching pre-amendment behavior) for an embedded JSON block carrying a $schema or $id key (generic detection, not hardcoded to Lumen's own 5 known schema IDs), THE SYSTEM SHALL record a SchemaCitation with result=Valid when a SchemaValidator is registered for that schema_id and it accepts the payload, result=Invalid when a validator is registered and rejects the payload, and result=UnrecognizedSchema when no validator is registered for that schema_id.",
       "is_error_case": false,
       "judgment_call": false,
-      "reasoning": "Originally worded as requiring real Draft-07 JSON Schema validation, but this is not currently buildable: no jsonschema validation crate is a workspace dependency, no schema files exist anywhere in this repo, the real Draft-07 schemas for these 5 IDs live in a separate sibling repo (agent-plugins/shared/schemas/), and eval-report@1 specifically has no schema file in ANY repo yet. Reworded to describe the actual buildable heuristic (JSON-block presence, not payload validation) per TASK-ANALYSIS-002s implementation. Real Draft-07 validation is a separate follow-up requiring the cross-repo schema dependency question to be resolved first."
+      "reasoning": "Generalized per the user's own direct clarification mid-session: Lumen's own plugin schemas ARE authoritative and predictable (registered validators can exist for them), but OTHER plugin ecosystems will use different, unpredictable schema formats -- a hardcoded is_valid boolean checked only against 5 known IDs cannot represent 'I don't recognize this schema' distinctly from 'I recognize it and it's wrong'. Design validated by Langfuse's real OtelIngestionProcessor/ObservationTypeMapper, an independently-built priority-ordered mapper registry solving the identical heterogeneous-producer problem. Real Draft-07 validation for Lumen's own 5 schema IDs remains a separate follow-up (still blocked on the cross-repo schema dependency question, per the prior wording's own reasoning) -- this pass changes the extraction/result SHAPE to be generic and pluggable, not the validation depth for any one schema. Audit finding (2026-08-20): the criterion didn't state which CanonicalTurn field(s) get scanned -- clarified as entry.text only, matching pre-amendment scope."
     },
     {
       "id": "CRIT-LUMEN-064",
@@ -232,21 +225,23 @@
     },
     {
       "id": "CRIT-LUMEN-139",
-      "criterion": "WHEN HookActivityAccumulator.update_raw receives a raw message where message[\"hookEventName\"] is a string, THE SYSTEM SHALL increment hook_invocations and by_event[event_name] (a BTreeMap<CompactString, usize>), and SHALL add message[\"durationMs\"].as_u64().unwrap_or(0) to total_duration_ms.",
+      "criterion": "WHEN HookActivityAccumulator.update_from_hook_event receives a HookExecutionEvent sourced from a dedicated hook-event stream (an OTel execute_hook span, or an adapter-native hook event such as OpenHands' HookExecutionEvent) rather than scanned from transcript message JSON, THE SYSTEM SHALL increment hook_invocations and by_event[event.hook_event_type], and SHALL add event.duration_ms to total_duration_ms.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": true,
+      "reasoning": "The prior wording (scanning message[\"hookEventName\"] out of transcript JSON) was confirmed this session to match zero genuine records in a real 2894-line Claude Code transcript -- every substring match was this very conversation's own text discussing hooks as a research topic, not an actual hook-execution record. Confirmed two independent ways (VS Code/Copilot's real OTel execute_hook span, OpenHands' native HookExecutionEvent type) that hook telemetry is a separate event/span stream, never embedded in transcript message text -- this criterion now targets that real source instead."
     },
     {
       "id": "CRIT-LUMEN-140",
-      "criterion": "IF a raw message has message[\"decision\"] == \"block\" or message[\"permissionDecision\"] == \"deny\", THE SYSTEM SHALL increment blocked_count; WHEN HookActivityAccumulator finalizes, THE SYSTEM SHALL compute block_rate = blocked_count/hook_invocations and avg_duration_ms = total_duration_ms/hook_invocations when hook_invocations > 0, and SHALL report 0.0 for both when hook_invocations is 0.",
+      "criterion": "IF a HookExecutionEvent has event.blocked == true, THE SYSTEM SHALL increment blocked_count; WHEN HookActivityAccumulator finalizes, THE SYSTEM SHALL compute block_rate = blocked_count/hook_invocations and avg_duration_ms = total_duration_ms/hook_invocations when hook_invocations > 0, and SHALL report 0.0 for both when hook_invocations is 0 (including when no hook-event source was available for the session's orchestrator at all).",
       "is_error_case": true,
       "judgment_call": false
     },
     {
       "id": "CRIT-LUMEN-141",
-      "criterion": "WHEN PrLinkAccumulator scans a turn's VersionControl-paired tool_results.truncated_output and entry.text for a substring matching the form \"github.com/{owner}/{repo}/pull/{digits}\", THE SYSTEM SHALL split the matched path on \"/\" to bind {owner} and {repo} (owner and repo MUST NOT themselves contain \"/\"), discard any trailing path/query/fragment after the digit run, store the string \"{owner}/{repo}#{digits}\" in the deduplicated pr_urls set, and record the turn_index of the first such match in first_pr_turn_index.",
+      "criterion": "WHEN PrLinkAccumulator scans a turn's VersionControl-paired tool_results.truncated_output and entry.text for a substring matching the form \"{host}/{owner}/{repo}/pull/{digits}\" where {host} is drawn from the known-hosts list -- github.com ONLY in this pass, a deliberately narrow v1 list, not an unspecified larger one -- THE SYSTEM SHALL split the matched path on \"/\" to bind {owner} and {repo} (owner and repo MUST NOT themselves contain \"/\"), discard any trailing path/query/fragment after the digit run, store the string \"{owner}/{repo}#{digits}\" in the deduplicated pr_urls set, and record the turn_index of the first such match in first_pr_turn_index.",
       "is_error_case": false,
-      "judgment_call": true
+      "judgment_call": true,
+      "reasoning": "Generalized from a github.com-only hardcoded match, which silently could never recognize any other host, to an explicitly-named known-hosts list. Audit finding (2026-08-20): the prior wording claimed GitLab was \"a documented non_goal\" when no such non_goals entry actually existed anywhere in the file, and \"at minimum\" left the known-hosts list's actual v1 contents ambiguous (github-only vs. some larger unstated list). Both fixed: the criterion now states plainly that github.com is the complete v1 list, and a real non_goals entry is added below deferring GitLab merge_requests support -- the gitlab.com/merge_requests URL form is removed from this criterion's pattern entirely rather than half-specified."
     },
     {
       "id": "CRIT-LUMEN-142",
@@ -280,9 +275,10 @@
     },
     {
       "id": "CRIT-LUMEN-147",
-      "criterion": "WHEN AttributionAccumulator processes a turn whose attribution is Some(AttributionSource::Plugin{name}) or Some(AttributionSource::Skill{name,..}), THE SYSTEM SHALL add that turn's total token usage to by_plugin[name] or by_skill[name] respectively.",
+      "criterion": "WHEN AttributionAccumulator processes a turn whose attribution is Some(AttributionSource::Plugin{name}) or Some(AttributionSource::Skill{name,..}), THE SYSTEM SHALL add that turn's total token usage to by_plugin[name] or by_skill[name] respectively; WHEN attribution is Some(AttributionSource::Agent{name}), THE SYSTEM SHALL add it to by_agent[name] (a new BTreeMap<CompactString, u64> field, distinct from by_plugin/by_skill since an Agent-sourced turn has no Lumen plugin/skill concept to key on). by_agent is keyed by an AttributionSource-derived, OTel gen_ai.agent.name/workflow.name value and is a DIFFERENT axis from CRIT-LUMEN-149's by_subagent, which is keyed by transcript-tree position (CanonicalTranscript.subagents nesting) -- a turn can be Agent-attributed within a subagent transcript, contributing to both maps simultaneously; the two are not mutually exclusive or redundant.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Extended to cover the new AttributionSource::Agent variant (gen_ai.agent.name/workflow.name-sourced), the ecosystem-agnostic fallback added this pass for orchestrators with no Lumen-plugin concept. Audit finding (2026-08-20): by_agent's similarity to the pre-existing by_subagent (CRIT-149) risked being read as redundant or overlapping -- clarified as two genuinely different, independent axes (attribution-source-type vs. transcript-tree-position)."
     },
     {
       "id": "CRIT-LUMEN-148",
@@ -292,9 +288,10 @@
     },
     {
       "id": "CRIT-LUMEN-149",
-      "criterion": "WHEN the analysis engine processes a CanonicalTranscript with a non-empty subagents field, THE SYSTEM SHALL recurse AttributionAccumulator (or an equivalent token roll-up) into each subagent transcript and aggregate its token totals into by_subagent keyed by subagent role, requiring process_transcript to recurse into subagents where it currently does not.",
+      "criterion": "WHEN the analysis engine processes a CanonicalTranscript with a non-empty subagents field, THE SYSTEM SHALL recurse AttributionAccumulator (or an equivalent token roll-up) into each subagent transcript and aggregate its token totals into by_subagent, keyed by that subagent CanonicalTranscript's own subagent_role field (SPEC-LUMEN-001-MODEL, populated at parse time per SPEC-LUMEN-002-SESSION's CRIT-LUMEN-026 -- the real <worker> filename segment, not an invented identifier); a subagent transcript with subagent_role == None (should not occur via the CRIT-LUMEN-026 path, but not structurally impossible) is keyed under a literal \"unknown\" bucket rather than silently dropped or panicking. Requires process_transcript to recurse into subagents where it currently does not.",
       "is_error_case": false,
-      "judgment_call": true
+      "judgment_call": true,
+      "reasoning": "Audit finding (2026-08-20): \"subagent role\" was referenced with no defined source anywhere -- CanonicalTranscript had no role field at all. Closed by adding CanonicalTranscript.subagent_role (SPEC-LUMEN-001-MODEL, populated by SPEC-LUMEN-002-SESSION's CRIT-LUMEN-026 from the real, already-confirmed <worker> sibling-filename convention) rather than inventing a call_id-based correlation with no evidence it's available in real data."
     },
     {
       "id": "CRIT-LUMEN-150",
@@ -310,25 +307,34 @@
     },
     {
       "id": "CRIT-LUMEN-152",
-      "criterion": "WHEN OtelCorrelationAccumulator finalizes, THE SYSTEM SHALL read CanonicalTranscript.otel_request_ids (populated at parse time by the lumen-session adapter, not re-scanned by this accumulator) and emit session_id, the deduplicated request_ids as a Vec, and request_id_count equal to that Vec's length.",
+      "criterion": "WHEN an AnalysisReport is finalized from a CanonicalTranscript, THE SYSTEM SHALL copy transcript.otel_conversation_id through into the report unchanged, without any dedicated accumulator pass -- the reduction from many real per-API-call requestId values (or equivalent per-orchestrator native IDs) down to this one singular field happens entirely at parse time, inside the lumen-session adapter (SPEC-LUMEN-002-SESSION's CRIT-LUMEN-164, which states the full first-non-sidechain-wins precedence rule); by the time the analysis layer sees CanonicalTranscript, that reduction is already complete, so no FURTHER aggregation happens at THIS layer.",
       "is_error_case": false,
-      "judgment_call": false
-    },
-    {
-      "id": "CRIT-LUMEN-153",
-      "criterion": "IF a tool_result's otel_span_id is Some(span_id), THE SYSTEM SHALL insert (call_id -> span_id) into SpanMappingAccumulator's mapped map; IF a tool_result's otel_span_id is None, THE SYSTEM SHALL increment unmapped_tool_use_count instead of inserting into mapped.",
-      "is_error_case": true,
-      "judgment_call": false
+      "judgment_call": true,
+      "reasoning": "OtelCorrelationAccumulator is removed this pass, not merely rewritten: once otel_request_ids (a collected list needing aggregation) became otel_conversation_id (a singular already-set field), no accumulation work remained to justify a dedicated accumulator -- a plain field copy is the whole job. This criterion's ID is retained in place per this repo's rewrite-not-renumber convention, now describing the field-copy behavior that replaced the removed accumulator's finalize() logic."
     },
     {
       "id": "CRIT-LUMEN-154",
       "criterion": "WHEN FuzzyToolsAccumulator (an EntryAccumulator) processes a turn's tool_calls, THE SYSTEM SHALL increment counts[call.tool_name] (a BTreeMap<CompactString, usize>) for each call and add tool_calls.len() to total_tool_calls.",
       "is_error_case": false,
       "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-172",
+      "criterion": "WHEN PermissionModeAccumulator processes a turn with role == TurnRole::User whose text, after trimming whitespace, is exactly \"y\", \"yes\", \"ok\", or \"proceed\" (case-sensitive exact match, not a substring/contains check), THE SYSTEM SHALL increment manual_approval_prompts by 1; WHEN processing a turn with any role OTHER than User that has a non-empty tool_calls, THE SYSTEM SHALL add tool_calls.len() (not 1) to auto_accepted_actions. A User turn whose text does not match one of those four exact strings, or has no text, increments neither counter.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "reasoning": "PermissionModeAccumulator was implemented (crates/lumen-analysis/src/accumulators/permission_mode.rs) and counted in this spec's accumulator total but had zero acceptance criteria until this fix (audit finding, 2026-08-20). Bound directly to the real, already-implemented update() logic, verified by direct code read."
+    },
+    {
+      "id": "CRIT-LUMEN-173",
+      "criterion": "WHEN PermissionModeAccumulator finalizes, THE SYSTEM SHALL compute auto_accept_rate = auto_accepted_actions / (auto_accepted_actions + manual_approval_prompts); IF that denominator is 0 (no permission-relevant signal observed in the session at all), THE SYSTEM SHALL return auto_accept_rate = 1.0, matching the real implementation's default, rather than 0.0 or NaN.",
+      "is_error_case": true,
+      "judgment_call": true,
+      "reasoning": "The zero-denominator default (1.0, i.e. treating a session with no observed permission signal as fully autonomous) is an explicit judgment call being made and recorded here, not silently inherited from the code without comment -- a total of 0 could equally be read as 'no data, undefined' rather than '100% autonomous.' Matches the real implementation's existing behavior (permission_mode.rs:37) rather than changing it."
     }
   ],
   "linked_requirement": "REQ-LUMEN-005",
   "linked_research": "RES-LUMEN-001",
   "spec_file_path": "specs/SPEC-LUMEN-005-ANALYSIS.json",
-  "reasoning": "Specifies the complete 22-accumulator analytics engine for extracting behavioral telemetry, circuit breaker dynamics, and token economics in a single pass."
+  "reasoning": "Specifies the complete 20-accumulator analytics engine for extracting behavioral telemetry, circuit breaker dynamics, and token economics in a single pass. SpanMappingAccumulator was removed and OtelCorrelationAccumulator collapsed into a plain field-copy in the 2026-08-20 real-data correction pass (see scope for detail); this reasoning field's stale \"22\" was corrected to match (audit finding, 2026-08-20)."
 }
