@@ -1,0 +1,5 @@
+What are the docs and specs in this repo? Please understand what we're building
+
+---
+
+What's the current status?
