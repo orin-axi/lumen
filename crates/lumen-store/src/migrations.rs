@@ -144,6 +144,10 @@ impl MigrationManager {
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         "#,
+        // V6: Unique index on rollups(period_start, period_type) to support idempotent upsert
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type);
+        "#,
     ];
 
     pub fn apply_migrations(conn: &mut Connection) -> Result<usize, StoreError> {

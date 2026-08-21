@@ -100,3 +100,24 @@ pub struct ToolCallReadModel {
     pub is_error: bool,
     pub latency_ms: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollupFactRecord {
+    pub period_start: DateTime<Utc>,
+    pub period_type: String,
+    pub session_count: i64,
+    pub total_cost_usd: f64,
+    pub total_savings_usd: f64,
+    pub total_duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollupReadModel {
+    pub id: i64,
+    pub period_start: DateTime<Utc>,
+    pub period_type: String,
+    pub session_count: i64,
+    pub total_cost_usd: f64,
+    pub total_savings_usd: f64,
+    pub total_duration_ms: u64,
+}

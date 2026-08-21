@@ -24,6 +24,6 @@ mod tests {
         let db = create_migrated_test_db();
         let conn = db.store.connection().unwrap();
         let count: usize = conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0)).unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
     }
 }

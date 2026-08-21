@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use lumen_model::*;
 use lumen_store::*;
 use tempfile::tempdir;
@@ -14,11 +14,11 @@ fn test_sqlite_store_open_and_migrations_v1_to_v5() {
 
     let conn = store.connection().expect("Failed to acquire connection");
 
-    // Verify all 5 migrations were recorded
+    // Verify all 6 migrations were recorded
     let count: usize = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
         .expect("Failed to query schema_migrations");
-    assert_eq!(count, 5);
+    assert_eq!(count, 6);
 
     // Verify WAL journal mode
     let journal_mode: String =
@@ -414,4 +414,106 @@ fn test_read_only_mode_disallows_writes() {
     // Migration attempt should fail on read-only store
     let mig_res = ro_store.run_migrations();
     assert!(mig_res.is_err());
+}
+
+#[test]
+fn test_rollup_repository_upsert_is_idempotent_on_period_start_and_type() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("rollup_upsert_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = RollupRepository::new(&conn);
+
+    let period_start = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
+
+    let first = RollupFactRecord {
+        period_start,
+        period_type: "daily".to_string(),
+        session_count: 3,
+        total_cost_usd: 1.5,
+        total_savings_usd: 0.5,
+        total_duration_ms: 60_000,
+    };
+    repo.upsert_rollup(&first).expect("first upsert failed");
+
+    let second = RollupFactRecord {
+        period_start,
+        period_type: "daily".to_string(),
+        session_count: 9,
+        total_cost_usd: 4.25,
+        total_savings_usd: 1.1,
+        total_duration_ms: 120_000,
+    };
+    repo.upsert_rollup(&second).expect("second upsert failed");
+
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM rollups WHERE period_start = ?1 AND period_type = 'daily'", [period_start], |row| {
+            row.get(0)
+        })
+        .expect("failed to count rollups");
+    assert_eq!(row_count, 1, "upsert_rollup must not create a duplicate row for the same period_start/period_type");
+
+    let read = repo.get_rollup(period_start, "daily").expect("get_rollup failed").expect("expected a rollup row");
+    assert_eq!(read.session_count, 9);
+    assert_eq!(read.total_cost_usd, 4.25);
+    assert_eq!(read.total_savings_usd, 1.1);
+    assert_eq!(read.total_duration_ms, 120_000);
+}
+
+#[test]
+fn test_rollup_repository_get_rollup_returns_none_for_missing_row() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("rollup_missing_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = RollupRepository::new(&conn);
+
+    let period_start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let result = repo.get_rollup(period_start, "weekly").expect("get_rollup should not error on missing row");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_rollup_repository_list_rollups_filters_orders_and_limits() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("rollup_list_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = RollupRepository::new(&conn);
+
+    let daily_1 = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
+    let daily_2 = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).unwrap();
+    let daily_3 = Utc.with_ymd_and_hms(2026, 8, 3, 0, 0, 0).unwrap();
+    let weekly_1 = Utc.with_ymd_and_hms(2026, 7, 27, 0, 0, 0).unwrap();
+
+    for (period_start, period_type, session_count) in [
+        (daily_1, "daily", 1),
+        (daily_2, "daily", 2),
+        (daily_3, "daily", 3),
+        (weekly_1, "weekly", 100),
+    ] {
+        repo.upsert_rollup(&RollupFactRecord {
+            period_start,
+            period_type: period_type.to_string(),
+            session_count,
+            total_cost_usd: 1.0,
+            total_savings_usd: 0.1,
+            total_duration_ms: 1_000,
+        })
+        .expect("upsert failed");
+    }
+
+    let daily_rollups = repo.list_rollups("daily", 2).expect("list_rollups failed");
+    assert_eq!(daily_rollups.len(), 2, "limit must be respected");
+    assert!(daily_rollups.iter().all(|r| r.period_type == "daily"), "only matching period_type rows should be returned");
+    assert_eq!(daily_rollups[0].period_start, daily_3, "results must be ordered by period_start descending");
+    assert_eq!(daily_rollups[1].period_start, daily_2);
+
+    let weekly_rollups = repo.list_rollups("weekly", 10).expect("list_rollups failed");
+    assert_eq!(weekly_rollups.len(), 1);
+    assert_eq!(weekly_rollups[0].period_start, weekly_1);
+    assert_eq!(weekly_rollups[0].session_count, 100);
 }
