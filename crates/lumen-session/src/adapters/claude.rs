@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::fingerprint::detect_orchestrator;
 
 pub struct ClaudeCodeAdapter;
 
@@ -14,10 +15,9 @@ impl SessionAdapter for ClaudeCodeAdapter {
     }
 
     fn matches_fingerprint(&self, sample: &str) -> bool {
-        sample.contains("\"sessionId\"")
-            && (sample.contains("\"permission-mode\"")
-                || sample.contains("\"leafUuid\"")
-                || sample.contains("\"parentUuid\""))
+        // Delegates to detect_orchestrator (the single source of truth for orchestrator
+        // precedence) instead of maintaining an independently-coded condition that can drift.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::ClaudeCode)
     }
 
     fn capabilities(&self) -> AdapterCapabilities {

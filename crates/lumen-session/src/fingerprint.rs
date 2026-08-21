@@ -2,7 +2,10 @@ use lumen_model::OrchestratorKind;
 
 /// Detects the orchestrator from a byte sample of the log file header (first 2048 bytes).
 pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
-    let sample_str = std::str::from_utf8(sample_bytes).unwrap_or("");
+    let sample_str = match std::str::from_utf8(sample_bytes) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&sample_bytes[..e.valid_up_to()]).unwrap_or(""),
+    };
 
     if sample_str.contains("\"sessionId\"") && sample_str.contains("\"parentUuid\"") {
         return Some(OrchestratorKind::ClaudeCode);
@@ -59,6 +62,17 @@ mod tests {
         // which already accepts the spaced JSON variant.
         let sample = b"{\"action\": \"run\", \"args\":{\"command\":\"cargo test\"}}";
         assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::OpenCode));
+    }
+
+    #[test]
+    fn test_detect_orchestrator_survives_boundary_truncated_utf8() {
+        // A well-formed ClaudeCode sample (sessionId+parentUuid markers present) followed by a
+        // multi-byte UTF-8 character ('é' = 0xC3 0xA9) sliced at a byte offset that splits the
+        // character -- simulating the 2048-byte header truncation landing mid-character. The
+        // valid prefix's markers must still be found rather than the whole sample collapsing to "".
+        let mut sample = b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"note\":\"caf".to_vec();
+        sample.push(0xC3); // leading byte of 'é'; trailing byte 0xA9 intentionally omitted
+        assert_eq!(detect_orchestrator(&sample), Some(OrchestratorKind::ClaudeCode));
     }
 
     #[test]

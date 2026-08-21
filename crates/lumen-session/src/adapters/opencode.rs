@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::fingerprint::detect_orchestrator;
 
 pub struct OpenCodeAdapter;
 
@@ -14,10 +15,9 @@ impl SessionAdapter for OpenCodeAdapter {
     }
 
     fn matches_fingerprint(&self, sample: &str) -> bool {
-        sample.contains("\"action\":\"run\"")
-            || sample.contains("\"action\": \"run\"")
-            || sample.contains("\"observation\":")
-            || sample.contains("\"action\":\"message\"")
+        // Delegates to detect_orchestrator (single source of truth for orchestrator precedence)
+        // instead of an independently-coded condition that can drift.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::OpenCode)
     }
 
     fn capabilities(&self) -> AdapterCapabilities {

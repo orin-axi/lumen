@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::fingerprint::detect_orchestrator;
 
 pub struct AgyAdapter;
 
@@ -22,10 +23,9 @@ impl SessionAdapter for AgyAdapter {
     }
 
     fn matches_fingerprint(&self, sample: &str) -> bool {
-        sample.contains("\"step_index\"")
-            && (sample.contains("\"source\":\"USER_EXPLICIT\"")
-                || sample.contains("\"source\":\"MODEL\"")
-                || sample.contains("\"PLANNER_RESPONSE\""))
+        // Delegates to detect_orchestrator (single source of truth for orchestrator precedence)
+        // instead of an independently-coded condition that can drift.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::Antigravity)
     }
 
     fn capabilities(&self) -> AdapterCapabilities {

@@ -23,6 +23,37 @@ fn test_claude_code_fingerprint_sessionid_alone_is_not_claude_code() {
 }
 
 #[test]
+fn test_claude_code_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
+    // CRIT-LUMEN drift fix: ClaudeCodeAdapter::matches_fingerprint must agree with
+    // detect_orchestrator's ClaudeCode branch exactly (sessionId && parentUuid together).
+    let adapter = ClaudeCodeAdapter;
+
+    let matching = r#"{"type":"assistant","sessionId":"ef175eb8-0825-4122-934b","parentUuid":"turn-0"}"#;
+    assert_eq!(
+        adapter.matches_fingerprint(matching),
+        detect_orchestrator(matching.as_bytes()) == Some(OrchestratorKind::ClaudeCode)
+    );
+    assert!(adapter.matches_fingerprint(matching));
+
+    // Concrete drift case: sessionId + leafUuid, but no parentUuid. The old independent
+    // condition accepted leafUuid as an alternative to parentUuid; detect_orchestrator requires
+    // sessionId && parentUuid together, so this sample must NOT match.
+    let drift_case = r#"{"sessionId":"x","leafUuid":"y"}"#;
+    assert_eq!(
+        adapter.matches_fingerprint(drift_case),
+        detect_orchestrator(drift_case.as_bytes()) == Some(OrchestratorKind::ClaudeCode)
+    );
+    assert!(!adapter.matches_fingerprint(drift_case));
+
+    let non_matching = r#"{"type":"event_msg"}"#;
+    assert_eq!(
+        adapter.matches_fingerprint(non_matching),
+        detect_orchestrator(non_matching.as_bytes()) == Some(OrchestratorKind::ClaudeCode)
+    );
+    assert!(!adapter.matches_fingerprint(non_matching));
+}
+
+#[test]
 fn test_claude_code_adapter_streaming_and_tool_extraction() {
     let sample = r#"{"type":"user","message":{"role":"user","content":"List files in project"}}
 {"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"view_file","input":{"file_path":"Cargo.toml"}}],"usage":{"input_tokens":1200,"output_tokens":150,"cache_creation_input_tokens":500,"cache_read_input_tokens":8000}}}

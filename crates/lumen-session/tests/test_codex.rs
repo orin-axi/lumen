@@ -93,3 +93,19 @@ fn test_codex_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
     );
     assert!(!adapter.matches_fingerprint(non_matching));
 }
+
+#[test]
+fn test_codex_adapter_does_not_claim_precedence_over_claude_code() {
+    // detect_orchestrator's ordered if-chain checks ClaudeCode markers first. A sample
+    // containing BOTH ClaudeCode and Codex markers resolves to ClaudeCode; CodexAdapter's own
+    // matches_fingerprint must not independently claim it via its own standalone condition.
+    let dual_marker = r#"{"sessionId":"x","parentUuid":"y","type":"event_msg"}"#;
+    assert_eq!(detect_orchestrator(dual_marker.as_bytes()), Some(OrchestratorKind::ClaudeCode));
+
+    let adapter = CodexAdapter;
+    assert_eq!(
+        adapter.matches_fingerprint(dual_marker),
+        detect_orchestrator(dual_marker.as_bytes()) == Some(OrchestratorKind::Codex)
+    );
+    assert!(!adapter.matches_fingerprint(dual_marker));
+}

@@ -64,3 +64,38 @@ fn test_agy_resolve_transcript_path_bypasses_symlink_layer() {
     );
     assert!(!path.to_string_lossy().contains("/.gemini/logs/"));
 }
+
+#[test]
+fn test_agy_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
+    let adapter = AgyAdapter;
+
+    let matching = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT"}"#;
+    assert_eq!(
+        adapter.matches_fingerprint(matching),
+        detect_orchestrator(matching.as_bytes()) == Some(OrchestratorKind::Antigravity)
+    );
+    assert!(adapter.matches_fingerprint(matching));
+
+    let non_matching = r#"{"type":"event_msg"}"#;
+    assert_eq!(
+        adapter.matches_fingerprint(non_matching),
+        detect_orchestrator(non_matching.as_bytes()) == Some(OrchestratorKind::Antigravity)
+    );
+    assert!(!adapter.matches_fingerprint(non_matching));
+}
+
+#[test]
+fn test_agy_adapter_does_not_claim_precedence_over_claude_code() {
+    // detect_orchestrator resolves a sample with BOTH ClaudeCode and Antigravity markers to
+    // ClaudeCode (checked first); AgyAdapter's own matches_fingerprint must not independently
+    // claim it via its own standalone condition.
+    let dual_marker = r#"{"sessionId":"x","parentUuid":"y","step_index":0,"source":"MODEL"}"#;
+    assert_eq!(detect_orchestrator(dual_marker.as_bytes()), Some(OrchestratorKind::ClaudeCode));
+
+    let adapter = AgyAdapter;
+    assert_eq!(
+        adapter.matches_fingerprint(dual_marker),
+        detect_orchestrator(dual_marker.as_bytes()) == Some(OrchestratorKind::Antigravity)
+    );
+    assert!(!adapter.matches_fingerprint(dual_marker));
+}

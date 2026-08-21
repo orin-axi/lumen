@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::fingerprint::detect_orchestrator;
 
 pub struct CodexAdapter;
 
@@ -14,8 +15,9 @@ impl SessionAdapter for CodexAdapter {
     }
 
     fn matches_fingerprint(&self, sample: &str) -> bool {
-        // CRIT-LUMEN-108: must agree with detect_orchestrator's Codex branch exactly.
-        sample.contains("\"type\":\"event_msg\"") || sample.contains("\"type\":\"response_item\"")
+        // CRIT-LUMEN-108: delegates to detect_orchestrator (single source of truth, including
+        // precedence over earlier-checked orchestrators) instead of an independent condition.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::Codex)
     }
 
     fn capabilities(&self) -> AdapterCapabilities {
