@@ -19,7 +19,10 @@ pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
         return Some(OrchestratorKind::Antigravity);
     }
 
-    if sample_str.contains("\"type\":\"event_msg\"") || sample_str.contains("\"type\":\"response_item\"") {
+    if sample_str.contains("\"type\":\"event_msg\"")
+        || sample_str.contains("\"type\":\"response_item\"")
+        || sample_str.contains("\"type\":\"session_meta\"")
+    {
         return Some(OrchestratorKind::Codex);
     }
 
@@ -73,6 +76,18 @@ mod tests {
         let mut sample = b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"note\":\"caf".to_vec();
         sample.push(0xC3); // leading byte of 'é'; trailing byte 0xA9 intentionally omitted
         assert_eq!(detect_orchestrator(&sample), Some(OrchestratorKind::ClaudeCode));
+    }
+
+    #[test]
+    fn test_detect_codex_session_meta_first_line() {
+        // Real Codex CLI rollout files (confirmed against a real local
+        // ~/.codex/sessions/**/rollout-*.jsonl file, CLI version 0.148.0) start with a
+        // "session_meta" envelope line that can be tens of kilobytes long (it embeds the full
+        // base_instructions system prompt) -- long enough that the 2048-byte fingerprint sample
+        // never reaches a later "event_msg"/"response_item" line. Without recognizing
+        // "session_meta" itself, a real Codex file can go entirely unrecognized.
+        let sample = b"{\"timestamp\":\"2026-08-20T19:00:39.735Z\",\"ordinal\":0,\"type\":\"session_meta\",\"payload\":{\"session_id\":\"01a0208b-b21e-7c62-bc9b-7f386a299206\",\"cli_version\":\"0.148.0\"";
+        assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::Codex));
     }
 
     #[test]
