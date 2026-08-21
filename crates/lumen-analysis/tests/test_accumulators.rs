@@ -572,6 +572,95 @@ fn test_api_health_and_mcp_affinity_and_synthetic_exclusions() {
 }
 
 #[test]
+fn test_token_usage_accumulator_multi_model_per_model_attribution() {
+    // Bug: finalize() used to throw away the real per-model breakdown and price the
+    // grand-total counters ONCE against `default_model`, silently merging two real
+    // models' usage/cost into a single entry keyed by whichever model happened to be
+    // the default. This test proves each real model is priced independently and the
+    // per_model map has one correctly-attributed entry per real model used.
+    let mut tok = TokenUsageAccumulator::new("claude-3-5-haiku-20241022");
+
+    tok.update_raw(&serde_json::json!({
+        "message": {
+            "model": "claude-3-5-haiku-20241022",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "cache_creation_input_tokens": 100,
+                "cache_read_input_tokens": 50
+            }
+        }
+    }));
+    tok.update_raw(&serde_json::json!({
+        "message": {
+            "model": "claude-3-5-sonnet-20241022",
+            "usage": {
+                "input_tokens": 2000,
+                "output_tokens": 300,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0
+            }
+        }
+    }));
+
+    let economics = tok.finalize();
+
+    // Sums across both real models.
+    assert_eq!(economics.input_tokens, 3000);
+    assert_eq!(economics.output_tokens, 500);
+    assert_eq!(economics.cache_creation_tokens, 100);
+    assert_eq!(economics.cache_read_tokens, 50);
+
+    assert_eq!(economics.per_model.len(), 2);
+
+    // Hand-computed from the seeded rates: haiku input 0.80/M, cache_write 1.00/M,
+    // cache_read 0.08/M, output 4.00/M.
+    let haiku_cost = (1000.0 / 1_000_000.0) * 0.80
+        + (100.0 / 1_000_000.0) * 1.00
+        + (50.0 / 1_000_000.0) * 0.08
+        + (200.0 / 1_000_000.0) * 4.00;
+    let haiku = economics
+        .per_model
+        .get("claude-3-5-haiku-20241022")
+        .expect("haiku entry must be keyed by its own real model name");
+    assert_eq!(haiku.input_tokens, 1000);
+    assert_eq!(haiku.output_tokens, 200);
+    assert_eq!(haiku.cache_creation_tokens, 100);
+    assert_eq!(haiku.cache_read_tokens, 50);
+    assert!(
+        (haiku.cost_usd - haiku_cost).abs() < 1e-9,
+        "haiku cost_usd = {}, expected {}",
+        haiku.cost_usd,
+        haiku_cost
+    );
+
+    // Hand-computed from the seeded rates: sonnet input 3.00/M, output 15.00/M.
+    let sonnet_cost = (2000.0 / 1_000_000.0) * 3.00 + (300.0 / 1_000_000.0) * 15.00;
+    let sonnet = economics
+        .per_model
+        .get("claude-3-5-sonnet-20241022")
+        .expect("sonnet entry must be keyed by its own real model name");
+    assert_eq!(sonnet.input_tokens, 2000);
+    assert_eq!(sonnet.output_tokens, 300);
+    assert_eq!(sonnet.cache_creation_tokens, 0);
+    assert_eq!(sonnet.cache_read_tokens, 0);
+    assert!(
+        (sonnet.cost_usd - sonnet_cost).abs() < 1e-9,
+        "sonnet cost_usd = {}, expected {}",
+        sonnet.cost_usd,
+        sonnet_cost
+    );
+
+    let expected_total_cost = haiku_cost + sonnet_cost;
+    assert!(
+        (economics.total_cost_usd - expected_total_cost).abs() < 1e-9,
+        "total_cost_usd = {}, expected {}",
+        economics.total_cost_usd,
+        expected_total_cost
+    );
+}
+
+#[test]
 fn test_schema_extractor_citations() {
     let mut ext = SchemaExtractorAccumulator::default();
 
