@@ -48,11 +48,22 @@ impl SessionAdapter for CodexAdapter {
         let mut output_tokens = 0u64;
         let mut reasoning_output_tokens = 0u64;
 
+        let mut byte_offset: usize = 0;
+
         for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
             };
+
+            // Offset at the START of the line currently being processed. `reader.lines()`
+            // strips newlines and discards byte-position info, so we track it manually: this
+            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
+            // line for CRLF-terminated input -- an acceptable known limitation for a
+            // diagnostic field, not a byte-exact file-seek requirement. Same pattern as
+            // claude.rs (commit 78f91cf).
+            let line_start_offset = byte_offset;
+            byte_offset += line.len() + 1;
 
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -65,7 +76,7 @@ impl SessionAdapter for CodexAdapter {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
                         line_number: idx + 1,
-                        byte_offset: 0,
+                        byte_offset: line_start_offset,
                         error: CompactString::new(e.to_string()),
                     });
                     continue;
@@ -78,9 +89,29 @@ impl SessionAdapter for CodexAdapter {
                 }
             }
 
-            // Only event_msg envelope lines carry the payload shapes this adapter understands.
-            if val.get("type").and_then(|v| v.as_str()) != Some("event_msg") {
-                continue;
+            // Dispatch on the envelope's top-level type. Both event_msg and response_item are
+            // recognized as valid Codex content by fingerprint detection (detect_orchestrator /
+            // CodexAdapter::matches_fingerprint), but only event_msg's payload shapes are
+            // understood by this parser today.
+            match val.get("type").and_then(|v| v.as_str()) {
+                Some("event_msg") => {}
+                Some("response_item") => {
+                    // Recognized by fingerprint but not yet implemented: there is no
+                    // confirmed, real-data-verified schema for response_item's internal
+                    // payload, so we do not guess at its fields. Record the skip as visible
+                    // signal rather than silently dropping the line -- a transcript with zero
+                    // turns must not look like a clean, successful empty parse.
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: line_start_offset,
+                        error: CompactString::new(
+                            "response_item envelope recognized by fingerprint but not yet implemented by CodexAdapter::parse_stream",
+                        ),
+                    });
+                    continue;
+                }
+                _ => continue,
             }
 
             let Some(payload) = val.get("payload") else {

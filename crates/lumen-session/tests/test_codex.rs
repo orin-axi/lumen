@@ -95,6 +95,79 @@ fn test_codex_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
 }
 
 #[test]
+fn test_codex_adapter_records_response_item_as_parse_failure() {
+    // response_item envelopes are accepted by fingerprint detection (detect_orchestrator /
+    // matches_fingerprint) but parse_stream has no implemented parser for their internal
+    // schema. A file composed of response_item lines must not silently parse into an
+    // empty-looking transcript -- it must surface real signal via parse_failures.
+    let sample = concat!(
+        r#"{"timestamp":"2026-08-20T10:00:00Z","type":"response_item","payload":{"id":"item-1"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-08-20T10:00:01Z","type":"response_item","payload":{"id":"item-2"}}"#,
+        "\n",
+    );
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_eq!(transcript.turns.len(), 0);
+    assert_eq!(transcript.parse_failures.len(), 2, "each response_item line must be recorded as a parse failure");
+    for failure in &transcript.parse_failures {
+        assert!(
+            failure.error.contains("response_item"),
+            "expected parse failure to mention response_item, got: {}",
+            failure.error
+        );
+    }
+}
+
+#[test]
+fn test_codex_adapter_event_msg_regression_unaffected_by_response_item_handling() {
+    // Confirms the response_item dispatch arm doesn't disturb the existing event_msg parsing
+    // path -- same assertions as test_codex_adapter_parses_real_event_msg_envelope.
+    let sample = real_codex_session_dump();
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_eq!(transcript.turns.len(), 3);
+    assert_eq!(transcript.turns[0].role, TurnRole::User);
+    assert_eq!(transcript.turns[1].role, TurnRole::Assistant);
+    assert_eq!(transcript.turns[2].role, TurnRole::ToolResult);
+    assert_eq!(transcript.economics.input_tokens, 1500);
+    assert_eq!(transcript.economics.output_tokens, 110);
+    assert_eq!(transcript.economics.reasoning_output_tokens, 55);
+    assert!(transcript.parse_failures.is_empty(), "a clean event_msg-only session must have no parse failures");
+}
+
+#[test]
+fn test_codex_adapter_parse_failure_byte_offset_tracks_real_position() {
+    // A malformed line NOT at the start of the file must report a non-zero byte_offset
+    // reflecting the real accumulated byte count of preceding lines; a malformed first line
+    // must report byte_offset == 0.
+    let first_line_malformed = "not valid json\n{\"timestamp\":\"2026-08-20T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_id\":\"t\",\"thread_settings\":{\"service_tier\":\"Standard\"}}}\n";
+
+    let adapter = CodexAdapter;
+    let transcript = adapter
+        .parse_stream(Box::new(Cursor::new(first_line_malformed)))
+        .expect("Failed to parse Codex session");
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].byte_offset, 0, "a malformed first line has byte_offset 0");
+
+    let valid_first_line = "{\"timestamp\":\"2026-08-20T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_id\":\"t\",\"thread_settings\":{\"service_tier\":\"Standard\"}}}\n";
+    let sample_with_later_malformed = format!("{valid_first_line}not valid json\n");
+    let transcript2 = adapter
+        .parse_stream(Box::new(Cursor::new(sample_with_later_malformed.as_str())))
+        .expect("Failed to parse Codex session");
+    assert_eq!(transcript2.parse_failures.len(), 1);
+    assert_eq!(
+        transcript2.parse_failures[0].byte_offset,
+        valid_first_line.len(),
+        "a malformed non-first line must report the real accumulated byte offset (LF-based approximation: stripped-line length + 1 per preceding line)"
+    );
+}
+
+#[test]
 fn test_codex_adapter_does_not_claim_precedence_over_claude_code() {
     // detect_orchestrator's ordered if-chain checks ClaudeCode markers first. A sample
     // containing BOTH ClaudeCode and Codex markers resolves to ClaudeCode; CodexAdapter's own
