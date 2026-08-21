@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.3-nightly.202608200613.91a7fd7fc",
+  "checkpoint_id": "01M0JX8E0HVS5N8V00D665P08W",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-store/src/repositories/session.rs",
+    "crates/lumen-store/src/repositories/token_usage.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 434,
+    "cache_creation_tokens": 1607402,
+    "cache_read_tokens": 76619952,
+    "output_tokens": 242220,
+    "api_call_count": 217
+  }
+}
