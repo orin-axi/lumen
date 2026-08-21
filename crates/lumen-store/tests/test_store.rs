@@ -638,3 +638,80 @@ fn test_command_event_repository_nonexistent_session_returns_error() {
     assert!(list_result.is_err(), "list_by_session against a nonexistent session must error");
     assert!(matches!(list_result.unwrap_err(), StoreError::NotFound(_)));
 }
+
+#[test]
+fn test_snapshot_repository_save_and_get_latest_round_trips_bytes() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("snapshot_roundtrip_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = SnapshotRepository::new(&conn);
+
+    let data = b"pre-compaction transcript bytes".to_vec();
+    let id = repo.save_snapshot("claude", "sess-snap-1", &data).expect("save_snapshot failed");
+    assert!(id > 0, "save_snapshot must return a real, usable row id (CRIT-LUMEN-124)");
+
+    let latest = repo.get_latest_snapshot("claude", "sess-snap-1").expect("get_latest_snapshot failed");
+    assert_eq!(latest, Some(data), "get_latest_snapshot must return the exact bytes saved (CRIT-LUMEN-124)");
+}
+
+#[test]
+fn test_snapshot_repository_get_latest_returns_none_when_absent() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("snapshot_absent_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = SnapshotRepository::new(&conn);
+
+    let result = repo.get_latest_snapshot("claude", "no-such-session").expect("get_latest_snapshot must not error");
+    assert_eq!(result, None, "get_latest_snapshot must return Ok(None), not an error, when no snapshot exists (CRIT-LUMEN-124)");
+}
+
+#[test]
+fn test_snapshot_repository_get_latest_returns_most_recently_saved() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("snapshot_ordering_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = SnapshotRepository::new(&conn);
+
+    repo.save_snapshot("claude", "sess-snap-order", b"first").unwrap();
+    repo.save_snapshot("claude", "sess-snap-order", b"second").unwrap();
+    repo.save_snapshot("claude", "sess-snap-order", b"third-and-latest").unwrap();
+
+    let latest = repo.get_latest_snapshot("claude", "sess-snap-order").unwrap();
+    assert_eq!(
+        latest,
+        Some(b"third-and-latest".to_vec()),
+        "get_latest_snapshot must return the most recently saved snapshot (CRIT-LUMEN-124)"
+    );
+}
+
+#[test]
+fn test_snapshot_repository_scoped_by_provider_and_session_id() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("snapshot_scoping_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = SnapshotRepository::new(&conn);
+
+    repo.save_snapshot("claude", "sess-scope-a", b"data-for-a").unwrap();
+    repo.save_snapshot("codex", "sess-scope-a", b"data-for-codex-same-session-id").unwrap();
+    repo.save_snapshot("claude", "sess-scope-b", b"data-for-b").unwrap();
+
+    let a = repo.get_latest_snapshot("claude", "sess-scope-a").unwrap();
+    assert_eq!(a, Some(b"data-for-a".to_vec()));
+
+    let codex_same_session_id = repo.get_latest_snapshot("codex", "sess-scope-a").unwrap();
+    assert_eq!(codex_same_session_id, Some(b"data-for-codex-same-session-id".to_vec()));
+
+    let b = repo.get_latest_snapshot("claude", "sess-scope-b").unwrap();
+    assert_eq!(b, Some(b"data-for-b".to_vec()));
+
+    let nonexistent = repo.get_latest_snapshot("claude", "sess-scope-nonexistent").unwrap();
+    assert_eq!(nonexistent, None);
+}
