@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.10.3-nightly.202608200613.91a7fd7fc",
+  "checkpoint_id": "01M0JX0ZZK772HSJJE5B3BK9PA",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/lumen-analysis/benches/accumulator_bench.rs",
+    "crates/lumen-analysis/src/accumulators/token_usage.rs",
+    "crates/lumen-analysis/tests/test_accumulators.rs",
+    "crates/lumen-analysis/tests/test_analysis_pipeline.rs",
+    "crates/lumen-model/src/economics.rs",
+    "crates/lumen-model/src/pricing.rs",
+    "crates/lumen-model/src/turn.rs",
+    "crates/lumen-model/tests/test_model_proptests.rs",
+    "crates/lumen-model/tests/test_pricing.rs",
+    "crates/lumen-model/tests/test_transcript.rs",
+    "crates/lumen-session/src/adapters/claude.rs",
+    "crates/lumen-session/src/adapters/codex.rs",
+    "crates/lumen-session/src/adapters/opencode.rs",
+    "crates/lumen-session/src/snapshot.rs",
+    "crates/lumen-session/tests/test_codex.rs",
+    "crates/lumen-session/tests/test_snapshot_merge.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "crates/lumen-store/tests/test_store_concurrency.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 426,
+    "cache_creation_tokens": 1593989,
+    "cache_read_tokens": 74004065,
+    "output_tokens": 235144,
+    "api_call_count": 213,
+    "subagent_tokens": {
+      "input_tokens": 2202,
+      "cache_creation_tokens": 2605366,
+      "cache_read_tokens": 76112775,
+      "output_tokens": 567632,
+      "api_call_count": 1045
+    }
+  }
+}
