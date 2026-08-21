@@ -114,7 +114,9 @@ impl PricingTable {
 
     /// Looks up the rate for (model, tier, kind) whose effective window contains `as_of`.
     /// Falls back to `claude-3-5-sonnet`'s rate for the requested kind when the model
-    /// string matches no row at all (CRIT-LUMEN-008).
+    /// string matches no row at all (CRIT-LUMEN-008). When the model IS recognized (matches
+    /// at least one row) but has no row for this specific (tier, kind, as_of), returns 0.0
+    /// directly rather than substituting another model's rate (CRIT-LUMEN-161).
     pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
         let model_recognized = self.rates.iter().any(|r| r.model == model);
 

@@ -314,3 +314,65 @@ fn test_rate_for_versioned_lookup_and_tie_break() {
          declared first but effective later), not the row that appears later in the vector"
     );
 }
+
+/// CRIT-LUMEN-161: a RECOGNIZED model (matches at least one PricingRate row) that has no row
+/// for the specific (tier, kind, as_of) requested must return 0.0 for that kind, never
+/// substituting another model's rate -- distinct from CRIT-LUMEN-008's genuinely-unrecognized-
+/// model-wide fallback to Sonnet.
+#[test]
+fn test_recognized_model_missing_kind_returns_zero() {
+    let epoch = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // Hand-constructed table: qwen-2.5-coder has Input/CacheRead/Output rows only, matching
+    // CRIT-LUMEN-004's real gap (no seeded CacheWrite price for Qwen). Deliberately not built
+    // from PricingTable::seed() so this test doesn't depend on seed()'s contents drifting.
+    let table = PricingTable {
+        rates: vec![
+            PricingRate {
+                model: "qwen-2.5-coder".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 0.20,
+                effective_from: epoch,
+                effective_until: None,
+            },
+            PricingRate {
+                model: "qwen-2.5-coder".into(),
+                tier: None,
+                kind: TokenRateKind::CacheRead,
+                rate_per_m: 0.05,
+                effective_from: epoch,
+                effective_until: None,
+            },
+            PricingRate {
+                model: "qwen-2.5-coder".into(),
+                tier: None,
+                kind: TokenRateKind::Output,
+                rate_per_m: 0.60,
+                effective_from: epoch,
+                effective_until: None,
+            },
+            // Sonnet row present in the table too, so a bug that falls through to the
+            // CRIT-LUMEN-008 unrecognized-model-wide fallback has a real (wrong) value to
+            // substitute instead of coincidentally also returning 0.0.
+            PricingRate {
+                model: "claude-3-5-sonnet".into(),
+                tier: None,
+                kind: TokenRateKind::CacheWrite,
+                rate_per_m: 3.75,
+                effective_from: epoch,
+                effective_until: None,
+            },
+        ],
+    };
+
+    let result = table.rate_for("qwen-2.5-coder", None, TokenRateKind::CacheWrite, as_of);
+
+    assert_eq!(result, 0.0, "recognized model missing a specific rate kind must return exactly 0.0");
+    assert!(
+        (result - 3.75).abs() > 1e-9,
+        "must NOT substitute claude-3-5-sonnet's $3.75/M CacheWrite rate for a recognized \
+         model's genuinely-absent rate kind"
+    );
+}
