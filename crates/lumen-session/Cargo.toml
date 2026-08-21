@@ -24,6 +24,7 @@ rstest = { workspace = true }
 insta = { workspace = true }
 lumen-fixtures = { workspace = true }
 criterion = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "fingerprint_bench"

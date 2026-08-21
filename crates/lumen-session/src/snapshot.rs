@@ -46,6 +46,7 @@ mod tests {
         let transcript = CanonicalTranscript {
             session_id: CompactString::new("sess-1"),
             parent_session_id: None,
+            subagent_role: None,
             orchestrator: OrchestratorKind::ClaudeCode,
             model_family: CompactString::new("claude-3-5-sonnet-20241022"),
             timing: ExecutionTiming {

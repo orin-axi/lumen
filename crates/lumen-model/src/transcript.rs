@@ -12,6 +12,10 @@ use crate::turn::CanonicalTurn;
 pub struct CanonicalTranscript {
     pub session_id: CompactString,
     pub parent_session_id: Option<CompactString>,
+    /// Some(<worker>) for a transcript reached via `subagents`, where `<worker>` is the real
+    /// path segment from the sibling `subagents/<worker>.jsonl` filename that produced it
+    /// (SPEC-LUMEN-002-SESSION's CRIT-LUMEN-026). `None` for a root/non-subagent transcript.
+    pub subagent_role: Option<CompactString>,
     pub orchestrator: OrchestratorKind,
     pub model_family: CompactString,
     pub timing: ExecutionTiming,

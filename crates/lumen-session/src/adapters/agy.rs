@@ -169,6 +169,7 @@ impl SessionAdapter for AgyAdapter {
         Ok(CanonicalTranscript {
             session_id,
             parent_session_id: None,
+            subagent_role: None,
             orchestrator: OrchestratorKind::Antigravity,
             model_family: model_family.clone(),
             timing: ExecutionTiming {

@@ -157,6 +157,7 @@ impl SessionAdapter for CodexAdapter {
         Ok(CanonicalTranscript {
             session_id,
             parent_session_id: None,
+            subagent_role: None,
             orchestrator: OrchestratorKind::Codex,
             model_family: model_family.clone(),
             timing: ExecutionTiming {

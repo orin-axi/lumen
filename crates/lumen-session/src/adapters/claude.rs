@@ -45,8 +45,9 @@ impl SessionAdapter for ClaudeCodeAdapter {
         let mut total_cache_creation: u64 = 0;
         let mut total_cache_read: u64 = 0;
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
+        let mut otel_conversation_id: Option<CompactString> = None;
 
-        for (idx, line_res) in reader.lines().enumerate() {
+        'lines: for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
@@ -75,6 +76,47 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
             if !val.is_object() {
                 continue;
+            }
+
+            // CRIT-LUMEN-163: an explicit JSON null on one of these known fields is malformed,
+            // not a valid empty/zero value -- reject the whole line rather than silently
+            // treating the null the same as an absent field.
+            for field in [
+                "id",
+                "cwd",
+                "model",
+                "sessionId",
+                "requestId",
+                "version",
+                "costUSD",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            ] {
+                if val.get(field).map(|v| v.is_null()).unwrap_or(false) {
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: 0,
+                        error: CompactString::new(format!("explicit null on field '{field}'")),
+                    });
+                    continue 'lines;
+                }
+            }
+
+            // CRIT-LUMEN-026: entries with is_sidechain=true belong to a subagent/parallel
+            // branch, distinct from the main chain -- exclude them from the main transcript's
+            // turns entirely.
+            let is_sidechain = val.get("is_sidechain").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_sidechain {
+                continue;
+            }
+
+            // CRIT-LUMEN-164: otel_conversation_id is set from the first non-sidechain entry's
+            // requestId encountered in file order, and never overwritten thereafter.
+            if otel_conversation_id.is_none() {
+                if let Some(rid) = val.get("requestId").and_then(|v| v.as_str()) {
+                    otel_conversation_id = Some(CompactString::new(rid));
+                }
             }
 
             // Extract session ID
@@ -245,6 +287,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
         Ok(CanonicalTranscript {
             session_id,
             parent_session_id: None,
+            subagent_role: None,
             orchestrator: OrchestratorKind::ClaudeCode,
             model_family,
             timing: ExecutionTiming {
@@ -260,10 +303,46 @@ impl SessionAdapter for ClaudeCodeAdapter {
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
-            otel_conversation_id: None,
+            otel_conversation_id,
             service_tier: None,
             parse_failures,
         })
+    }
+}
+
+impl ClaudeCodeAdapter {
+    /// Parses a session's main transcript file plus any sibling `subagents/<worker>.jsonl`
+    /// files found alongside it, linking each as a child transcript via `parent_session_id`
+    /// and `subagent_role` (CRIT-LUMEN-026). A missing `subagents/` directory, or a
+    /// `subagents/<worker>.jsonl` file with no corresponding `is_sidechain` entries in the
+    /// main file, is not an error -- it is simply linked (or, for a missing directory, simply
+    /// absent) without failing the parse.
+    pub fn parse_session_with_subagents(
+        &self,
+        session_dir: &std::path::Path,
+        main_file_name: &str,
+    ) -> Result<CanonicalTranscript, IngestionError> {
+        let main_path = session_dir.join(main_file_name);
+        let main_file = std::fs::File::open(&main_path).map_err(IngestionError::Io)?;
+        let mut transcript = self.parse_stream(Box::new(std::io::BufReader::new(main_file)))?;
+
+        let subagents_dir = session_dir.join("subagents");
+        if let Ok(entries) = std::fs::read_dir(&subagents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let worker = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+                let file = std::fs::File::open(&path).map_err(IngestionError::Io)?;
+                let mut child = self.parse_stream(Box::new(std::io::BufReader::new(file)))?;
+                child.parent_session_id = Some(transcript.session_id.clone());
+                child.subagent_role = Some(CompactString::new(worker));
+                transcript.subagents.push(child);
+            }
+        }
+
+        Ok(transcript)
     }
 }
 

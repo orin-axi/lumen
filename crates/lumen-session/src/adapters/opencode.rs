@@ -226,6 +226,7 @@ impl SessionAdapter for OpenCodeAdapter {
         Ok(CanonicalTranscript {
             session_id,
             parent_session_id: None,
+            subagent_role: None,
             orchestrator: OrchestratorKind::OpenCode,
             model_family,
             timing: ExecutionTiming {

@@ -1,10 +1,12 @@
 use lumen_model::*;
 use lumen_session::*;
 use std::io::Cursor;
+use std::io::Write;
 
 #[test]
 fn test_claude_code_fingerprint_detection() {
-    let sample = b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"message\":{}}";
+    let sample =
+        b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"message\":{}}";
     let start = std::time::Instant::now();
     let detected = detect_orchestrator(sample);
     let duration = start.elapsed();
@@ -88,4 +90,72 @@ fn test_claude_code_adapter_empty_session() {
     assert_eq!(transcript.turns.len(), 0);
     assert_eq!(transcript.economics.input_tokens, 0);
     assert_eq!(transcript.economics.cache_hit_ratio, 0.0);
+}
+
+#[test]
+fn test_claude_code_adapter_excludes_sidechain_entries_from_main_turns() {
+    // CRIT-LUMEN-026: is_sidechain:true entries belong to a subagent branch, not the main chain.
+    let sample = r#"{"type":"user","is_sidechain":true,"message":{"role":"user","content":"sidechain message"}}
+{"type":"user","message":{"role":"user","content":"main message"}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(transcript.turns.len(), 1);
+    assert_eq!(transcript.turns[0].role, TurnRole::User);
+    assert_eq!(transcript.turns[0].text.as_deref(), Some("main message"));
+}
+
+#[test]
+fn test_claude_code_adapter_links_subagent_transcript_file() {
+    // CRIT-LUMEN-026: sibling subagents/<worker>.jsonl files are linked as child transcripts.
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+
+    let main_line = r#"{"type":"user","sessionId":"parent-1","message":{"role":"user","content":"main"}}
+"#;
+    std::fs::write(dir.path().join("main.jsonl"), main_line).expect("Failed to write main.jsonl");
+
+    let subagents_dir = dir.path().join("subagents");
+    std::fs::create_dir(&subagents_dir).expect("Failed to create subagents dir");
+    let worker_line = r#"{"type":"user","message":{"role":"user","content":"worker"}}
+"#;
+    let mut worker_file =
+        std::fs::File::create(subagents_dir.join("worker-a.jsonl")).expect("Failed to create worker-a.jsonl");
+    worker_file.write_all(worker_line.as_bytes()).expect("Failed to write worker-a.jsonl");
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript =
+        adapter.parse_session_with_subagents(dir.path(), "main.jsonl").expect("Failed to parse session with subagents");
+
+    assert_eq!(transcript.subagents.len(), 1);
+    assert_eq!(transcript.subagents[0].parent_session_id, Some("parent-1".into()));
+    assert_eq!(transcript.subagents[0].subagent_role, Some("worker-a".into()));
+}
+
+#[test]
+fn test_claude_code_adapter_rejects_explicit_null_session_id() {
+    // CRIT-LUMEN-163: an explicit JSON null on a known field is malformed, not a valid empty value.
+    let sample = "{\"type\":\"user\",\"sessionId\":null,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Should not error on explicit null");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.turns.len(), 0);
+}
+
+#[test]
+fn test_claude_code_adapter_otel_conversation_id_first_non_sidechain_wins() {
+    // CRIT-LUMEN-164: otel_conversation_id is set from the first non-sidechain entry's requestId,
+    // never overwritten thereafter; sidechain entries are skipped entirely.
+    let sample = r#"{"type":"user","is_sidechain":true,"requestId":"req-side","message":{"role":"user","content":"side"}}
+{"type":"user","requestId":"req-first","message":{"role":"user","content":"first"}}
+{"type":"user","requestId":"req-second","message":{"role":"user","content":"second"}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(transcript.otel_conversation_id, Some("req-first".into()));
 }
