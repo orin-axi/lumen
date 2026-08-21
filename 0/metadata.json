@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.10.3-nightly.202608200613.91a7fd7fc",
+  "checkpoint_id": "01M0HCTGHT0WKZ7YAQYX8XJHZJ",
+  "session_id": "838a26ab-646c-45ac-8200-638bc101304a",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-21T05:31:13.431242Z",
+  "branch": "main",
+  "checkpoints_count": 5,
+  "save_step_count": 3,
+  "files_touched": [
+    "crates/lumen-model/src/transcript.rs",
+    "crates/lumen-session/Cargo.toml",
+    "crates/lumen-session/src/adapters/agy.rs",
+    "crates/lumen-session/src/adapters/claude.rs",
+    "crates/lumen-session/src/adapters/codex.rs",
+    "crates/lumen-session/src/adapters/opencode.rs",
+    "crates/lumen-session/src/snapshot.rs",
+    "crates/lumen-session/tests/test_claude.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "6ebb9c671f39",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 236867,
+    "cache_read_tokens": 11214037,
+    "output_tokens": 55917,
+    "api_call_count": 70,
+    "subagent_tokens": {
+      "input_tokens": 338,
+      "cache_creation_tokens": 288742,
+      "cache_read_tokens": 14776356,
+      "output_tokens": 74696,
+      "api_call_count": 169
+    }
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-21T05:31:13.290638Z",
+    "agent_lines": 21,
+    "agent_removed": 0,
+    "human_added": 158,
+    "human_modified": 47,
+    "human_removed": 0,
+    "total_committed": 226,
+    "total_lines_changed": 226,
+    "agent_percentage": 9.29203539823009,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 115,
+      "user_lines_removed": 7,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "crates/lumen-model/src/transcript.rs": 4,
+        "crates/lumen-session/Cargo.toml": 1,
+        "crates/lumen-session/src/adapters/agy.rs": 3,
+        "crates/lumen-session/src/adapters/claude.rs": 17,
+        "crates/lumen-session/src/adapters/codex.rs": 1,
+        "crates/lumen-session/src/adapters/opencode.rs": 4,
+        "crates/lumen-session/src/snapshot.rs": 14,
+        "crates/lumen-session/tests/test_claude.rs": 70
+      },
+      "user_removed_per_file": {
+        "crates/lumen-session/src/adapters/agy.rs": 1,
+        "crates/lumen-session/src/adapters/claude.rs": 2,
+        "crates/lumen-session/src/snapshot.rs": 4
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 92,
+      "user_lines_removed": 40,
+      "agent_lines_added": 114,
+      "agent_lines_removed": 7,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "crates/lumen-session/src/adapters/agy.rs": 1,
+        "crates/lumen-session/src/adapters/claude.rs": 82,
+        "crates/lumen-session/src/snapshot.rs": 4,
+        "crates/lumen-session/tests/test_claude.rs": 4
+      },
+      "user_removed_per_file": {
+        "crates/lumen-session/src/adapters/agy.rs": 2,
+        "crates/lumen-session/src/adapters/claude.rs": 18,
+        "crates/lumen-session/src/adapters/opencode.rs": 3,
+        "crates/lumen-session/src/snapshot.rs": 13,
+        "crates/lumen-session/tests/test_claude.rs": 4
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.3-nightly.202608200613.91a7fd7fc",
+  "checkpoint_id": "01M0HCTGHT0WKZ7YAQYX8XJHZJ",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/lumen-model/src/transcript.rs",
+    "crates/lumen-session/Cargo.toml",
+    "crates/lumen-session/src/adapters/agy.rs",
+    "crates/lumen-session/src/adapters/claude.rs",
+    "crates/lumen-session/src/adapters/codex.rs",
+    "crates/lumen-session/src/adapters/opencode.rs",
+    "crates/lumen-session/src/snapshot.rs",
+    "crates/lumen-session/tests/test_claude.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 236867,
+    "cache_read_tokens": 11214037,
+    "output_tokens": 55917,
+    "api_call_count": 70,
+    "subagent_tokens": {
+      "input_tokens": 338,
+      "cache_creation_tokens": 288742,
+      "cache_read_tokens": 14776356,
+      "output_tokens": 74696,
+      "api_call_count": 169
+    }
+  }
+}
