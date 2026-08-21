@@ -1,0 +1,93 @@
+I'm picking up implementation work on Lumen (~/Projects/lumen), a Rust workspace that
+parses AI coding-agent session transcripts into a canonical IR and computes token
+economics/trajectory metrics. Prism (~/Projects/prism, sibling repo) depends on Lumen's
+crates directly via path deps and is the reason this release matters — Prism can't move
+until Lumen's crates it actually uses are correct and stable.
+
+## What's already done (read this first)
+
+A prior session did real-data research and corrected Lumen's specs/plans — commit
+96ec28f on main, already pushed. Read these before touching any code:
+- specs/SPEC-LUMEN-001-MODEL.json, SPEC-LUMEN-002-SESSION.json,
+  SPEC-LUMEN-005-ANALYSIS.json, SPEC-LUMEN-006-PATTERN.json, SPEC-LUMEN-007-INSIGHTS.json
+- specs/PLAN-LUMEN-001-MODEL.json, PLAN-LUMEN-002-SESSION.json,
+  PLAN-LUMEN-005-ANALYSIS.json — these are audited, adversarially challenged, and
+  verified: every acceptance criterion has exact task coverage, no orphans.
+- Full research grounding lives in my auto-memory: read
+  project_lumen_adapter_accumulator_real_data_gaps.md (the complete inventory of what
+  was found wrong and why, with file:line citations to real reference implementations),
+  feedback_verify_against_real_data_before_speccing_formats.md (the core lesson that
+  produced this whole correction pass), and project_lumen_prism_sibling_repos.md.
+
+These specs/plans are the ground truth for what to build. Do NOT re-derive requirements
+from scratch — they're already grounded in real session data, the real OTel semantic
+conventions spec, and cross-validated against ccusage/Langfuse/OpenLLMetry/OpenHands.
+
+## What Prism actually needs — this defines priority order
+
+I checked Prism's real source (not assumption). Prism's ENTI
+- lumen-model: CanonicalTranscript, ExecutionTiming, OrchestratorKind, CanonicalTurn,
+  TurnRole, TurnTokenUsage, TokenEconomics (several `use lumrts
+  too, so treat the whole public surface as load-bearing)
+- lumen-session: ClaudeCodeAdapter, AgyAdapter, CodexAdapter
+  Prism does NOT import OpenCodeAdapter anywhere today
+- lumen-pattern: calculate_monotonicity
+- lumen-analysis: declared as a workspace dep in Prism's Cargo.toml but NOT imported by
+  any Prism source file yet — it's available-but-unused
+
+Implication for sequencing: PLAN-LUMEN-001-MODEL (pricing) a
+portions of PLAN-LUMEN-002-SESSION are on Prism's critical path. OpenCodeAdapter and all
+of PLAN-LUMEN-005-ANALYSIS's 22 accumulator tasks are NOT cu
+worth doing for Lumen's own completeness, but don't let them delay a Prism-supporting
+release. Confirm this reading with the user before committin
+my inference from the code, not something they explicitly said.
+
+## A real cross-repo breaking change PLAN-001 doesn't cover
+
+SPEC-LUMEN-001-MODEL changes TokenEconomics::calculate's signature (removes the old
+5-arg form, moves to a per-turn TurnPricingInput slice + Pri
+TASK-MODEL-008 migrates every real call site WITHIN Lumen's own workspace. It does NOT
+and CANNOT cover Prism, a separate repo. I confirmed Prism c
+directly in 5 real places: crates/prism-cli/src/main.rs:120 and four call sites across
+crates/prism-grader/tests/test_graders.rs and test_matrix.rs
+written will break Prism's build the moment Lumen's new lumen-model is picked up. This
+needs its own migration step in Prism's repo — plan for it eit
+by surprise later.
+
+## Repo state warning — read before writing anything
+
+`git status` in ~/Projects/lumen currently shows a large amount of pre-existing
+uncommitted work that is NOT part of the just-committed spec
+ARCHITECTURE.md, Cargo.toml, docs/07-10, crates/lumen-pattern/src/lib.rs,
+crates/lumen-session/src/adapters/codex.rs, crates/lumen-ses
+.codex/hooks.json, plus an entirely untracked lumen-fixtures crate, an untracked
+lumen-store crate, and several untracked accumulator source
+(permission_mode.rs, artifacts.rs, autonomy.rs, context_growth.rs, stats.rs,
+tool_inventory.rs) and test/bench files. This looks like rea
+implementation work (possibly from an earlier phase of the same overall effort) sitting
+uncommitted. Investigate it first — `git status`, `git diff`ad
+what the untracked crates actually contain — before assuming it's safe to build on top
+of, ignore, or (never) discard. Some PLAN-001/002 tasks may
+partially done there.
+
+## Known broken tooling
+
+The `canon:exit-gate` subagent failed to deliver a report 10/10 times last session (5
+dispatches + 5 retries with explicit "you must end with a fi
+`canon:auditor`, `vector:planner`, and `vector:challenger` all worked reliably. If
+exit-gate fails the same way, don't keep retrying it — do th
+
+## Suggested approach
+
+1. First, reconcile repo state (the warning above) — underst
+   uncommitted before starting new work.
+2. Confirm scope with the user: full PLAN-001/002/005, or th
+   (pricing + Claude/AGY/Codex adapters + lumen-pattern) first, with OpenCodeAdapter and
+   PLAN-005's accumulators as a follow-up wave.
+3. Use lambda:recon → lambda:implementer for TDD execution, one task at a time, starting
+   with PLAN-LUMEN-001-MODEL (pricing architecture) since PLits
+   PricingTable API.
+4. Plan the Prism-side TokenEconomics::calculate migration aep
+   once Lumen's new signature lands — don't let it be a surprise CI failure in Prism.
+5. Keep cargo test --workspace green throughout, matching th
+   TDD discipline (red → green → commit per task).
