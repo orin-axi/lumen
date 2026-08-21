@@ -75,24 +75,31 @@ impl<'a> QueueRepository<'a> {
         Ok(())
     }
 
+    /// Increments `retry_count` and recomputes `status` in a single atomic UPDATE
+    /// statement. SQLite evaluates `retry_count + 1` in the SET clause against
+    /// the row's current value within that one statement, with no separate SELECT
+    /// step to race against -- so two concurrent callers on the same row cannot
+    /// both read the same stale count and both write the same incremented value
+    /// (the lost-increment race the old two-statement read-modify-write allowed).
+    /// If no row matches `id`, this returns `StoreError::NotFound` instead of
+    /// silently succeeding as a no-op.
     pub fn mark_failed(&self, id: i64, error: &str) -> Result<(), StoreError> {
-        // Fetch current retry count
-        let retry_count: u32 = self
+        let rows_affected = self
             .conn
-            .query_row("SELECT retry_count FROM ingestion_queue WHERE id = ?1", params![id], |row| row.get(0))
-            .unwrap_or(0);
-
-        let new_retry = retry_count + 1;
-        let new_status = if new_retry >= 3 { "dead_letter" } else { "failed" };
-
-        self.conn
             .execute(
-                "UPDATE ingestion_queue 
-                 SET status = ?1, retry_count = ?2, last_error = ?3, updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = ?4",
-                params![new_status, new_retry, error, id],
+                "UPDATE ingestion_queue
+                 SET retry_count = retry_count + 1,
+                     status = CASE WHEN retry_count + 1 >= 3 THEN 'dead_letter' ELSE 'failed' END,
+                     last_error = ?1,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?2",
+                params![error, id],
             )
             .map_err(StoreError::Sqlite)?;
+
+        if rows_affected == 0 {
+            return Err(StoreError::NotFound(format!("ingestion_queue row with id {id} not found")));
+        }
 
         Ok(())
     }

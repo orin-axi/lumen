@@ -58,6 +58,23 @@ fn test_queue_repository_enqueue_fetch_and_dead_letter() {
 }
 
 #[test]
+fn test_queue_repository_mark_failed_nonexistent_id_returns_error() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("queue_missing_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = QueueRepository::new(&conn);
+
+    // No row with id 999 was ever enqueued; mark_failed must surface this as an
+    // error rather than silently succeeding (the old implementation used
+    // `.unwrap_or(0)` on the SELECT and then ran an UPDATE that matched zero
+    // rows but still returned Ok(())).
+    let result = repo.mark_failed(999, "some error");
+    assert!(result.is_err(), "mark_failed on a nonexistent id must return Err, got {result:?}");
+}
+
+#[test]
 fn test_session_repository_idempotent_upsert_and_list() {
     let dir = tempdir().unwrap();
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("session_test.db")).unwrap();
