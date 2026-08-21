@@ -4,7 +4,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
 use lumen_model::*;
 use lumen_session::*;
-use miette::{IntoDiagnostic, Result};
+use miette::{IntoDiagnostic, Result, miette};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -62,14 +62,20 @@ fn load_session(path: &Path) -> Result<CanonicalTranscript> {
     let n = sample_file.read(&mut buffer).unwrap_or(0);
     let sample = &buffer[..n];
 
-    let orchestrator = detect_orchestrator(sample).unwrap_or(OrchestratorKind::ClaudeCode);
+    let orchestrator = detect_orchestrator(sample).ok_or_else(|| {
+        miette!("{}: {} ({})", IngestionError::UnrecognizedFormat, path.display(), "no known orchestrator fingerprint matched")
+    })?;
 
     match orchestrator {
         OrchestratorKind::ClaudeCode => ClaudeCodeAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
         OrchestratorKind::Antigravity => AgyAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
         OrchestratorKind::Codex => CodexAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
         OrchestratorKind::OpenCode => OpenCodeAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
-        _ => ClaudeCodeAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
+        other => Err(miette!(
+            "recognized orchestrator {:?} for {} but no adapter is implemented for it yet",
+            other,
+            path.display()
+        )),
     }
 }
 
@@ -210,4 +216,39 @@ fn cmd_scan(dir: &Path, json_mode: bool) -> Result<()> {
 
     println!("{table}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("create temp file");
+        file.write_all(contents.as_bytes()).expect("write temp file");
+        file.flush().expect("flush temp file");
+        file
+    }
+
+    #[test]
+    fn load_session_rejects_unrecognized_format() {
+        // No sessionId/parentUuid, no step_index+source, no event_msg/response_item,
+        // no action:run/observation/action:message markers -- detect_orchestrator returns None.
+        let file = write_temp_file(r#"{"totally":"unrecognized","shape":42}"#);
+
+        let result = load_session(file.path());
+
+        assert!(result.is_err(), "expected an Err for an unrecognized session format, got Ok");
+    }
+
+    #[test]
+    fn load_session_parses_recognized_claude_code_transcript() {
+        let file = write_temp_file(lumen_fixtures::real_claude_session_dump());
+
+        let result = load_session(file.path());
+
+        let transcript = result.expect("expected a real Claude Code transcript to parse successfully");
+        assert_eq!(transcript.orchestrator, OrchestratorKind::ClaudeCode);
+        assert!(!transcript.turns.is_empty(), "expected the recognized transcript to have turns");
+    }
 }

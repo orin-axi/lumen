@@ -27,6 +27,10 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+lumen-fixtures = { workspace = true }
+
 [lints]
 workspace = true
 
