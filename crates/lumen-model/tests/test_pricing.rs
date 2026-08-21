@@ -152,3 +152,62 @@ fn test_token_economics_zero_division_clamping_and_scale() {
     let expected_multiplier = (mixed_econ.baseline_cost_no_cache_usd / mixed_econ.total_cost_usd) as f32;
     assert_eq!(mixed_econ.efficiency_multiplier, expected_multiplier);
 }
+
+#[test]
+fn test_extended_pricing_matrix() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // CRIT-LUMEN-099: Claude Opus
+    assert!((table.rate_for("claude-opus", None, TokenRateKind::Input, as_of) - 15.00).abs() < 1e-9);
+    assert!((table.rate_for("claude-opus", None, TokenRateKind::CacheWrite, as_of) - 18.75).abs() < 1e-9);
+    assert!((table.rate_for("claude-opus", None, TokenRateKind::CacheRead, as_of) - 1.50).abs() < 1e-9);
+    assert!((table.rate_for("claude-opus", None, TokenRateKind::Output, as_of) - 75.00).abs() < 1e-9);
+
+    // CRIT-LUMEN-100: GPT-4o
+    assert!((table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of) - 2.50).abs() < 1e-9);
+    assert!((table.rate_for("gpt-4o", None, TokenRateKind::CacheWrite, as_of) - 2.50).abs() < 1e-9);
+    assert!((table.rate_for("gpt-4o", None, TokenRateKind::CacheRead, as_of) - 1.25).abs() < 1e-9);
+    assert!((table.rate_for("gpt-4o", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9);
+
+    // CRIT-LUMEN-101: DeepSeek R1
+    assert!((table.rate_for("deepseek-r1", None, TokenRateKind::Input, as_of) - 0.55).abs() < 1e-9);
+    assert!((table.rate_for("deepseek-r1", None, TokenRateKind::CacheWrite, as_of) - 0.55).abs() < 1e-9);
+    assert!((table.rate_for("deepseek-r1", None, TokenRateKind::CacheRead, as_of) - 0.14).abs() < 1e-9);
+    assert!((table.rate_for("deepseek-r1", None, TokenRateKind::Output, as_of) - 2.19).abs() < 1e-9);
+
+    // CRIT-LUMEN-102: Kimi K1.5
+    assert!((table.rate_for("kimi-k1.5", None, TokenRateKind::Input, as_of) - 0.50).abs() < 1e-9);
+    assert!((table.rate_for("kimi-k1.5", None, TokenRateKind::CacheWrite, as_of) - 0.50).abs() < 1e-9);
+    assert!((table.rate_for("kimi-k1.5", None, TokenRateKind::CacheRead, as_of) - 0.10).abs() < 1e-9);
+    assert!((table.rate_for("kimi-k1.5", None, TokenRateKind::Output, as_of) - 2.00).abs() < 1e-9);
+
+    // CRIT-LUMEN-103: GLM-4-Plus
+    assert!((table.rate_for("glm-4-plus", None, TokenRateKind::Input, as_of) - 1.40).abs() < 1e-9);
+    assert!((table.rate_for("glm-4-plus", None, TokenRateKind::CacheWrite, as_of) - 1.40).abs() < 1e-9);
+    assert!((table.rate_for("glm-4-plus", None, TokenRateKind::CacheRead, as_of) - 0.20).abs() < 1e-9);
+    assert!((table.rate_for("glm-4-plus", None, TokenRateKind::Output, as_of) - 1.40).abs() < 1e-9);
+
+    // CRIT-LUMEN-104: Gemini 2.0 Flash
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheWrite, as_of) - 0.10).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of) - 0.025).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of) - 0.40).abs() < 1e-9);
+
+    // CRIT-LUMEN-105: Gemini 2.0 Pro
+    assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::Input, as_of) - 1.25).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::CacheWrite, as_of) - 1.25).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::CacheRead, as_of) - 0.30).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::Output, as_of) - 5.00).abs() < 1e-9);
+
+    // CacheWrite == Input for the six non-Anthropic models (Opus is Anthropic and has a
+    // distinct 1.25x cache-write premium, so it is excluded from this check).
+    for model in ["gpt-4o", "deepseek-r1", "kimi-k1.5", "glm-4-plus", "gemini-2.0-flash", "gemini-2.0-pro"] {
+        let input_rate = table.rate_for(model, None, TokenRateKind::Input, as_of);
+        let cache_write_rate = table.rate_for(model, None, TokenRateKind::CacheWrite, as_of);
+        assert!(
+            (input_rate - cache_write_rate).abs() < 1e-9,
+            "{model}: CacheWrite rate should equal Input rate"
+        );
+    }
+}

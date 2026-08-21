@@ -67,6 +67,48 @@ impl PricingTable {
         push("qwen-2.5-coder", TokenRateKind::CacheRead, 0.05);
         push("qwen-2.5-coder", TokenRateKind::Output, 0.60);
 
+        // CRIT-LUMEN-099: Claude Opus
+        push("claude-opus", TokenRateKind::Input, 15.00);
+        push("claude-opus", TokenRateKind::CacheWrite, 18.75);
+        push("claude-opus", TokenRateKind::CacheRead, 1.50);
+        push("claude-opus", TokenRateKind::Output, 75.00);
+
+        // CRIT-LUMEN-100: GPT-4o
+        push("gpt-4o", TokenRateKind::Input, 2.50);
+        push("gpt-4o", TokenRateKind::CacheWrite, 2.50);
+        push("gpt-4o", TokenRateKind::CacheRead, 1.25);
+        push("gpt-4o", TokenRateKind::Output, 10.00);
+
+        // CRIT-LUMEN-101: DeepSeek R1
+        push("deepseek-r1", TokenRateKind::Input, 0.55);
+        push("deepseek-r1", TokenRateKind::CacheWrite, 0.55);
+        push("deepseek-r1", TokenRateKind::CacheRead, 0.14);
+        push("deepseek-r1", TokenRateKind::Output, 2.19);
+
+        // CRIT-LUMEN-102: Kimi K1.5
+        push("kimi-k1.5", TokenRateKind::Input, 0.50);
+        push("kimi-k1.5", TokenRateKind::CacheWrite, 0.50);
+        push("kimi-k1.5", TokenRateKind::CacheRead, 0.10);
+        push("kimi-k1.5", TokenRateKind::Output, 2.00);
+
+        // CRIT-LUMEN-103: GLM-4-Plus
+        push("glm-4-plus", TokenRateKind::Input, 1.40);
+        push("glm-4-plus", TokenRateKind::CacheWrite, 1.40);
+        push("glm-4-plus", TokenRateKind::CacheRead, 0.20);
+        push("glm-4-plus", TokenRateKind::Output, 1.40);
+
+        // CRIT-LUMEN-104: Gemini 2.0 Flash
+        push("gemini-2.0-flash", TokenRateKind::Input, 0.10);
+        push("gemini-2.0-flash", TokenRateKind::CacheWrite, 0.10);
+        push("gemini-2.0-flash", TokenRateKind::CacheRead, 0.025);
+        push("gemini-2.0-flash", TokenRateKind::Output, 0.40);
+
+        // CRIT-LUMEN-105: Gemini 2.0 Pro
+        push("gemini-2.0-pro", TokenRateKind::Input, 1.25);
+        push("gemini-2.0-pro", TokenRateKind::CacheWrite, 1.25);
+        push("gemini-2.0-pro", TokenRateKind::CacheRead, 0.30);
+        push("gemini-2.0-pro", TokenRateKind::Output, 5.00);
+
         Self { rates }
     }
 
