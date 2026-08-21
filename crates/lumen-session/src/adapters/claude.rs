@@ -47,6 +47,13 @@ impl SessionAdapter for ClaudeCodeAdapter {
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
         let mut otel_conversation_id: Option<CompactString> = None;
 
+        // costUSD is Claude Code's own reported cost, wired through TokenEconomics::calculate's
+        // provided_cost_usd twin-field (CRIT-LUMEN-160) for drift detection against the
+        // independently-computed total_cost_usd. It's unclear whether costUSD is a per-message
+        // delta or a cumulative running total, so treated last-write-wins, same as OpenCode's
+        // accumulated_cost (commit c87e801) and Codex's token_count.
+        let mut last_cost_usd: Option<f64> = None;
+
         let mut byte_offset: usize = 0;
 
         'lines: for (idx, line_res) in reader.lines().enumerate() {
@@ -150,6 +157,13 @@ impl SessionAdapter for ClaudeCodeAdapter {
                 if let Some(rid) = val.get("requestId").and_then(|v| v.as_str()) {
                     otel_conversation_id = Some(CompactString::new(rid));
                 }
+            }
+
+            // costUSD's explicit-null case was already rejected (and the line skipped) by the
+            // CRIT-LUMEN-163 null-guard above; here we only need to handle a real number or an
+            // absent field.
+            if let Some(cost) = val.get("costUSD").and_then(|v| v.as_f64()) {
+                last_cost_usd = Some(cost);
             }
 
             // Extract session ID
@@ -329,7 +343,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
             }],
             &model_family,
             &pricing::SEEDED,
-            None,
+            last_cost_usd,
         );
 
         Ok(CanonicalTranscript {

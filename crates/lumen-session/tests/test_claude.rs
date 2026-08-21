@@ -264,3 +264,31 @@ fn test_claude_code_adapter_otel_conversation_id_first_non_sidechain_wins() {
 
     assert_eq!(transcript.otel_conversation_id, Some("req-first".into()));
 }
+
+#[test]
+fn test_claude_code_adapter_cost_usd_last_write_wins_as_provided_cost() {
+    // costUSD is Claude Code's own reported cost, wired through TokenEconomics::calculate's
+    // provided_cost_usd twin-field (CRIT-LUMEN-160) for drift detection against the
+    // independently-computed total_cost_usd. Treated last-write-wins, same as OpenCode's
+    // accumulated_cost (commit c87e801) and Codex's token_count, since it's unclear whether
+    // costUSD is a per-message delta or a cumulative running total.
+    let sample = r#"{"type":"assistant","costUSD":0.01,"message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"first"}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","costUSD":0.0234,"message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"second"}],"usage":{"input_tokens":200,"output_tokens":20}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(transcript.economics.provided_cost_usd, Some(0.0234));
+}
+
+#[test]
+fn test_claude_code_adapter_no_cost_usd_yields_none_provided_cost() {
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":10}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(transcript.economics.provided_cost_usd, None);
+}
