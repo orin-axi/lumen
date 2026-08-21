@@ -1,0 +1,39 @@
+use lumen_model::*;
+use lumen_session::*;
+use std::io::Cursor;
+
+#[test]
+fn test_agy_fingerprint_detection() {
+    let sample = b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\"}";
+    let start = std::time::Instant::now();
+    let detected = detect_orchestrator(sample);
+    let duration = start.elapsed();
+
+    assert_eq!(detected, Some(OrchestratorKind::Antigravity));
+    // CRIT-LUMEN-021: under 1ms
+    assert!(duration.as_micros() < 1000);
+}
+
+#[test]
+fn test_agy_adapter_thinking_blocks_and_tool_calls() {
+    // CRIT-LUMEN-027: Extracts thinking reasoning into CanonicalTurn.text
+    let sample = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"Find all tests"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","thinking":"I need to scan tests directory","tool_calls":[{"name":"find_by_name","args":{"SearchDirectory":"tests","Pattern":"*.rs"}}]}
+{"step_index":2,"source":"SYSTEM","type":"TOOL_RESULT","content":"tests/test_a.rs\ntests/test_b.rs"}
+"#;
+
+    let adapter = AgyAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse AGY session");
+
+    assert_eq!(transcript.orchestrator, OrchestratorKind::Antigravity);
+    assert_eq!(transcript.turns.len(), 3);
+    assert_eq!(transcript.turns[0].role, TurnRole::User);
+    assert_eq!(transcript.turns[0].text.as_deref(), Some("Find all tests"));
+
+    // Verify thinking block extraction
+    let assistant_turn = &transcript.turns[1];
+    assert_eq!(assistant_turn.role, TurnRole::Assistant);
+    assert_eq!(assistant_turn.text.as_deref(), Some("I need to scan tests directory"));
+    assert_eq!(assistant_turn.tool_calls.len(), 1);
+    assert_eq!(assistant_turn.tool_calls[0].tool_name, "find_by_name");
+}

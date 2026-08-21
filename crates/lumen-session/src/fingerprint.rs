@@ -28,7 +28,11 @@ pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
         return Some(OrchestratorKind::Codex);
     }
 
-    if sample_str.contains("\"action\":\"run\"") || sample_str.contains("\"observation\":") {
+    if sample_str.contains("\"action\":\"run\"")
+        || sample_str.contains("\"action\": \"run\"")
+        || sample_str.contains("\"observation\":")
+        || sample_str.contains("\"action\":\"message\"")
+    {
         return Some(OrchestratorKind::OpenCode);
     }
 
@@ -49,5 +53,22 @@ mod tests {
     fn test_detect_agy() {
         let sample = b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\"}";
         assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::Antigravity));
+    }
+
+    #[test]
+    fn test_detect_opencode_spaced_action_run() {
+        // CRIT-LUMEN-108: detect_orchestrator must agree with OpenCodeAdapter::matches_fingerprint,
+        // which already accepts the spaced JSON variant.
+        let sample = b"{\"action\": \"run\", \"args\":{\"command\":\"cargo test\"}}";
+        assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::OpenCode));
+    }
+
+    #[test]
+    fn test_detect_opencode_action_message() {
+        // CRIT-LUMEN-108: "action":"message" is a real, meaningfully-parsed OpenCode event
+        // (OpenCodeAdapter::parse_stream builds a CanonicalTurn from it) that detect_orchestrator
+        // must also recognize so the two independently-coded paths cannot drift apart.
+        let sample = b"{\"action\":\"message\",\"source\":\"assistant\",\"args\":{\"content\":\"done\"}}";
+        assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::OpenCode));
     }
 }

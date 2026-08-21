@@ -23,7 +23,11 @@ proptest = { workspace = true }
 rstest = { workspace = true }
 insta = { workspace = true }
 lumen-fixtures = { workspace = true }
+criterion = { workspace = true }
 
+[[bench]]
+name = "fingerprint_bench"
+harness = false
 
 [lints]
 workspace = true
