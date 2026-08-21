@@ -49,8 +49,8 @@ Always use `just` or `moon` task runners for building, testing, linting, and for
 ## 3. Strict Engineering Invariants
 
 1. **Safe Rust Only (`unsafe_code = "forbid"`)**: `unsafe` code blocks are strictly forbidden across all workspace crates.
-2. **Deterministic Token Accounting**: Token calculations must account for uncached input, 5m ephemeral write, 1h write, 0.10x cache read discount, and output tokens without division by zero.
-3. **Linear Streaming Pass $O(N)$**: Telemetry accumulators must operate in a single linear pass over the canonical turns without nested heap allocations.
+2. **Deterministic Token Accounting**: Token calculations must account for uncached input, 5m ephemeral write, and output tokens without division by zero. Cache-read discount ratios are per-model, versioned rates looked up from `PricingTable` (e.g. 0.10x for Anthropic models, but this varies by provider — there is no single universal ratio). The 1h ephemeral write tier is intentionally unpopulated pending a provider that publishes a selectable 1h-cache rate; see `SPEC-LUMEN-001-MODEL`'s non-goals.
+3. **Linear Streaming Pass $O(N)$**: Telemetry accumulators must operate in a single linear pass over the canonical turns. Avoiding nested heap allocations per turn is a design goal enforced by code review, not a mechanically-verified invariant — a true allocation-counting harness would require an `unsafe impl GlobalAlloc`, which invariant 1 forbids.
 4. **Tarjan SCC Cycle Detection**: Cycle depth $\ge 3$ on identical target symbols with zero mutation must be flagged as circular loops.
 5. **Rich Diagnostic Cards (`miette`)**: User-facing CLI errors must derive `miette::Diagnostic`.
 6. **No Emoji Directive in Code & Comments**: Code comments and docs must remain technical, clean, and scannable.
