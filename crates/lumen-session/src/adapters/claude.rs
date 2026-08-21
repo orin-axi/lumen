@@ -134,10 +134,12 @@ impl SessionAdapter for ClaudeCodeAdapter {
                 }
             }
 
-            // CRIT-LUMEN-026: entries with is_sidechain=true belong to a subagent/parallel
+            // CRIT-LUMEN-026: entries with isSidechain=true belong to a subagent/parallel
             // branch, distinct from the main chain -- exclude them from the main transcript's
-            // turns entirely.
-            let is_sidechain = val.get("is_sidechain").and_then(|v| v.as_bool()).unwrap_or(false);
+            // turns entirely. Real Claude Code session field is camelCase "isSidechain"
+            // (verified against 31 real local ~/.claude/projects/*/*.jsonl transcripts;
+            // snake_case "is_sidechain" never occurs in any real file).
+            let is_sidechain = val.get("isSidechain").and_then(|v| v.as_bool()).unwrap_or(false);
             if is_sidechain {
                 continue;
             }
@@ -360,7 +362,7 @@ impl ClaudeCodeAdapter {
     /// Parses a session's main transcript file plus any sibling `subagents/<worker>.jsonl`
     /// files found alongside it, linking each as a child transcript via `parent_session_id`
     /// and `subagent_role` (CRIT-LUMEN-026). A missing `subagents/` directory, or a
-    /// `subagents/<worker>.jsonl` file with no corresponding `is_sidechain` entries in the
+    /// `subagents/<worker>.jsonl` file with no corresponding `isSidechain` entries in the
     /// main file, is not an error -- it is simply linked (or, for a missing directory, simply
     /// absent) without failing the parse.
     pub fn parse_session_with_subagents(

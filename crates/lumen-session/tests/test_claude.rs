@@ -125,8 +125,10 @@ fn test_claude_code_adapter_empty_session() {
 
 #[test]
 fn test_claude_code_adapter_excludes_sidechain_entries_from_main_turns() {
-    // CRIT-LUMEN-026: is_sidechain:true entries belong to a subagent branch, not the main chain.
-    let sample = r#"{"type":"user","is_sidechain":true,"message":{"role":"user","content":"sidechain message"}}
+    // CRIT-LUMEN-026: isSidechain:true entries belong to a subagent branch, not the main chain.
+    // Real Claude Code session field is camelCase "isSidechain" (verified against 31 real local
+    // ~/.claude/projects/*/*.jsonl transcripts; snake_case "is_sidechain" never occurs).
+    let sample = r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"sidechain message"}}
 {"type":"user","message":{"role":"user","content":"main message"}}
 "#;
 
@@ -250,7 +252,9 @@ fn test_claude_code_adapter_parse_failure_byte_offset_is_real() {
 fn test_claude_code_adapter_otel_conversation_id_first_non_sidechain_wins() {
     // CRIT-LUMEN-164: otel_conversation_id is set from the first non-sidechain entry's requestId,
     // never overwritten thereafter; sidechain entries are skipped entirely.
-    let sample = r#"{"type":"user","is_sidechain":true,"requestId":"req-side","message":{"role":"user","content":"side"}}
+    // Real Claude Code session field is camelCase "isSidechain" (verified against real local
+    // transcripts).
+    let sample = r#"{"type":"user","isSidechain":true,"requestId":"req-side","message":{"role":"user","content":"side"}}
 {"type":"user","requestId":"req-first","message":{"role":"user","content":"first"}}
 {"type":"user","requestId":"req-second","message":{"role":"user","content":"second"}}
 "#;
