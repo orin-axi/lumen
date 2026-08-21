@@ -376,3 +376,47 @@ fn test_recognized_model_missing_kind_returns_zero() {
          model's genuinely-absent rate kind"
     );
 }
+
+/// CRIT-LUMEN-160: a provider-reported cost (e.g. Claude Code's real costUSD field) passed as
+/// `provided_cost_usd` must be stored verbatim on `TokenEconomics.provided_cost_usd`, and must
+/// never override, blend with, or short-circuit the independently computed `total_cost_usd` --
+/// the two fields exist to be compared for drift, not merged.
+#[test]
+fn test_provided_cost_usd_twin_field() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // 1,000,000 input tokens on claude-3-5-sonnet ($3.00/M) independently computes to $3.00,
+    // which deliberately does NOT equal the provider-reported 4.20 supplied below.
+    let turn = TurnPricingInput {
+        usage: TurnTokenUsage {
+            input_tokens: 1_000_000,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        },
+        timestamp: as_of,
+        tier: None,
+    };
+
+    // (a) A provided cost that disagrees with the independently computed cost must be stored
+    // verbatim in provided_cost_usd, and must NOT override or blend into total_cost_usd.
+    let econ_with_provided =
+        TokenEconomics::calculate(std::slice::from_ref(&turn), "claude-3-5-sonnet", &pricing, Some(4.20));
+    assert_eq!(econ_with_provided.provided_cost_usd, Some(4.20));
+    assert!(
+        (econ_with_provided.total_cost_usd - 3.00).abs() < 1e-9,
+        "total_cost_usd must remain the independently computed value (3.00), unaffected by the \
+         disagreeing provided_cost_usd of 4.20"
+    );
+    assert!(
+        (econ_with_provided.provided_cost_usd.unwrap() - econ_with_provided.total_cost_usd).abs() > 1e-9,
+        "provided_cost_usd and total_cost_usd must be free to disagree -- they are compared for \
+         drift, not merged"
+    );
+
+    // (b) When no provided cost is supplied, provided_cost_usd must be None, not Some(0.0).
+    let econ_without_provided =
+        TokenEconomics::calculate(std::slice::from_ref(&turn), "claude-3-5-sonnet", &pricing, None);
+    assert_eq!(econ_without_provided.provided_cost_usd, None);
+}
