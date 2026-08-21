@@ -14,11 +14,11 @@ fn test_sqlite_store_open_and_migrations_v1_to_v5() {
 
     let conn = store.connection().expect("Failed to acquire connection");
 
-    // Verify all 6 migrations were recorded
+    // Verify all 7 migrations were recorded
     let count: usize = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
         .expect("Failed to query schema_migrations");
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
 
     // Verify WAL journal mode
     let journal_mode: String =
@@ -886,4 +886,149 @@ fn test_token_usage_repository_empty_per_model_inserts_zero_rows() {
         .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+fn multi_model_economics(
+    sonnet_turns: u64,
+    opus_turns: u64,
+) -> TokenEconomics {
+    use std::collections::HashMap;
+    let mut per_model = HashMap::new();
+    per_model.insert(
+        compact_str::CompactString::from("claude-3-5-sonnet-20241022"),
+        ModelTokenSummary {
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_creation_tokens: 50,
+            cache_read_tokens: 30,
+            reasoning_tokens: 0,
+            cost_usd: 1.25,
+            turns: sonnet_turns,
+        },
+    );
+    per_model.insert(
+        compact_str::CompactString::from("claude-3-opus-20240229"),
+        ModelTokenSummary {
+            input_tokens: 2000,
+            output_tokens: 400,
+            cache_creation_tokens: 80,
+            cache_read_tokens: 60,
+            reasoning_tokens: 0,
+            cost_usd: 2.50,
+            turns: opus_turns,
+        },
+    );
+
+    TokenEconomics {
+        input_tokens: 3000,
+        output_tokens: 600,
+        cache_creation_tokens: 130,
+        cache_read_tokens: 90,
+        ephemeral_5m_tokens: 0,
+        ephemeral_1h_tokens: 0,
+        cache_hit_ratio: 0.0,
+        total_cost_usd: 3.75,
+        provided_cost_usd: None,
+        baseline_cost_no_cache_usd: 3.75,
+        net_savings_usd: 0.0,
+        efficiency_multiplier: 1.0,
+        per_model,
+        reasoning_output_tokens: 0,
+    }
+}
+
+#[test]
+fn test_upsert_session_persists_and_reads_back_per_model_token_usage() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("session_token_economics_roundtrip_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+
+    let mut record = make_test_session_record("sess-economics-roundtrip");
+    record.economics = multi_model_economics(3, 5);
+
+    session_repo.upsert_session(&record).expect("upsert_session failed");
+
+    let detail =
+        session_repo.get_session("sess-economics-roundtrip").expect("get_session failed").expect("session not found");
+
+    assert_eq!(detail.economics.per_model, record.economics.per_model, "per_model must round-trip exactly");
+    assert_eq!(detail.economics.input_tokens, 3000, "input_tokens must be the sum across per_model entries");
+    assert_eq!(detail.economics.output_tokens, 600, "output_tokens must be the sum across per_model entries");
+    assert_eq!(
+        detail.economics.cache_creation_tokens, 130,
+        "cache_creation_tokens must be the sum across per_model entries"
+    );
+    assert_eq!(detail.economics.cache_read_tokens, 90, "cache_read_tokens must be the sum across per_model entries");
+}
+
+#[test]
+fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() {
+    use std::collections::HashMap;
+
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("session_token_economics_reupsert_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+
+    let mut record = make_test_session_record("sess-economics-reupsert");
+    record.economics = multi_model_economics(1, 1);
+    session_repo.upsert_session(&record).expect("first upsert_session failed");
+
+    // Second upsert for the SAME (provider, provider_session_id) with DIFFERENT per_model
+    // content -- only one model this time, with different token counts.
+    let mut second_per_model = HashMap::new();
+    second_per_model.insert(
+        compact_str::CompactString::from("claude-3-5-haiku-20241022"),
+        ModelTokenSummary {
+            input_tokens: 500,
+            output_tokens: 100,
+            cache_creation_tokens: 10,
+            cache_read_tokens: 5,
+            reasoning_tokens: 0,
+            cost_usd: 0.10,
+            turns: 2,
+        },
+    );
+    record.economics = TokenEconomics {
+        input_tokens: 500,
+        output_tokens: 100,
+        cache_creation_tokens: 10,
+        cache_read_tokens: 5,
+        ephemeral_5m_tokens: 0,
+        ephemeral_1h_tokens: 0,
+        cache_hit_ratio: 0.0,
+        total_cost_usd: 0.10,
+        provided_cost_usd: None,
+        baseline_cost_no_cache_usd: 0.10,
+        net_savings_usd: 0.0,
+        efficiency_multiplier: 1.0,
+        per_model: second_per_model.clone(),
+        reasoning_output_tokens: 0,
+    };
+    session_repo.upsert_session(&record).expect("second upsert_session failed");
+
+    let detail =
+        session_repo.get_session("sess-economics-reupsert").expect("get_session failed").expect("session not found");
+
+    assert_eq!(detail.economics.per_model, second_per_model, "get_session must reflect only the second upsert's data");
+    assert_eq!(detail.economics.input_tokens, 500);
+    assert_eq!(detail.economics.output_tokens, 100);
+    assert_eq!(detail.economics.cache_creation_tokens, 10);
+    assert_eq!(detail.economics.cache_read_tokens, 5);
+
+    let internal_id: i64 = conn
+        .query_row(
+            "SELECT id FROM sessions WHERE provider_session_id = ?1",
+            ["sess-economics-reupsert"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let row_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    assert_eq!(row_count, 1, "re-upsert must fully replace token_usage rows, not accumulate duplicates");
 }

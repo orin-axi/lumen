@@ -148,6 +148,10 @@ impl MigrationManager {
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type);
         "#,
+        // V7: turns column on token_usage so per-model turn counts round-trip honestly
+        r#"
+        ALTER TABLE token_usage ADD COLUMN turns INTEGER NOT NULL DEFAULT 0;
+        "#,
     ];
 
     pub fn apply_migrations(conn: &mut Connection) -> Result<usize, StoreError> {

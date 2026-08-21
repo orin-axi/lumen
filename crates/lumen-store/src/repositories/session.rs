@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::error::StoreError;
 use crate::models::{SessionDetailReadModel, SessionFactRecord, SessionFilter, SessionSummaryReadModel};
+use crate::repositories::token_usage::TokenUsageRepository;
 use crate::repositories::tool_call::ToolCallRepository;
 
 pub struct SessionRepository<'a> {
@@ -57,6 +58,19 @@ impl<'a> SessionRepository<'a> {
                 ],
             )
             .map_err(StoreError::Sqlite)?;
+
+        let internal_id: i64 = self
+            .conn
+            .query_row(
+                "SELECT id FROM sessions WHERE provider_session_id = ?1",
+                params![record.provider_session_id],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sqlite)?;
+
+        let token_usage_repo = TokenUsageRepository::new(self.conn);
+        token_usage_repo.delete_for_session(internal_id)?;
+        token_usage_repo.insert_token_usage(&record.provider_session_id, &record.economics)?;
 
         Ok(())
     }
@@ -179,6 +193,26 @@ impl<'a> SessionRepository<'a> {
         let tool_call_repo = ToolCallRepository::new(self.conn);
         detail.tool_counts = tool_call_repo.tool_counts_by_session(id)?;
         detail.error_counts = tool_call_repo.error_counts_by_session(id)?;
+
+        let token_usage_repo = TokenUsageRepository::new(self.conn);
+        let per_model = token_usage_repo.per_model_by_session(id)?;
+
+        let mut input_tokens = 0u64;
+        let mut output_tokens = 0u64;
+        let mut cache_creation_tokens = 0u64;
+        let mut cache_read_tokens = 0u64;
+        for summary in per_model.values() {
+            input_tokens += summary.input_tokens;
+            output_tokens += summary.output_tokens;
+            cache_creation_tokens += summary.cache_creation_tokens;
+            cache_read_tokens += summary.cache_read_tokens;
+        }
+
+        detail.economics.input_tokens = input_tokens;
+        detail.economics.output_tokens = output_tokens;
+        detail.economics.cache_creation_tokens = cache_creation_tokens;
+        detail.economics.cache_read_tokens = cache_read_tokens;
+        detail.economics.per_model = per_model;
 
         Ok(Some(detail))
     }
