@@ -4273,3 +4273,59 @@ lumen-prism-req: waiting on 3 fresh canon:drift-checker re-verifications (ade954
 ---
 
 How much of the UI did we spec and build? Are we using our CLI best practices? The industry's rust CLI best practices? Using rayon, miette, etc?
+
+---
+
+<task-notification>
+<task-id>a9f433c62ed4253e8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a9f433c62ed4253e8.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix gpt-4o-mini pricing overcharge" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+{
+  "task_id": "fix-gpt-4o-mini-pricing-overcharge",
+  "status": "done",
+  "steps_completed": [
+    "read pricing.rs current normalize_model_key/prefix_byte_len implementation and seed() key set",
+    "read existing test_pricing.rs to confirm the 9 must-still-pass real strings and the existing test structure",
+    "wrote failing tests: test_gpt_4o_mini_does_not_normalize_to_gpt_4o, test_gemini_flash_lite_does_not_normalize_to_gemini_flash, test_real_versioned_strings_still_normalize_after_safe_strip_restriction",
+    "confirmed red: cargo test -p lumen-model --test test_pricing showed the two new bug-proving tests FAILED against unmodified code, all 15 pre-existing tests still passed",
+    "implemented is_safe_strip_segment allowlist (numeric-only, digit+single-trailing-letter parameter-scale, small tuning-word allowlist) and gated normalize_model_key's prefix acceptance on it",
+    "confirmed green: cargo test -p lumen-model --test test_pricing -&gt; 17 passed, 0 failed",
+    "ran cargo test -p lumen-model (all test binaries) -&gt; all green",
+    "ran cargo test --workspace -&gt; all green (one lumen-session::test_agy flake reproduced identically on stashed baseline, confirmed pre-existing/unrelated, passed on rerun)",
+    "staged only crates/lumen-model/src/pricing.rs and crates/lumen-model/tests/test_pricing.rs, committed"
+  ],
+  "test_result": "pass",
+  "commit_sha": "a458178f85921a28af1f1099c4fdc68d0dce3dcd",
+  "concerns": "No spec_file_path/plan@1 existed for this task per the brief, so covers_criteria below are the brief's own stated must-pass/must-not-match strings rather than IDs from a spec document. Separately, crates/lumen-session/tests/test_agy.rs has a flaky test (test_agy_adapter_non_utf8_line_is_skipped_not_fatal) that failed once and passed on immediate rerun with no code changes in between (also failed identically on a git-stashed baseline with lumen-model changes removed) -- this is pre-existing and unrelated to the pricing.rs fix, but worth someone's attention separately.",
+  "criteria_evidence": [
+    {
+      "criterion_id": "gpt-4o-mini-must-not-bill-at-gpt-4o-rate",
+      "test_file": "/Users/gabe/Projects/lumen/crates/lumen-model/tests/test_pricing.rs",
+      "test_line": 663,
+      "implementation_file": "/Users/gabe/Projects/lumen/crates/lumen-model/src/pricing.rs",
+      "implementation_line": 165
+    },
+    {
+      "criterion_id": "gemini-2.0-flash-lite-must-not-bill-at-gemini-2.0-flash-rate",
+      "test_file": "/Users/gabe/Projects/lumen/crates/lumen-model/tests/test_pricing.rs",
+      "test_line": 693,
+      "implementation_file": "/Users/gabe/Projects/lumen/crates/lumen-model/src/pricing.rs",
+      "implementation_line": 199
+    },
+    {
+      "criterion_id": "nine-real-versioned-strings-still-normalize-correctly",
+      "test_file": "/Users/gabe/Projects/lumen/crates/lumen-model/tests/test_pricing.rs",
+      "test_line": 719,
+      "implementation_file": "/Users/gabe/Projects/lumen/crates/lumen-model/src/pricing.rs",
+      "implementation_line": 165
+    }
+  ],
+  "reasoning": "Verified seeded keys directly from seed() rather than trusting the brief's paraphrase: claude-3-5-sonnet, claude-3-5-haiku, qwen-2.5-coder, claude-opus, gpt-4o, deepseek-r1, kimi-k1.5, glm-4-plus, gemini-2.0-flash, gemini-2.0-pro. Manually traced every one of the 9 must-pass strings' stripped-segment sets against the new allowlist before implementing (all-numeric or digit+letter or allowlisted word in every case) and traced gpt-4o-mini's stripped segment ('mini') failing all three safe patterns, confirming the design closes the bug without regressing the existing normalization tests. Chose the strict ^\\d+[A-Za-z]$ regex for parameter-scale (not a looser one admitting '8x7b') since no required case needs the looser form and brief said to prefer the stricter/safer option when unforced. Also added a second real collision test (gemini-2.0-flash vs gemini-2.0-flash-lite) as the brief invited, to prove the fix generalizes rather than special-casing gpt-4o-mini."
+}
+```</result>
+<usage><subagent_tokens>83728</subagent_tokens><tool_uses>18</tool_uses><duration_ms>179155</duration_ms></usage>
+</task-notification>
