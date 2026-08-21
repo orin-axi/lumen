@@ -70,9 +70,8 @@ fn test_codex_adapter_non_utf8_line_is_skipped_not_fatal() {
     sample.push(b'\n');
 
     let adapter = CodexAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(sample)))
-        .expect("a non-UTF8 line must not abort the whole parse");
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(sample))).expect("a non-UTF8 line must not abort the whole parse");
 
     assert_eq!(transcript.parse_failures.len(), 1);
     assert_eq!(transcript.turns.len(), 2);

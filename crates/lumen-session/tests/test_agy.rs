@@ -44,20 +44,15 @@ fn test_agy_adapter_non_utf8_line_is_skipped_not_fatal() {
     // serde_json parse error -- the read-error branch must skip+record like the parse-error
     // branch does, not abort the whole parse and discard the surrounding valid lines.
     let mut sample: Vec<u8> = Vec::new();
-    sample.extend_from_slice(
-        br#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"first"}"#,
-    );
+    sample.extend_from_slice(br#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"first"}"#);
     sample.push(b'\n');
     sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
-    sample.extend_from_slice(
-        br#"{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"third"}"#,
-    );
+    sample.extend_from_slice(br#"{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"third"}"#);
     sample.push(b'\n');
 
     let adapter = AgyAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(sample)))
-        .expect("a non-UTF8 line must not abort the whole parse");
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(sample))).expect("a non-UTF8 line must not abort the whole parse");
 
     assert_eq!(transcript.parse_failures.len(), 1);
     assert_eq!(transcript.turns.len(), 2);

@@ -668,10 +668,7 @@ fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
     let sonnet_rate = table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of);
     let gpt4o_rate = table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of);
 
-    assert!(
-        (gpt4o_rate - 2.50).abs() < 1e-9,
-        "sanity: gpt-4o's own seeded Input rate must still be $2.50/M"
-    );
+    assert!((gpt4o_rate - 2.50).abs() < 1e-9, "sanity: gpt-4o's own seeded Input rate must still be $2.50/M");
     assert!(
         (mini_rate - 2.50).abs() > 1e-9,
         "gpt-4o-mini must NOT be billed at gpt-4o's $2.50/M rate -- it is a distinct, much \

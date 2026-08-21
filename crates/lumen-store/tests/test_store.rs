@@ -966,11 +966,10 @@ fn test_upsert_session_persists_and_reads_back_per_model_token_usage() {
 
     session_repo.upsert_session(&record).expect("upsert_session failed");
 
-    let detail =
-        session_repo
-            .get_session("claude", "sess-economics-roundtrip")
-            .expect("get_session failed")
-            .expect("session not found");
+    let detail = session_repo
+        .get_session("claude", "sess-economics-roundtrip")
+        .expect("get_session failed")
+        .expect("session not found");
 
     assert_eq!(detail.economics.per_model, record.economics.per_model, "per_model must round-trip exactly");
     assert_eq!(detail.economics.input_tokens, 3000, "input_tokens must be the sum across per_model entries");
@@ -1030,11 +1029,10 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
     };
     session_repo.upsert_session(&record).expect("second upsert_session failed");
 
-    let detail =
-        session_repo
-            .get_session("claude", "sess-economics-reupsert")
-            .expect("get_session failed")
-            .expect("session not found");
+    let detail = session_repo
+        .get_session("claude", "sess-economics-reupsert")
+        .expect("get_session failed")
+        .expect("session not found");
 
     assert_eq!(detail.economics.per_model, second_per_model, "get_session must reflect only the second upsert's data");
     assert_eq!(detail.economics.input_tokens, 500);

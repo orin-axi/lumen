@@ -116,11 +116,7 @@ impl<'a> SessionRepository<'a> {
         Ok(result)
     }
 
-    pub fn get_session(
-        &self,
-        provider: &str,
-        session_id: &str,
-    ) -> Result<Option<SessionDetailReadModel>, StoreError> {
+    pub fn get_session(&self, provider: &str, session_id: &str) -> Result<Option<SessionDetailReadModel>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(

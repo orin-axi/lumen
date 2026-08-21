@@ -257,18 +257,13 @@ fn test_claude_code_adapter_non_utf8_line_is_skipped_not_fatal() {
     // serde_json parse error -- the read-error branch must skip+record like the parse-error
     // branch does, not abort the whole parse and discard the surrounding valid lines.
     let mut sample: Vec<u8> = Vec::new();
-    sample.extend_from_slice(
-        b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
-    );
+    sample.extend_from_slice(b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n");
     sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
-    sample.extend_from_slice(
-        b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"third\"}}\n",
-    );
+    sample.extend_from_slice(b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"third\"}}\n");
 
     let adapter = ClaudeCodeAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(sample)))
-        .expect("a non-UTF8 line must not abort the whole parse");
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(sample))).expect("a non-UTF8 line must not abort the whole parse");
 
     assert_eq!(transcript.parse_failures.len(), 1);
     assert_eq!(transcript.turns.len(), 2);

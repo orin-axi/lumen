@@ -38,15 +38,12 @@ fn test_opencode_adapter_non_utf8_line_is_skipped_not_fatal() {
     );
     sample.push(b'\n');
     sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
-    sample.extend_from_slice(
-        br#"{"timestamp":"2026-08-19T12:00:03Z","observation":"read","content":"third"}"#,
-    );
+    sample.extend_from_slice(br#"{"timestamp":"2026-08-19T12:00:03Z","observation":"read","content":"third"}"#);
     sample.push(b'\n');
 
     let adapter = OpenCodeAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(sample)))
-        .expect("a non-UTF8 line must not abort the whole parse");
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(sample))).expect("a non-UTF8 line must not abort the whole parse");
 
     assert_eq!(transcript.parse_failures.len(), 1);
     assert_eq!(transcript.turns.len(), 2);
