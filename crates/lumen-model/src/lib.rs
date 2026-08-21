@@ -7,7 +7,9 @@ pub mod turn;
 pub use economics::{ModelTokenSummary, TokenEconomics, TurnPricingInput};
 pub use pricing::{ModelPricing, PricingRate, PricingTable, TokenRateKind};
 pub use schema::SchemaCitation;
-pub use transcript::{CanonicalTranscript, ExecutionTiming, OrchestratorKind, TrajectoryAnomaly};
+pub use transcript::{
+    CanonicalTranscript, ExecutionTiming, OrchestratorKind, ParseFailureRecord, TrajectoryAnomaly,
+};
 pub use turn::{
     AttributionSource, CanonicalToolCall, CanonicalToolResult, CanonicalTurn, ToolIntent, TurnRole, TurnTokenUsage,
 };

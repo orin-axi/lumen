@@ -32,6 +32,7 @@ pub struct TokenEconomics {
     pub net_savings_usd: f64,
     pub efficiency_multiplier: f32,
     pub per_model: HashMap<CompactString, ModelTokenSummary>,
+    pub reasoning_output_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +128,7 @@ impl TokenEconomics {
             net_savings_usd,
             efficiency_multiplier,
             per_model,
+            reasoning_output_tokens: 0,
         }
     }
 }

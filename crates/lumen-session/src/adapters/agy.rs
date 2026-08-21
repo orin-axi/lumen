@@ -158,7 +158,9 @@ impl SessionAdapter for AgyAdapter {
             turns,
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
-            otel_request_ids: SmallVec::new(),
+            otel_conversation_id: None,
+            service_tier: None,
+            parse_failures: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
         })
     }

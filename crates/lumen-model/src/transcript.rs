@@ -20,7 +20,19 @@ pub struct CanonicalTranscript {
     pub subagents: Vec<CanonicalTranscript>,
     pub extracted_schemas: SmallVec<[SchemaCitation; 4]>,
     pub detected_anomalies: SmallVec<[TrajectoryAnomaly; 4]>,
-    pub otel_request_ids: SmallVec<[CompactString; 2]>,
+    pub otel_conversation_id: Option<CompactString>,
+    pub service_tier: Option<CompactString>,
+    pub parse_failures: SmallVec<[ParseFailureRecord; 2]>,
+}
+
+/// A record of one JSONL line that failed to parse (corrupted, truncated, or non-UTF8),
+/// surviving the `parse_stream` call so a caller can inspect it (CRIT-LUMEN-025).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParseFailureRecord {
+    pub session_id: CompactString,
+    pub line_number: usize,
+    pub byte_offset: usize,
+    pub error: CompactString,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
