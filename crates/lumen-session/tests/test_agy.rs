@@ -39,6 +39,33 @@ fn test_agy_adapter_thinking_blocks_and_tool_calls() {
 }
 
 #[test]
+fn test_agy_adapter_non_utf8_line_is_skipped_not_fatal() {
+    // CRIT-LUMEN-025: a non-UTF8 line surfaces as an io::Error from BufRead::lines(), not a
+    // serde_json parse error -- the read-error branch must skip+record like the parse-error
+    // branch does, not abort the whole parse and discard the surrounding valid lines.
+    let mut sample: Vec<u8> = Vec::new();
+    sample.extend_from_slice(
+        br#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"first"}"#,
+    );
+    sample.push(b'\n');
+    sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
+    sample.extend_from_slice(
+        br#"{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"third"}"#,
+    );
+    sample.push(b'\n');
+
+    let adapter = AgyAdapter;
+    let transcript = adapter
+        .parse_stream(Box::new(Cursor::new(sample)))
+        .expect("a non-UTF8 line must not abort the whole parse");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.turns.len(), 2);
+    assert_eq!(transcript.turns[0].text.as_deref(), Some("first"));
+    assert_eq!(transcript.turns[1].text.as_deref(), Some("third"));
+}
+
+#[test]
 fn test_agy_adapter_tool_call_args_double_json_parse() {
     // CRIT-LUMEN-027: each tool_call arg value is itself a JSON-encoded string requiring a
     // second parse pass; a value that fails the inner parse retains its raw string.

@@ -59,7 +59,19 @@ impl SessionAdapter for CodexAdapter {
         for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
-                Err(e) => return Err(IngestionError::Io(e)),
+                Err(e) => {
+                    // CRIT-LUMEN-025: a non-UTF8 (or otherwise unreadable) line surfaces as an
+                    // io::Error from BufRead::lines(), not a serde_json parse error -- treated
+                    // the same as a corrupted-JSON line: skip + record, keep parsing. Same
+                    // interpretation and byte_offset-non-advancement rationale as claude.rs.
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset,
+                        error: CompactString::new(e.to_string()),
+                    });
+                    continue;
+                }
             };
 
             // Offset at the START of the line currently being processed. `reader.lines()`

@@ -252,6 +252,31 @@ fn test_claude_code_adapter_parse_failure_byte_offset_is_real() {
 }
 
 #[test]
+fn test_claude_code_adapter_non_utf8_line_is_skipped_not_fatal() {
+    // CRIT-LUMEN-025: a non-UTF8 line surfaces as an io::Error from BufRead::lines(), not a
+    // serde_json parse error -- the read-error branch must skip+record like the parse-error
+    // branch does, not abort the whole parse and discard the surrounding valid lines.
+    let mut sample: Vec<u8> = Vec::new();
+    sample.extend_from_slice(
+        b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
+    );
+    sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
+    sample.extend_from_slice(
+        b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"third\"}}\n",
+    );
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter
+        .parse_stream(Box::new(Cursor::new(sample)))
+        .expect("a non-UTF8 line must not abort the whole parse");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.turns.len(), 2);
+    assert_eq!(transcript.turns[0].text.as_deref(), Some("first"));
+    assert_eq!(transcript.turns[1].text.as_deref(), Some("third"));
+}
+
+#[test]
 fn test_claude_code_adapter_otel_conversation_id_first_non_sidechain_wins() {
     // CRIT-LUMEN-164: otel_conversation_id is set from the first non-sidechain entry's requestId,
     // never overwritten thereafter; sidechain entries are skipped entirely.

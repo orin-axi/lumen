@@ -28,6 +28,31 @@ fn test_opencode_adapter_parses_actions_and_observations() {
 }
 
 #[test]
+fn test_opencode_adapter_non_utf8_line_is_skipped_not_fatal() {
+    // CRIT-LUMEN-025: a non-UTF8 line surfaces as an io::Error from BufRead::lines(), not a
+    // serde_json parse error -- the read-error branch must skip+record like the parse-error
+    // branch does, not abort the whole parse and discard the surrounding valid lines.
+    let mut sample: Vec<u8> = Vec::new();
+    sample.extend_from_slice(
+        br#"{"timestamp":"2026-08-19T12:00:00Z","action":"message","source":"user","args":{"content":"first"}}"#,
+    );
+    sample.push(b'\n');
+    sample.extend_from_slice(b"invalid utf8 follows: \xFF\xFE\n");
+    sample.extend_from_slice(
+        br#"{"timestamp":"2026-08-19T12:00:03Z","observation":"read","content":"third"}"#,
+    );
+    sample.push(b'\n');
+
+    let adapter = OpenCodeAdapter;
+    let transcript = adapter
+        .parse_stream(Box::new(Cursor::new(sample)))
+        .expect("a non-UTF8 line must not abort the whole parse");
+
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.turns.len(), 2);
+}
+
+#[test]
 fn test_opencode_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
     let adapter = OpenCodeAdapter;
 

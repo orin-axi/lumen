@@ -8,15 +8,22 @@ proptest! {
         // Fingerprinting must never panic on arbitrary bytes
         let _detected = detect_orchestrator(&bytes);
 
-        // Parsers must never panic on arbitrary bytes
+        // Parsers must never panic on arbitrary bytes. CRIT-LUMEN-025: as of the
+        // skip-and-record fix for non-UTF8/unreadable lines, none of these adapters have any
+        // remaining `return Err(...)` path inside parse_stream -- every line-level failure
+        // (bad JSON or bad bytes) is recorded as a ParseFailureRecord and parsing continues.
+        // So parse_stream must now always return Ok(...) for arbitrary byte input, never Err.
         let claude = ClaudeCodeAdapter;
-        let _claude_res = claude.parse_stream(Box::new(Cursor::new(&bytes)));
+        let claude_res = claude.parse_stream(Box::new(Cursor::new(&bytes)));
+        prop_assert!(claude_res.is_ok(), "ClaudeCodeAdapter must never return Err on arbitrary bytes");
 
         let agy = AgyAdapter;
-        let _agy_res = agy.parse_stream(Box::new(Cursor::new(&bytes)));
+        let agy_res = agy.parse_stream(Box::new(Cursor::new(&bytes)));
+        prop_assert!(agy_res.is_ok(), "AgyAdapter must never return Err on arbitrary bytes");
 
         let opencode = OpenCodeAdapter;
-        let _opencode_res = opencode.parse_stream(Box::new(Cursor::new(&bytes)));
+        let opencode_res = opencode.parse_stream(Box::new(Cursor::new(&bytes)));
+        prop_assert!(opencode_res.is_ok(), "OpenCodeAdapter must never return Err on arbitrary bytes");
     }
 
     #[test]

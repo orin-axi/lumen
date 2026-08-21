@@ -59,7 +59,31 @@ impl SessionAdapter for ClaudeCodeAdapter {
         'lines: for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
-                Err(e) => return Err(IngestionError::Io(e)),
+                Err(e) => {
+                    // CRIT-LUMEN-025: `BufRead::lines()` surfaces a non-UTF8 (or otherwise
+                    // unreadable) line as an `io::Error`, not a serde_json parse error -- but
+                    // the criterion treats "corrupted, truncated, or non-UTF8 lines" the same
+                    // way regardless of which stage rejected them: skip the line, record a
+                    // parse-failure entry, keep parsing. There is no way to distinguish "this
+                    // one line had bad bytes" from "the whole underlying reader is broken" at
+                    // this type level -- `lines()` yields the same `io::Error` shape for both --
+                    // so every line-read error is treated as a skippable bad line, matching the
+                    // criterion's literal wording.
+                    //
+                    // The line's true byte length is unknown (it never became a `String`), so
+                    // `byte_offset` is deliberately NOT advanced for this iteration -- the next
+                    // successfully-read line's reported offset will undercount by this line's
+                    // real length. This is a documented limitation of an already-approximate
+                    // diagnostic field (see the LF-based `+1` approximation below), not a
+                    // byte-exact guarantee.
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset,
+                        error: CompactString::new(e.to_string()),
+                    });
+                    continue;
+                }
             };
 
             // Offset at the START of the line currently being processed. `reader.lines()`
