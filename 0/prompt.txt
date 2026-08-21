@@ -4329,3 +4329,88 @@ How much of the UI did we spec and build? Are we using our CLI best practices? T
 ```</result>
 <usage><subagent_tokens>83728</subagent_tokens><tool_uses>18</tool_uses><duration_ms>179155</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a3aba155a8bcf08ea</task-id>
+<tool-use-id>toolu_01FoPftjFtrGXuW9S3HeXqJF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a3aba155a8bcf08ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix non-UTF8 line aborting entire parse" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed as `ffc5da7`.
+
+## Summary
+
+**Bug confirmed and fixed**: All four adapters (`claude.rs`, `codex.rs`, `agy.rs`, `opencode.rs` in `crates/lumen-session/src/adapters/`) had `Err(e) =&gt; return Err(IngestionError::Io(e))` for line-read errors from `BufRead::lines()`, which fires on non-UTF8 bytes. This aborted the entire parse, discarding all valid lines, directly contradicting CRIT-LUMEN-025.
+
+**TDD cycle**:
+1. Wrote one failing test per adapter (`test_claude_code_adapter_non_utf8_line_is_skipped_not_fatal`, `test_codex_adapter_non_utf8_line_is_skipped_not_fatal`, `test_agy_adapter_non_utf8_line_is_skipped_not_fatal`, `test_opencode_adapter_non_utf8_line_is_skipped_not_fatal`), each constructing a `Vec&lt;u8&gt;` with a valid line, a `\xFF\xFE` byte sequence, and another valid line.
+2. Confirmed RED: all four ran and failed with `Io(Error { kind: InvalidData, ... })` before any fix.
+3. Implemented the minimum fix in each file's `Err(e) =&gt;` branch: push a `ParseFailureRecord` (matching each file's exact existing JSON-parse-error style/variable names) and `continue`, instead of aborting.
+4. Confirmed GREEN: all four new tests pass; full `cargo test -p lumen-session` (72 tests) and `cargo test --workspace` pass with zero regressions.
+
+**byte_offset decision**: since a failed line-read never becomes a `String`, its true byte length is unknown — `byte_offset` is **not advanced** for that iteration. Documented in a comment at the claude.rs call site (the most detailed one) and referenced tersely from the other three files for consistency.
+
+**I/O-error-distinguishing interpretation**: `BufRead::lines()` cannot distinguish "this one line had bad bytes" from "the whole underlying reader is broken" — both surface as the same per-iteration `io::Error`. Per the criterion's literal wording, every line-read error is treated identically as a skippable bad line (skip + record), never as a fatal abort.
+
+**Fuzz test strengthened**: `prop_fuzz_random_bytes_does_not_panic` in `crates/lumen-session/tests/test_stream_fuzzing.rs` now asserts `Ok(...)` (via `prop_assert!`) instead of discarding the result with `let _`, since none of the three fuzzed adapters (`Claude`, `Agy`, `OpenCode`) retain any `return Err(...)` path in `parse_stream` after this fix. Verified non-flaky with `PROPTEST_CASES=512`.
+
+Files touched: `crates/lumen-session/src/adapters/{claude,codex,agy,opencode}.rs`, `crates/lumen-session/tests/{test_claude,test_codex,test_agy,test_opencode,test_stream_fuzzing}.rs`.
+
+```json
+{
+  "task_id": "CRIT-LUMEN-025-nonutf8-line-fix",
+  "status": "done",
+  "steps_completed": [
+    "read all four adapter files' exact current line-read error branches",
+    "read all four test files' existing patterns and imports",
+    "wrote failing test per adapter for non-UTF8 mid-stream line",
+    "confirmed RED for all four (Io error returned, parse aborted)",
+    "implemented skip+record fix in all four adapter files",
+    "confirmed GREEN for all four new tests",
+    "strengthened prop_fuzz_random_bytes_does_not_panic to assert Ok(...)",
+    "ran cargo test -p lumen-session (72 tests, all pass)",
+    "ran cargo test --workspace (all pass, zero regressions)",
+    "committed all four adapters + tests as one cohesive commit"
+  ],
+  "test_result": "pass",
+  "precision_tests_absorbed": [],
+  "commit_sha": "ffc5da7",
+  "concerns": "prop_fuzz_random_bytes_does_not_panic did not originally include CodexAdapter (only claude/agy/opencode were fuzzed); left that scope unchanged since expanding fuzz coverage to a fourth adapter was outside this task's stated scope.",
+  "criteria_evidence": [
+    {
+      "criterion_id": "CRIT-LUMEN-025",
+      "test_file": "crates/lumen-session/tests/test_claude.rs",
+      "test_line": 271,
+      "implementation_file": "crates/lumen-session/src/adapters/claude.rs",
+      "implementation_line": 62
+    },
+    {
+      "criterion_id": "CRIT-LUMEN-025",
+      "test_file": "crates/lumen-session/tests/test_codex.rs",
+      "test_line": 75,
+      "implementation_file": "crates/lumen-session/src/adapters/codex.rs",
+      "implementation_line": 62
+    },
+    {
+      "criterion_id": "CRIT-LUMEN-025",
+      "test_file": "crates/lumen-session/tests/test_agy.rs",
+      "test_line": 60,
+      "implementation_file": "crates/lumen-session/src/adapters/agy.rs",
+      "implementation_line": 73
+    },
+    {
+      "criterion_id": "CRIT-LUMEN-025",
+      "test_file": "crates/lumen-session/tests/test_opencode.rs",
+      "test_line": 49,
+      "implementation_file": "crates/lumen-session/src/adapters/opencode.rs",
+      "implementation_line": 59
+    }
+  ],
+  "reasoning": "No plan@1/spec_file_path was provided per the brief; proceeded directly from the brief per its explicit instruction. Verified the bug via direct read of all four adapters before writing any test, confirmed identical pattern across all four, wrote genuinely new failing tests (not copied from passing ones), confirmed red via actual test run output showing the Io(InvalidData) panic, then made minimal identical-shape fixes. No spec contradiction found -- the fix aligns implementation with the criterion. No precision_tests were supplied by a mutator in this invocation."
+}
+```</result>
+<usage><subagent_tokens>100751</subagent_tokens><tool_uses>33</tool_uses><duration_ms>195012</duration_ms></usage>
+</task-notification>
