@@ -45,6 +45,35 @@ fn test_codex_adapter_parses_real_event_msg_envelope() {
 }
 
 #[test]
+fn test_codex_adapter_prices_tiered_session_nonzero() {
+    // Blocker #2 from adversarial review: real Codex sessions commonly report a service_tier
+    // (this fixture carries service_tier: "Standard") via thread_settings_applied. Before the
+    // rate_for tier-fallback fix, PricingTable::seed()'s tier:None rows never matched
+    // TurnPricingInput's tier: Some("Standard"), so total_cost_usd silently came out as 0.0 for
+    // any Codex session that reported a service tier -- regardless of real token volume.
+    let sample = real_codex_session_dump();
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_eq!(transcript.service_tier.as_deref(), Some("Standard"));
+    assert_eq!(transcript.economics.input_tokens, 1500);
+    assert_eq!(transcript.economics.output_tokens, 110);
+
+    // model_family is "gpt-4o" ($2.50/M input, $10.00/M output): 1500 * 2.50e-6 + 110 * 10.00e-6
+    let expected_cost = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0;
+    assert!(
+        transcript.economics.total_cost_usd > 0.0,
+        "a Codex session with a real service_tier must not silently price at $0.00"
+    );
+    assert!(
+        (transcript.economics.total_cost_usd - expected_cost).abs() < 1e-9,
+        "expected total_cost_usd {expected_cost}, got {}",
+        transcript.economics.total_cost_usd
+    );
+}
+
+#[test]
 fn test_codex_adapter_matches_fingerprint_parity_with_detect_orchestrator() {
     // CRIT-LUMEN-108: CodexAdapter::matches_fingerprint must agree with detect_orchestrator
     // on both a real matching sample and a non-matching sample.

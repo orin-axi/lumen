@@ -148,21 +148,31 @@ impl PricingTable {
     /// all (CRIT-LUMEN-008). When the model IS recognized (matches at least one row, possibly
     /// only after normalization) but has no row for this specific (tier, kind, as_of), returns
     /// 0.0 directly rather than substituting another model's rate (CRIT-LUMEN-161).
+    ///
+    /// When a specific `tier` is requested but `lookup_model` has no row matching that exact
+    /// tier for this (kind, as_of), falls back to `lookup_model`'s own `tier: None` row for the
+    /// same (kind, as_of) before giving up (Blocker #2). seed() pushes every row with
+    /// `tier: None`, so without this fallback any caller that passes a real tier (e.g.
+    /// CodexAdapter's captured `service_tier`) matched zero rows and silently priced at 0.0. A
+    /// row that matches the exact requested tier still always wins over this fallback.
     pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
         let normalized = self.normalize_model_key(model);
         let lookup_model = normalized.unwrap_or("claude-3-5-sonnet");
 
-        self.rates
-            .iter()
-            .filter(|r| {
-                r.model == lookup_model
-                    && r.kind == kind
-                    && r.tier.as_deref() == tier
-                    && r.effective_from <= as_of
-                    && r.effective_until.is_none_or(|until| as_of < until)
-            })
-            .max_by_key(|r| r.effective_from)
-            .map(|r| r.rate_per_m)
-            .unwrap_or(0.0)
+        let matching = |wanted_tier: Option<&str>| {
+            self.rates
+                .iter()
+                .filter(|r| {
+                    r.model == lookup_model
+                        && r.kind == kind
+                        && r.tier.as_deref() == wanted_tier
+                        && r.effective_from <= as_of
+                        && r.effective_until.is_none_or(|until| as_of < until)
+                })
+                .max_by_key(|r| r.effective_from)
+                .map(|r| r.rate_per_m)
+        };
+
+        matching(tier).or_else(|| if tier.is_some() { matching(None) } else { None }).unwrap_or(0.0)
     }
 }

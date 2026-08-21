@@ -395,6 +395,93 @@ fn test_recognized_model_missing_kind_returns_zero() {
     );
 }
 
+/// Blocker #2 from adversarial review: PricingTable::seed() pushes every row with tier: None,
+/// but real adapters (e.g. CodexAdapter) pass tier: Some("Standard") when a real
+/// thread_settings_applied event reports a service_tier. rate_for's exact tier filter matched
+/// ZERO rows in that case, silently returning 0.0 for every kind. rate_for must fall back to a
+/// model's own tier:None row when a specific tier is requested but no row for that tier exists.
+#[test]
+fn test_rate_for_tiered_query_falls_back_to_untiered_row() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // seed() only has tier:None rows for gpt-4o. Querying with Some("Standard") must still
+    // find the untiered row's rate rather than silently returning 0.0.
+    let untiered = table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of);
+    let tiered_query = table.rate_for("gpt-4o", Some("Standard"), TokenRateKind::Input, as_of);
+    assert_eq!(untiered, 2.50);
+    assert_eq!(
+        tiered_query, untiered,
+        "a tiered query against a model with only tier:None rows must fall back to the \
+         untiered rate, not silently return 0.0"
+    );
+
+    for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
+        assert_eq!(
+            table.rate_for("gpt-4o", Some("Standard"), kind, as_of),
+            table.rate_for("gpt-4o", None, kind, as_of),
+            "tier fallback must hold for every {kind:?}"
+        );
+    }
+}
+
+/// When a tier-specific row DOES exist and matches, it must be preferred over the tier:None
+/// fallback row -- tier-specific pricing takes priority when it exists.
+#[test]
+fn test_rate_for_prefers_matching_tiered_row_over_untiered_fallback() {
+    let epoch = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let table = PricingTable {
+        rates: vec![
+            PricingRate {
+                model: "gpt-4o".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 2.50,
+                effective_from: epoch,
+                effective_until: None,
+            },
+            PricingRate {
+                model: "gpt-4o".into(),
+                tier: Some("Standard".into()),
+                kind: TokenRateKind::Input,
+                rate_per_m: 9.99,
+                effective_from: epoch,
+                effective_until: None,
+            },
+        ],
+    };
+
+    assert_eq!(
+        table.rate_for("gpt-4o", Some("Standard"), TokenRateKind::Input, as_of),
+        9.99,
+        "a matching tier-specific row must win over the tier:None fallback"
+    );
+    assert_eq!(
+        table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of),
+        2.50,
+        "an untiered query must still return the untiered row untouched by the tiered row"
+    );
+}
+
+/// CRIT-LUMEN-161 must still hold after the tier fallback: a recognized model missing a
+/// specific rate kind entirely (no row for that kind under ANY tier) must still return exactly
+/// 0.0, even when a tier is requested -- the tier fallback only kicks in when an untiered row
+/// for that same kind exists, it must not silently substitute some other kind's rate.
+#[test]
+fn test_rate_for_tier_fallback_does_not_mask_missing_kind() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    assert_eq!(
+        table.rate_for("qwen-2.5-coder", Some("Standard"), TokenRateKind::CacheWrite, as_of),
+        0.0,
+        "qwen-2.5-coder has no CacheWrite row under any tier, tiered or untiered -- must still \
+         return exactly 0.0, not fall back to some other rate"
+    );
+}
+
 /// CRIT-LUMEN-160: a provider-reported cost (e.g. Claude Code's real costUSD field) passed as
 /// `provided_cost_usd` must be stored verbatim on `TokenEconomics.provided_cost_usd`, and must
 /// never override, blend with, or short-circuit the independently computed `total_cost_usd` --
