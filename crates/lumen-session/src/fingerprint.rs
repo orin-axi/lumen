@@ -16,10 +16,7 @@ pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
         return Some(OrchestratorKind::Antigravity);
     }
 
-    if sample_str.contains("\"choices\"")
-        || sample_str.contains("\"prompt_tokens\"")
-        || sample_str.contains("\"thread_id\"")
-    {
+    if sample_str.contains("\"type\":\"event_msg\"") || sample_str.contains("\"type\":\"response_item\"") {
         return Some(OrchestratorKind::Codex);
     }
 

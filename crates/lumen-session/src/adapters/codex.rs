@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use compact_str::CompactString;
 use lumen_model::*;
 use smallvec::SmallVec;
@@ -14,7 +14,8 @@ impl SessionAdapter for CodexAdapter {
     }
 
     fn matches_fingerprint(&self, sample: &str) -> bool {
-        sample.contains("\"choices\"") || sample.contains("\"prompt_tokens\"") || sample.contains("\"thread_id\"")
+        // CRIT-LUMEN-108: must agree with detect_orchestrator's Codex branch exactly.
+        sample.contains("\"type\":\"event_msg\"") || sample.contains("\"type\":\"response_item\"")
     }
 
     fn capabilities(&self) -> AdapterCapabilities {
@@ -36,10 +37,16 @@ impl SessionAdapter for CodexAdapter {
         let mut ended_at = started_at;
 
         let mut turns = Vec::new();
-        let mut total_input_tokens = 0u64;
-        let mut total_output_tokens = 0u64;
+        let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
+        let mut service_tier: Option<CompactString> = None;
 
-        for line_res in reader.lines() {
+        // CRIT-LUMEN-110: Codex token_count events carry cumulative running totals, not
+        // per-line deltas -- these are last-write values, never summed.
+        let mut input_tokens = 0u64;
+        let mut output_tokens = 0u64;
+        let mut reasoning_output_tokens = 0u64;
+
+        for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
@@ -52,28 +59,47 @@ impl SessionAdapter for CodexAdapter {
 
             let val: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: 0,
+                        error: CompactString::new(e.to_string()),
+                    });
+                    continue;
+                }
             };
 
-            if let Some(tid) = val.get("thread_id").and_then(|v| v.as_str()) {
-                session_id = CompactString::new(tid);
+            if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
+                if let Ok(ts) = DateTime::parse_from_rfc3339(ts_str) {
+                    ended_at = ts.with_timezone(&Utc);
+                }
             }
 
-            // CRIT-LUMEN-110: cumulative sum across every usage-bearing line, not overwrite.
-            if let Some(usage) = val.get("usage") {
-                let prompt_tokens = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let completion_tokens = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                total_input_tokens += prompt_tokens;
-                total_output_tokens += completion_tokens;
+            // Only event_msg envelope lines carry the payload shapes this adapter understands.
+            if val.get("type").and_then(|v| v.as_str()) != Some("event_msg") {
+                continue;
             }
 
-            // CRIT-LUMEN-109: one CanonicalTurn per choices[] element.
-            if let Some(choices) = val.get("choices").and_then(|v| v.as_array()) {
-                for choice in choices {
-                    let message = choice.get("message");
-                    let role_str = message.and_then(|m| m.get("role")).and_then(|r| r.as_str()).unwrap_or("");
-                    let role = if role_str == "assistant" { TurnRole::Assistant } else { TurnRole::User };
-                    let text = message.and_then(|m| m.get("content")).and_then(|c| c.as_str()).map(|s| s.to_string());
+            let Some(payload) = val.get("payload") else {
+                continue;
+            };
+
+            match payload.get("type").and_then(|v| v.as_str()) {
+                Some("item_completed") => {
+                    if let Some(tid) = payload.get("thread_id").and_then(|v| v.as_str()) {
+                        session_id = CompactString::new(tid);
+                    }
+
+                    let item = payload.get("item");
+                    let item_type = item.and_then(|i| i.get("type")).and_then(|t| t.as_str()).unwrap_or("");
+                    let role = match item_type {
+                        "UserMessage" => TurnRole::User,
+                        "AgentMessage" => TurnRole::Assistant,
+                        "CommandExecution" | "Reasoning" => TurnRole::ToolResult,
+                        _ => TurnRole::System,
+                    };
+                    let text = item.and_then(|i| i.get("text")).and_then(|t| t.as_str()).map(|s| s.to_string());
 
                     turns.push(CanonicalTurn {
                         attribution: None,
@@ -87,11 +113,46 @@ impl SessionAdapter for CodexAdapter {
                         usage: None,
                     });
                 }
+                Some("token_count") => {
+                    if let Some(usage) = payload.get("total_token_usage") {
+                        input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(input_tokens);
+                        output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(output_tokens);
+                        reasoning_output_tokens = usage
+                            .get("reasoning_output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(reasoning_output_tokens);
+                    }
+                    // No total_token_usage on this payload: leave the running totals as-is.
+                }
+                Some("thread_settings_applied") => {
+                    service_tier = payload
+                        .get("thread_settings")
+                        .and_then(|ts| ts.get("service_tier"))
+                        .and_then(|v| v.as_str())
+                        .map(CompactString::new);
+                }
+                _ => {}
             }
         }
 
-        ended_at = Utc::now();
         let wall_duration = (ended_at - started_at).num_milliseconds().max(0) as u64;
+
+        let pricing_input = TurnPricingInput {
+            usage: TurnTokenUsage {
+                input_tokens,
+                output_tokens,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            },
+            timestamp: ended_at,
+            tier: service_tier.clone(),
+        };
+
+        let mut economics =
+            TokenEconomics::calculate(&[pricing_input], &model_family, &PricingTable::seed(), None);
+        // TurnPricingInput/TurnTokenUsage carry no reasoning-tokens field, so this last-write
+        // value (CRIT-LUMEN-110) is applied to the computed economics afterward.
+        economics.reasoning_output_tokens = reasoning_output_tokens;
 
         Ok(CanonicalTranscript {
             session_id,
@@ -106,14 +167,14 @@ impl SessionAdapter for CodexAdapter {
                 idle_duration_ms: 0,
                 idle_gap_count: 0,
             },
-            economics: TokenEconomics::calculate(total_input_tokens, total_output_tokens, 0, 0, &model_family),
+            economics,
             turns,
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
             otel_conversation_id: None,
-            service_tier: None,
-            parse_failures: SmallVec::new(),
+            service_tier,
+            parse_failures,
         })
     }
 }
