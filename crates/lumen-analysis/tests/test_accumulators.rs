@@ -903,7 +903,7 @@ fn test_by_subagent_keyed_by_subagent_role_when_session_ids_collide() {
     assert_eq!(report.by_subagent.len(), 2, "both subagents must survive despite colliding session_id");
     assert_eq!(report.by_subagent.get("worker-a").and_then(|m| m.by_plugin.get("tool-a").copied()), Some(40));
     assert_eq!(report.by_subagent.get("worker-b").and_then(|m| m.by_plugin.get("tool-b").copied()), Some(70));
-    assert!(report.by_subagent.get("unknown").is_none());
+    assert!(!report.by_subagent.contains_key("unknown"));
 }
 
 #[test]
