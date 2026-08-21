@@ -3,8 +3,8 @@ use compact_str::CompactString;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use lumen_analysis::engine::AnalyticsEngine;
 use lumen_model::{
-    CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, TokenEconomics,
-    ToolIntent, TurnRole, TurnTokenUsage,
+    CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, PricingTable,
+    TokenEconomics, ToolIntent, TurnPricingInput, TurnRole, TurnTokenUsage,
 };
 use smallvec::smallvec;
 
@@ -36,6 +36,7 @@ fn synthetic_transcript(turn_count: usize) -> CanonicalTranscript {
     CanonicalTranscript {
         session_id: CompactString::new("bench-session"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {
@@ -46,12 +47,19 @@ fn synthetic_transcript(turn_count: usize) -> CanonicalTranscript {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns,
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
-        otel_request_ids: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
     }
 }
 

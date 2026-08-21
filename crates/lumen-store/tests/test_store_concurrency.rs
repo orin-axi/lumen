@@ -32,7 +32,21 @@ fn test_concurrent_multithreaded_readers_and_writers() {
                     ended_at: Utc::now(),
                     wall_duration_ms: 1000,
                     turn_count: 5,
-                    economics: TokenEconomics::calculate(100, 50, 0, 200, "claude-3-5-sonnet-20241022"),
+                    economics: TokenEconomics::calculate(
+                        &[TurnPricingInput {
+                            usage: TurnTokenUsage {
+                                input_tokens: 100,
+                                output_tokens: 50,
+                                cache_creation_tokens: 0,
+                                cache_read_tokens: 200,
+                            },
+                            timestamp: Utc::now(),
+                            tier: None,
+                        }],
+                        "claude-3-5-sonnet-20241022",
+                        &PricingTable::seed(),
+                        None,
+                    ),
                     has_anomalies: false,
                 };
                 repo.upsert_session(&record).unwrap();

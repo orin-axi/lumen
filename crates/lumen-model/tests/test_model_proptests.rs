@@ -1,3 +1,4 @@
+use chrono::Utc;
 use lumen_model::*;
 use proptest::prelude::*;
 
@@ -11,11 +12,19 @@ proptest! {
         cache_read in 0u64..1_000_000_000,
     ) {
         let econ = TokenEconomics::calculate(
-            input,
-            output,
-            cache_write,
-            cache_read,
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_creation_tokens: cache_write,
+                    cache_read_tokens: cache_read,
+                },
+                timestamp: Utc::now(),
+                tier: None,
+            }],
             "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
         );
 
         // Invariant 1: Cache hit ratio is strictly bounded between 0.0% and 100.0%
@@ -67,25 +76,35 @@ proptest! {
 
 #[test]
 fn test_all_commercial_model_pricing_matrix() {
+    // NOTE: model keys here are the short canonical names PricingTable::seed() actually
+    // indexes rows by (exact match, no substring fallback beyond "unrecognized model" ->
+    // claude-3-5-sonnet) -- unlike the removed ModelPricing::from_model_name, which matched
+    // via substring on date-suffixed names. Using the short keys here is the minimal
+    // adaptation that keeps this test asserting real per-model rates instead of silently
+    // exercising the "unrecognized model" sonnet fallback for every non-gpt/deepseek/etc row.
     let models = [
-        ("claude-3-5-sonnet-20241022", 3.00, 3.75, 0.30, 15.00),
-        ("claude-3-5-haiku-20241022", 0.80, 1.00, 0.08, 4.00),
-        ("claude-3-opus-20240229", 15.00, 18.75, 1.50, 75.00),
+        ("claude-3-5-sonnet", 3.00, 3.75, 0.30, 15.00),
+        ("claude-3-5-haiku", 0.80, 1.00, 0.08, 4.00),
+        ("claude-opus", 15.00, 18.75, 1.50, 75.00),
         ("gpt-4o", 2.50, 2.50, 1.25, 10.00),
         ("deepseek-r1", 0.55, 0.55, 0.14, 2.19),
-        ("qwen-2.5-coder-32b", 0.20, 0.20, 0.05, 0.60),
+        // seed() has no CacheWrite row for Qwen (CRIT-LUMEN-004/161): a recognized model
+        // missing a specific rate kind returns 0.0, it does not fall back to its input rate.
+        ("qwen-2.5-coder", 0.20, 0.0, 0.05, 0.60),
         ("kimi-k1.5", 0.50, 0.50, 0.10, 2.00),
         ("glm-4-plus", 1.40, 1.40, 0.20, 1.40),
         ("gemini-2.0-flash", 0.10, 0.10, 0.025, 0.40),
         ("gemini-2.0-pro", 1.25, 1.25, 0.30, 5.00),
     ];
 
+    let pricing = PricingTable::seed();
+    let now = Utc::now();
+
     for (model, in_rate, write_rate, read_rate, out_rate) in models {
-        let pricing = ModelPricing::from_model_name(model);
-        assert_eq!(pricing.input_base_per_m, in_rate, "Mismatch for {model}");
-        assert_eq!(pricing.cache_write_per_m, write_rate, "Mismatch for {model}");
-        assert_eq!(pricing.cache_read_per_m, read_rate, "Mismatch for {model}");
-        assert_eq!(pricing.output_per_m, out_rate, "Mismatch for {model}");
+        assert_eq!(pricing.rate_for(model, None, TokenRateKind::Input, now), in_rate, "Mismatch for {model}");
+        assert_eq!(pricing.rate_for(model, None, TokenRateKind::CacheWrite, now), write_rate, "Mismatch for {model}");
+        assert_eq!(pricing.rate_for(model, None, TokenRateKind::CacheRead, now), read_rate, "Mismatch for {model}");
+        assert_eq!(pricing.rate_for(model, None, TokenRateKind::Output, now), out_rate, "Mismatch for {model}");
 
         // Compute sample cost
         let usage = TurnTokenUsage {
@@ -94,27 +113,53 @@ fn test_all_commercial_model_pricing_matrix() {
             cache_creation_tokens: 1_000_000,
             cache_read_tokens: 1_000_000,
         };
-        let cost = pricing.compute_cost(&usage);
+        let econ =
+            TokenEconomics::calculate(&[TurnPricingInput { usage, timestamp: now, tier: None }], model, &pricing, None);
         let expected = in_rate + write_rate + read_rate + out_rate;
-        assert!((cost - expected).abs() < 1e-6);
+        assert!((econ.total_cost_usd - expected).abs() < 1e-6);
     }
 }
 
 #[test]
 fn test_extreme_boundary_token_values() {
+    let pricing = PricingTable::seed();
+    let now = Utc::now();
+
+    let turn = |usage: TurnTokenUsage| TokenEconomics::calculate(
+        &[TurnPricingInput { usage, timestamp: now, tier: None }],
+        "claude-3-5-sonnet-20241022",
+        &pricing,
+        None,
+    );
+
     // Zero tokens across all fields
-    let zero_econ = TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022");
+    let zero_econ = turn(TurnTokenUsage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+    });
     assert_eq!(zero_econ.cache_hit_ratio, 0.0);
     assert_eq!(zero_econ.efficiency_multiplier, 1.0);
     assert_eq!(zero_econ.total_cost_usd, 0.0);
 
     // 100% cache read (0 input, 0 cache write)
-    let full_cache = TokenEconomics::calculate(0, 1000, 0, 500_000, "claude-3-5-sonnet-20241022");
+    let full_cache = turn(TurnTokenUsage {
+        input_tokens: 0,
+        output_tokens: 1000,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 500_000,
+    });
     assert_eq!(full_cache.cache_hit_ratio, 100.0);
     assert!(full_cache.efficiency_multiplier > 9.0);
 
     // 100% uncached (0 cache read, 0 cache write)
-    let zero_cache = TokenEconomics::calculate(500_000, 1000, 0, 0, "claude-3-5-sonnet-20241022");
+    let zero_cache = turn(TurnTokenUsage {
+        input_tokens: 500_000,
+        output_tokens: 1000,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+    });
     assert_eq!(zero_cache.cache_hit_ratio, 0.0);
     assert_eq!(zero_cache.net_savings_usd, 0.0);
     assert_eq!(zero_cache.efficiency_multiplier, 1.0);

@@ -658,6 +658,7 @@ fn test_schema_extractor_wired_into_analysis_report() {
     let transcript = CanonicalTranscript {
         session_id: "s1".into(),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: "claude-3-5-sonnet-20241022".into(),
         timing: ExecutionTiming {
@@ -668,12 +669,19 @@ fn test_schema_extractor_wired_into_analysis_report() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: vec![turn],
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
-        otel_request_ids: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
     };
 
     // CRIT-LUMEN-063: SchemaExtractorAccumulator must be wired into AnalyticsEngine's
@@ -729,6 +737,7 @@ fn test_subagent_and_plugin_skill_attribution() {
     let child_transcript = CanonicalTranscript {
         session_id: "reviewer".into(),
         parent_session_id: Some("parent".into()),
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: "claude-3-5-sonnet-20241022".into(),
         timing: ExecutionTiming {
@@ -739,12 +748,19 @@ fn test_subagent_and_plugin_skill_attribution() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: vec![child_turn],
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
-        otel_request_ids: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
     };
 
     let parent_turn = usage_turn(0, None, 10);
@@ -752,6 +768,7 @@ fn test_subagent_and_plugin_skill_attribution() {
     let parent_transcript = CanonicalTranscript {
         session_id: "parent".into(),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: "claude-3-5-sonnet-20241022".into(),
         timing: ExecutionTiming {
@@ -762,12 +779,19 @@ fn test_subagent_and_plugin_skill_attribution() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: vec![parent_turn],
         subagents: vec![child_transcript],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
-        otel_request_ids: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
     };
 
     let engine = AnalyticsEngine::new();
@@ -1503,13 +1527,17 @@ fn test_timeline_accumulator_assistant_streaks_and_idle_gaps() {
 #[test]
 fn test_otel_correlation_reads_transcript_field() {
     // CRIT-LUMEN-152: OtelCorrelationAccumulator reads the parse-time-populated
-    // otel_request_ids field directly (no raw JSON re-scan) and dedupes it
-    // order-preserving, not sorted.
+    // otel_conversation_id field directly (no raw JSON re-scan). TASK-SESSION-000
+    // replaced the old multi-value otel_request_ids: SmallVec<...> field with a
+    // single otel_conversation_id: Option<CompactString>, so this test now asserts
+    // the single-value passthrough rather than order-preserving dedup of many IDs
+    // (full redesign of this accumulator is deferred to TASK-ANALYSIS-018).
     let fixed_ts = Utc::now();
 
     let transcript = CanonicalTranscript {
         session_id: CompactString::new("sess-abc"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {
@@ -1520,19 +1548,26 @@ fn test_otel_correlation_reads_transcript_field() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: fixed_ts, tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: vec![],
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
-        otel_request_ids: smallvec!["req-1".into(), "req-2".into(), "req-1".into()],
+        otel_conversation_id: Some(CompactString::from("req-1")),
+        service_tier: None,
+        parse_failures: smallvec![],
     };
 
     let report = OtelCorrelationAccumulator::finalize(&transcript);
 
     assert_eq!(report.session_id, "sess-abc");
-    assert_eq!(report.request_ids, vec![CompactString::from("req-1"), CompactString::from("req-2")]);
-    assert_eq!(report.request_id_count, 2);
+    assert_eq!(report.request_ids, vec![CompactString::from("req-1")]);
+    assert_eq!(report.request_id_count, 1);
 }
 
 #[test]

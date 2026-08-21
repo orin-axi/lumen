@@ -187,39 +187,21 @@ impl SessionAdapter for OpenCodeAdapter {
             }
         }
 
-        let total_prompt = current_input_tokens + current_cache_write + current_cache_read;
-        let cache_hit_ratio =
-            if total_prompt == 0 { 0.0 } else { (current_cache_read as f32 / total_prompt as f32) * 100.0 };
-
-        let pricing = ModelPricing::from_model_name(&model_family);
-        let total_cost = pricing.compute_cost(&TurnTokenUsage {
-            input_tokens: current_input_tokens,
-            cache_creation_tokens: current_cache_write,
-            cache_read_tokens: current_cache_read,
-            output_tokens: current_output_tokens,
-        });
-
-        let baseline_cost = pricing.compute_baseline_cost(&TurnTokenUsage {
-            input_tokens: current_input_tokens,
-            cache_creation_tokens: current_cache_write,
-            cache_read_tokens: current_cache_read,
-            output_tokens: current_output_tokens,
-        });
-
-        let economics = TokenEconomics {
-            input_tokens: current_input_tokens,
-            output_tokens: current_output_tokens,
-            cache_creation_tokens: current_cache_write,
-            cache_read_tokens: current_cache_read,
-            ephemeral_5m_tokens: current_cache_write,
-            ephemeral_1h_tokens: 0,
-            cache_hit_ratio,
-            total_cost_usd: total_cost,
-            baseline_cost_no_cache_usd: baseline_cost,
-            net_savings_usd: (baseline_cost - total_cost).max(0.0),
-            efficiency_multiplier: if total_cost > 0.0 { (baseline_cost / total_cost) as f32 } else { 1.0 },
-            per_model: std::collections::HashMap::new(),
-        };
+        let economics = TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: current_input_tokens,
+                    output_tokens: current_output_tokens,
+                    cache_creation_tokens: current_cache_write,
+                    cache_read_tokens: current_cache_read,
+                },
+                timestamp: ended_at,
+                tier: None,
+            }],
+            &model_family,
+            &PricingTable::seed(),
+            None,
+        );
 
         let wall_duration = (ended_at - started_at).num_milliseconds().max(0) as u64;
 

@@ -33,7 +33,11 @@ fn test_core_pricing_rates_and_unrecognized_model_fallback() {
 
 #[test]
 fn test_claude_sonnet_pricing_calculation() {
-    let pricing = ModelPricing::CLAUDE_3_5_SONNET;
+    // Migrated off the removed ModelPricing::CLAUDE_3_5_SONNET constant (TASK-MODEL-008) onto
+    // PricingTable::seed() + TokenEconomics::calculate, which carries the same dollar rates
+    // forward unchanged.
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
 
     let usage = TurnTokenUsage {
         input_tokens: 1_000_000,          // $3.00
@@ -42,49 +46,63 @@ fn test_claude_sonnet_pricing_calculation() {
         cache_read_tokens: 1_000_000,     // $0.30 (0.10x - 90% savings)
     };
 
-    let actual_cost = pricing.compute_cost(&usage);
-    let expected_cost = 3.00 + 3.75 + 0.30 + 15.00;
-    assert!((actual_cost - expected_cost).abs() < 1e-6);
+    let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
+    let econ = TokenEconomics::calculate(&[turn], "claude-3-5-sonnet", &pricing, None);
 
-    let baseline_cost = pricing.compute_baseline_cost(&usage);
+    let expected_cost = 3.00 + 3.75 + 0.30 + 15.00;
+    assert!((econ.total_cost_usd - expected_cost).abs() < 1e-6);
+
     // Baseline prompt = 3M tokens @ $3.00/M ($9.00) + 1M output ($15.00) = $24.00
     let expected_baseline = 9.00 + 15.00;
-    assert!((baseline_cost - expected_baseline).abs() < 1e-6);
+    assert!((econ.baseline_cost_no_cache_usd - expected_baseline).abs() < 1e-6);
 }
 
 #[test]
 fn test_all_model_pricing_rates_and_fallbacks() {
+    // Migrated off the removed ModelPricing constants/from_model_name (TASK-MODEL-008) onto
+    // PricingTable::seed() + rate_for. Model keys are the short canonical names seed() indexes
+    // rows by, since rate_for does an exact match (no substring matching on date-suffixed
+    // names the way ModelPricing::from_model_name did).
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
     // CRIT-LUMEN-002: Claude 3.5 Sonnet
-    assert_eq!(ModelPricing::CLAUDE_3_5_SONNET.input_base_per_m, 3.00);
-    assert_eq!(ModelPricing::CLAUDE_3_5_SONNET.cache_write_per_m, 3.75);
-    assert_eq!(ModelPricing::CLAUDE_3_5_SONNET.cache_read_per_m, 0.30);
-    assert_eq!(ModelPricing::CLAUDE_3_5_SONNET.output_per_m, 15.00);
+    assert_eq!(table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of), 3.00);
+    assert_eq!(table.rate_for("claude-3-5-sonnet", None, TokenRateKind::CacheWrite, as_of), 3.75);
+    assert_eq!(table.rate_for("claude-3-5-sonnet", None, TokenRateKind::CacheRead, as_of), 0.30);
+    assert_eq!(table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Output, as_of), 15.00);
 
     // CRIT-LUMEN-003: Claude 3.5 Haiku
-    assert_eq!(ModelPricing::CLAUDE_3_5_HAIKU.input_base_per_m, 0.80);
-    assert_eq!(ModelPricing::CLAUDE_3_5_HAIKU.cache_write_per_m, 1.00);
-    assert_eq!(ModelPricing::CLAUDE_3_5_HAIKU.cache_read_per_m, 0.08);
-    assert_eq!(ModelPricing::CLAUDE_3_5_HAIKU.output_per_m, 4.00);
+    assert_eq!(table.rate_for("claude-3-5-haiku", None, TokenRateKind::Input, as_of), 0.80);
+    assert_eq!(table.rate_for("claude-3-5-haiku", None, TokenRateKind::CacheWrite, as_of), 1.00);
+    assert_eq!(table.rate_for("claude-3-5-haiku", None, TokenRateKind::CacheRead, as_of), 0.08);
+    assert_eq!(table.rate_for("claude-3-5-haiku", None, TokenRateKind::Output, as_of), 4.00);
 
-    // CRIT-LUMEN-004: Qwen 2.5 Coder
-    assert_eq!(ModelPricing::QWEN_2_5_CODER.input_base_per_m, 0.20);
-    assert_eq!(ModelPricing::QWEN_2_5_CODER.cache_write_per_m, 0.20);
-    assert_eq!(ModelPricing::QWEN_2_5_CODER.cache_read_per_m, 0.05);
-    assert_eq!(ModelPricing::QWEN_2_5_CODER.output_per_m, 0.60);
+    // CRIT-LUMEN-004: Qwen 2.5 Coder. seed() has no CacheWrite row for Qwen (unlike the old
+    // ModelPricing::QWEN_2_5_CODER constant, which set cache_write_per_m to 0.20 same as
+    // input); per CRIT-LUMEN-161 a recognized model missing a specific rate kind returns 0.0,
+    // it does not fall back to another model's or its own input rate.
+    assert_eq!(table.rate_for("qwen-2.5-coder", None, TokenRateKind::Input, as_of), 0.20);
+    assert_eq!(table.rate_for("qwen-2.5-coder", None, TokenRateKind::CacheWrite, as_of), 0.0);
+    assert_eq!(table.rate_for("qwen-2.5-coder", None, TokenRateKind::CacheRead, as_of), 0.05);
+    assert_eq!(table.rate_for("qwen-2.5-coder", None, TokenRateKind::Output, as_of), 0.60);
 
     // DeepSeek R1
-    assert_eq!(ModelPricing::DEEPSEEK_R1.input_base_per_m, 0.55);
-    assert_eq!(ModelPricing::DEEPSEEK_R1.cache_read_per_m, 0.14);
-    assert_eq!(ModelPricing::DEEPSEEK_R1.output_per_m, 2.19);
+    assert_eq!(table.rate_for("deepseek-r1", None, TokenRateKind::Input, as_of), 0.55);
+    assert_eq!(table.rate_for("deepseek-r1", None, TokenRateKind::CacheRead, as_of), 0.14);
+    assert_eq!(table.rate_for("deepseek-r1", None, TokenRateKind::Output, as_of), 2.19);
 
     // Gemini 2.0 Flash
-    assert_eq!(ModelPricing::GEMINI_2_0_FLASH.input_base_per_m, 0.10);
-    assert_eq!(ModelPricing::GEMINI_2_0_FLASH.cache_read_per_m, 0.025);
-    assert_eq!(ModelPricing::GEMINI_2_0_FLASH.output_per_m, 0.40);
+    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of), 0.10);
+    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of), 0.025);
+    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of), 0.40);
 
-    // CRIT-LUMEN-008: Unrecognized model string defaults to Claude 3.5 Sonnet
-    let unknown_pricing = ModelPricing::from_model_name("some-obscure-custom-llm-v1");
-    assert_eq!(unknown_pricing, ModelPricing::CLAUDE_3_5_SONNET);
+    // CRIT-LUMEN-008: Unrecognized model string defaults to Claude 3.5 Sonnet's rates
+    for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
+        let unrecognized = table.rate_for("some-obscure-custom-llm-v1", None, kind, as_of);
+        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
+        assert_eq!(unrecognized, sonnet);
+    }
 }
 
 #[test]

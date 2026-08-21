@@ -281,8 +281,21 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
         let wall_duration_ms = (ended_at - started_at).num_milliseconds().max(0) as u64;
 
-        let economics =
-            TokenEconomics::calculate(total_input, total_output, total_cache_creation, total_cache_read, &model_family);
+        let economics = TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: total_input,
+                    output_tokens: total_output,
+                    cache_creation_tokens: total_cache_creation,
+                    cache_read_tokens: total_cache_read,
+                },
+                timestamp: ended_at,
+                tier: None,
+            }],
+            &model_family,
+            &PricingTable::seed(),
+            None,
+        );
 
         Ok(CanonicalTranscript {
             session_id,

@@ -180,7 +180,7 @@ impl SessionAdapter for AgyAdapter {
                 idle_duration_ms: 0,
                 idle_gap_count: 0,
             },
-            economics: TokenEconomics::calculate(0, 0, 0, 0, &model_family),
+            economics: TokenEconomics::calculate(&[], &model_family, &PricingTable::seed(), None),
             turns,
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),

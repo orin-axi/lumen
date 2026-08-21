@@ -11,6 +11,7 @@ fn test_merge_precompact_snapshots_max_invariant() {
     let final_transcript = CanonicalTranscript {
         session_id: CompactString::new("sess-compacted"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {
@@ -21,12 +22,28 @@ fn test_merge_precompact_snapshots_max_invariant() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(5000, 1000, 2000, 15000, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage {
+                    input_tokens: 5000,
+                    output_tokens: 1000,
+                    cache_creation_tokens: 2000,
+                    cache_read_tokens: 15000,
+                },
+                timestamp: fixed_ts,
+                tier: None,
+            }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: Vec::new(),
         subagents: Vec::new(),
         extracted_schemas: SmallVec::new(),
         detected_anomalies: SmallVec::new(),
-        otel_request_ids: SmallVec::new(),
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: SmallVec::new(),
     };
 
     let snapshots = vec![

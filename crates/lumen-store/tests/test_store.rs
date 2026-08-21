@@ -84,10 +84,12 @@ fn test_session_repository_idempotent_upsert_and_list() {
             ephemeral_1h_tokens: 0,
             cache_hit_ratio: 75.0,
             total_cost_usd: 0.085,
+            provided_cost_usd: None,
             baseline_cost_no_cache_usd: 0.220,
             net_savings_usd: 0.135,
             efficiency_multiplier: 2.58,
             per_model: std::collections::HashMap::new(),
+            reasoning_output_tokens: 0,
         },
         has_anomalies: false,
     };

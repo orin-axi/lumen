@@ -11,6 +11,7 @@ fn test_canonical_transcript_roundtrip() {
     let transcript = CanonicalTranscript {
         session_id: CompactString::new("sess-123"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {
@@ -87,6 +88,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
     let child_subagent = CanonicalTranscript {
         session_id: CompactString::new("subagent-child-01"),
         parent_session_id: Some(CompactString::new("parent-root-00")),
+        subagent_role: None,
         orchestrator: OrchestratorKind::Antigravity,
         model_family: CompactString::new("claude-3-5-haiku-20241022"),
         timing: ExecutionTiming {
@@ -134,6 +136,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
     let parent_transcript = CanonicalTranscript {
         session_id: CompactString::new("parent-root-00"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::Antigravity,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {

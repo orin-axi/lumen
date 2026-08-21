@@ -1,4 +1,4 @@
-use lumen_model::{CanonicalTranscript, TurnTokenUsage};
+use lumen_model::{CanonicalTranscript, PricingTable, TokenEconomics, TurnPricingInput, TurnTokenUsage};
 
 /// Merges pre-compaction snapshots with the final parse result using max() semantics.
 pub fn merge_precompact_snapshots(
@@ -23,12 +23,20 @@ pub fn merge_precompact_snapshots(
         max_cache_read = max_cache_read.max(snap.cache_read_tokens);
     }
 
-    merged.economics = lumen_model::TokenEconomics::calculate(
-        max_input,
-        max_output,
-        max_cache_creation,
-        max_cache_read,
+    merged.economics = TokenEconomics::calculate(
+        &[TurnPricingInput {
+            usage: TurnTokenUsage {
+                input_tokens: max_input,
+                output_tokens: max_output,
+                cache_creation_tokens: max_cache_creation,
+                cache_read_tokens: max_cache_read,
+            },
+            timestamp: merged.timing.ended_at,
+            tier: None,
+        }],
         &merged.model_family,
+        &PricingTable::seed(),
+        None,
     );
 
     merged
@@ -57,12 +65,28 @@ mod tests {
                 idle_duration_ms: 0,
                 idle_gap_count: 0,
             },
-            economics: TokenEconomics::calculate(100, 50, 500, 2000, "claude-3-5-sonnet-20241022"),
+            economics: TokenEconomics::calculate(
+                &[TurnPricingInput {
+                    usage: TurnTokenUsage {
+                        input_tokens: 100,
+                        output_tokens: 50,
+                        cache_creation_tokens: 500,
+                        cache_read_tokens: 2000,
+                    },
+                    timestamp: Utc::now(),
+                    tier: None,
+                }],
+                "claude-3-5-sonnet-20241022",
+                &PricingTable::seed(),
+                None,
+            ),
             turns: vec![],
             subagents: vec![],
             extracted_schemas: smallvec::smallvec![],
             detected_anomalies: smallvec::smallvec![],
-            otel_request_ids: smallvec::smallvec![],
+            otel_conversation_id: None,
+            service_tier: None,
+            parse_failures: smallvec::smallvec![],
         };
 
         let snapshots = vec![

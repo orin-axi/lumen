@@ -1,8 +1,8 @@
 use chrono::Utc;
 use compact_str::CompactString;
 use lumen_model::{
-    CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, TokenEconomics,
-    ToolIntent, TurnRole,
+    CanonicalToolCall, CanonicalTranscript, CanonicalTurn, ExecutionTiming, OrchestratorKind, PricingTable,
+    TokenEconomics, ToolIntent, TurnPricingInput, TurnRole, TurnTokenUsage,
 };
 use lumen_pattern::*;
 use smallvec::smallvec;
@@ -40,6 +40,7 @@ fn test_calculate_monotonicity_free_function_detects_repeated_read_cycle() {
     let transcript = CanonicalTranscript {
         session_id: CompactString::new("s1"),
         parent_session_id: None,
+        subagent_role: None,
         orchestrator: OrchestratorKind::ClaudeCode,
         model_family: CompactString::new("claude-3-5-sonnet-20241022"),
         timing: ExecutionTiming {
@@ -50,7 +51,16 @@ fn test_calculate_monotonicity_free_function_detects_repeated_read_cycle() {
             idle_duration_ms: 0,
             idle_gap_count: 0,
         },
-        economics: TokenEconomics::calculate(0, 0, 0, 0, "claude-3-5-sonnet-20241022"),
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput {
+                usage: TurnTokenUsage::default(),
+                timestamp: Utc::now(),
+                tier: None,
+            }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
         turns: vec![
             code_search_turn(0, "get_balance"),
             code_search_turn(1, "get_balance"),
@@ -58,8 +68,10 @@ fn test_calculate_monotonicity_free_function_detects_repeated_read_cycle() {
         ],
         subagents: vec![],
         extracted_schemas: smallvec![],
-        otel_request_ids: smallvec![],
         detected_anomalies: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
     };
 
     let m = calculate_monotonicity(&transcript);
