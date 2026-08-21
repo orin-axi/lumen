@@ -801,6 +801,104 @@ fn test_subagent_and_plugin_skill_attribution() {
 }
 
 #[test]
+fn test_by_subagent_keyed_by_subagent_role_when_session_ids_collide() {
+    // Regression: when sibling subagent transcript files lack their own top-level
+    // sessionId, ClaudeCodeAdapter::parse_session_with_subagents leaves session_id at
+    // the parser default "unknown" for every one of them. If by_subagent keys on
+    // session_id, two or more such siblings collide on "unknown" and the second
+    // insert silently overwrites the first's AttributionMetrics. subagent_role is
+    // always distinct (derived from each sibling file's own filename stem), so it
+    // must be preferred as the map key when present.
+    let usage_turn = |turn_index: usize, attribution: Option<AttributionSource>, tokens: u64| CanonicalTurn {
+        attribution,
+        turn_index,
+        role: TurnRole::Assistant,
+        timestamp: Utc::now(),
+        latency_ms: 100,
+        text: None,
+        tool_calls: smallvec![],
+        tool_results: smallvec![],
+        usage: Some(TurnTokenUsage {
+            input_tokens: tokens,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        }),
+    };
+
+    let make_subagent = |role: &str, plugin_name: &str, tokens: u64| CanonicalTranscript {
+        session_id: "unknown".into(),
+        parent_session_id: Some("parent".into()),
+        subagent_role: Some(CompactString::from(role)),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: "claude-3-5-sonnet-20241022".into(),
+        timing: ExecutionTiming {
+            started_at: Utc::now(),
+            ended_at: Utc::now(),
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
+        turns: vec![usage_turn(0, Some(AttributionSource::Plugin { name: plugin_name.into() }), tokens)],
+        subagents: vec![],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
+    };
+
+    let subagent_a = make_subagent("worker-a", "tool-a", 40);
+    let subagent_b = make_subagent("worker-b", "tool-b", 70);
+
+    let parent_turn = usage_turn(0, None, 10);
+
+    let parent_transcript = CanonicalTranscript {
+        session_id: "parent".into(),
+        parent_session_id: None,
+        subagent_role: None,
+        orchestrator: OrchestratorKind::ClaudeCode,
+        model_family: "claude-3-5-sonnet-20241022".into(),
+        timing: ExecutionTiming {
+            started_at: Utc::now(),
+            ended_at: Utc::now(),
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            idle_duration_ms: 0,
+            idle_gap_count: 0,
+        },
+        economics: TokenEconomics::calculate(
+            &[TurnPricingInput { usage: TurnTokenUsage::default(), timestamp: Utc::now(), tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &PricingTable::seed(),
+            None,
+        ),
+        turns: vec![parent_turn],
+        subagents: vec![subagent_a, subagent_b],
+        extracted_schemas: smallvec![],
+        detected_anomalies: smallvec![],
+        otel_conversation_id: None,
+        service_tier: None,
+        parse_failures: smallvec![],
+    };
+
+    let engine = AnalyticsEngine::new();
+    let report = engine.process_transcript(&parent_transcript);
+
+    assert_eq!(report.by_subagent.len(), 2, "both subagents must survive despite colliding session_id");
+    assert_eq!(report.by_subagent.get("worker-a").and_then(|m| m.by_plugin.get("tool-a").copied()), Some(40));
+    assert_eq!(report.by_subagent.get("worker-b").and_then(|m| m.by_plugin.get("tool-b").copied()), Some(70));
+    assert!(report.by_subagent.get("unknown").is_none());
+}
+
+#[test]
 fn test_artifacts_accumulator_dedup_and_skip_empty() {
     // CRIT-LUMEN-126: non-empty FileRead/FileCreate/FileEdit paths land in their
     // respective sets, while empty-path variants and non-file ToolIntent variants
