@@ -438,3 +438,83 @@ fn test_provided_cost_usd_twin_field() {
         TokenEconomics::calculate(std::slice::from_ref(&turn), "claude-3-5-sonnet", &pricing, None);
     assert_eq!(econ_without_provided.provided_cost_usd, None);
 }
+
+/// Blocker #1 from adversarial review: rate_for must normalize raw, provider-versioned model
+/// strings (as real adapters actually pass them, e.g. ClaudeCodeAdapter's `message.model`
+/// field) down to seed()'s short canonical keys BEFORE doing the recognized/exact-match
+/// lookup, per SPEC-LUMEN-001-MODEL.json's PricingTable api_surface entry. Without this
+/// normalization, every one of these real strings falls through to the CRIT-LUMEN-008
+/// unrecognized-model fallback and silently returns Sonnet's rates instead of the model's own.
+#[test]
+fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    // Real ClaudeCodeAdapter message.model string for Haiku.
+    assert!(
+        (table.rate_for("claude-3-5-haiku-20241022", None, TokenRateKind::Input, as_of) - 0.80).abs() < 1e-9,
+        "raw dated Haiku model string must normalize to claude-3-5-haiku's $0.80/M input rate"
+    );
+    assert!(
+        (table.rate_for("claude-3-5-haiku-20241022", None, TokenRateKind::Output, as_of) - 4.00).abs() < 1e-9
+    );
+
+    // Real ClaudeCodeAdapter message.model string for Opus.
+    assert!(
+        (table.rate_for("claude-opus-4-20250514", None, TokenRateKind::Input, as_of) - 15.00).abs() < 1e-9,
+        "raw dated Opus model string must normalize to claude-opus's $15.00/M input rate"
+    );
+    assert!(
+        (table.rate_for("claude-opus-4-20250514", None, TokenRateKind::Output, as_of) - 75.00).abs() < 1e-9
+    );
+
+    // Real ClaudeCodeAdapter message.model string for Sonnet.
+    assert!(
+        (table.rate_for("claude-3-5-sonnet-20241022", None, TokenRateKind::Input, as_of) - 3.00).abs() < 1e-9,
+        "raw dated Sonnet model string must normalize to claude-3-5-sonnet's own $3.00/M rate"
+    );
+
+    // Real GPT-4o versioned string.
+    assert!(
+        (table.rate_for("gpt-4o-2024-08-06", None, TokenRateKind::Input, as_of) - 2.50).abs() < 1e-9,
+        "raw dated GPT-4o model string must normalize to gpt-4o's $2.50/M input rate, not \
+         Sonnet's $3.00/M fallback"
+    );
+    assert!(
+        (table.rate_for("gpt-4o-2024-08-06", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9
+    );
+
+    // Real Gemini 2.0 Flash versioned strings (two different suffix shapes).
+    assert!(
+        (table.rate_for("gemini-2.0-flash-001", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9,
+        "raw numbered Gemini Flash model string must normalize to gemini-2.0-flash's $0.10/M \
+         input rate, not Sonnet's $3.00/M fallback"
+    );
+    assert!(
+        (table.rate_for("gemini-2.0-flash-exp", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9,
+        "raw -exp-suffixed Gemini Flash model string must also normalize to gemini-2.0-flash"
+    );
+
+    // CRIT-LUMEN-008 must still hold: a genuinely unrecognized model (normalizes to no seeded
+    // key at all) still falls back to claude-3-5-sonnet's rates.
+    for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
+        let unrecognized = table.rate_for("totally-fake-model-xyz-99999999", None, kind, as_of);
+        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
+        assert!(
+            (unrecognized - sonnet).abs() < 1e-9,
+            "genuinely unrecognized model must still fall back to Sonnet's rate for {kind:?}"
+        );
+    }
+
+    // CRIT-LUMEN-161 must still hold: qwen-2.5-coder's missing CacheWrite row still returns
+    // exactly 0.0, not a substituted rate, even via a versioned qwen string.
+    assert_eq!(
+        table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::CacheWrite, as_of),
+        0.0,
+        "recognized-after-normalization model missing a specific rate kind must still return \
+         exactly 0.0, never a substituted rate"
+    );
+    assert!(
+        (table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9
+    );
+}

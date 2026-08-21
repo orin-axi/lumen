@@ -110,15 +110,47 @@ impl PricingTable {
         Self { rates }
     }
 
+    /// Normalizes a raw, provider-versioned model string (e.g. "claude-3-5-haiku-20241022",
+    /// "gpt-4o-2024-08-06", "gemini-2.0-flash-001") down to one of this table's seeded
+    /// canonical keys, by trying progressively shorter '-'-delimited prefixes of `model`
+    /// against the set of model names actually present in `self.rates`, longest prefix first.
+    /// Returns `None` when no prefix matches any seeded key -- callers must fall back to the
+    /// CRIT-LUMEN-008 unrecognized-model behavior in that case.
+    ///
+    /// A small explicit alias table was considered instead, but seeded keys are themselves
+    /// hyphen-delimited words (e.g. "claude-3-5-haiku") and every real-world date/version
+    /// suffix observed (YYYYMMDD, YYYY-MM-DD, "-001", "-exp", "-32b-instruct") is just extra
+    /// hyphen-delimited segments appended after the canonical name. Prefix-shortening solves
+    /// all of them with one algorithm and needs no maintenance as new dated releases appear,
+    /// whereas an alias table would need a new entry per new version string.
+    fn normalize_model_key<'a>(&'a self, model: &'a str) -> Option<&'a str> {
+        let parts: Vec<&str> = model.split('-').collect();
+        for end in (1..=parts.len()).rev() {
+            let candidate = &model[..Self::prefix_byte_len(&parts, end)];
+            if self.rates.iter().any(|r| r.model == candidate) {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Byte length of the '-'-joined prefix consisting of the first `count` elements of
+    /// `parts` (which were produced by splitting the original string on '-').
+    fn prefix_byte_len(parts: &[&str], count: usize) -> usize {
+        let joined_len: usize = parts[..count].iter().map(|p| p.len()).sum();
+        // account for the (count - 1) '-' separators between the included parts
+        joined_len + count.saturating_sub(1)
+    }
+
     /// Looks up the rate for (model, tier, kind) whose effective window contains `as_of`.
     /// Falls back to `claude-3-5-sonnet`'s rate for the requested kind when the model
-    /// string matches no row at all (CRIT-LUMEN-008). When the model IS recognized (matches
-    /// at least one row) but has no row for this specific (tier, kind, as_of), returns 0.0
-    /// directly rather than substituting another model's rate (CRIT-LUMEN-161).
+    /// string -- after normalizing away any provider-versioning suffix -- matches no row at
+    /// all (CRIT-LUMEN-008). When the model IS recognized (matches at least one row, possibly
+    /// only after normalization) but has no row for this specific (tier, kind, as_of), returns
+    /// 0.0 directly rather than substituting another model's rate (CRIT-LUMEN-161).
     pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
-        let model_recognized = self.rates.iter().any(|r| r.model == model);
-
-        let lookup_model = if model_recognized { model } else { "claude-3-5-sonnet" };
+        let normalized = self.normalize_model_key(model);
+        let lookup_model = normalized.unwrap_or("claude-3-5-sonnet");
 
         self.rates
             .iter()
