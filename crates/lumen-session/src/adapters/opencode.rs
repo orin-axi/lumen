@@ -109,7 +109,7 @@ impl SessionAdapter for OpenCodeAdapter {
                 let c_write = usage_obj.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let c_read = usage_obj.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
 
-                if in_tok > 0 || out_tok > 0 {
+                if in_tok > 0 || out_tok > 0 || c_write > 0 || c_read > 0 {
                     turn_usage = Some(TurnTokenUsage {
                         input_tokens: in_tok,
                         cache_creation_tokens: c_write,

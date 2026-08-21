@@ -116,3 +116,35 @@ fn test_opencode_malformed_line_produces_real_parse_failure_record() {
     assert!(!failure.error.is_empty(), "error message must be real, not hardcoded/empty");
     assert!(failure.byte_offset > 0, "second line's byte offset must be non-zero");
 }
+
+#[test]
+fn test_opencode_pure_cache_read_turn_is_not_dropped() {
+    // A genuine pure cache-hit turn reports input_tokens: 0, output_tokens: 0, but a real
+    // non-zero cache_read_input_tokens. The usage-capture gate must not require in_tok/out_tok
+    // to be non-zero -- otherwise the entire 5000-token cache read is silently discarded: no
+    // turn_usage is recorded and none of the running totals are incremented.
+    let sample = r#"{"timestamp":"2026-08-19T12:00:00Z","action":"read","args":{"path":"src/main.rs"},"metrics":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":5000,"cache_creation_input_tokens":0}}
+"#;
+
+    let adapter = OpenCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse OpenCode session");
+
+    let usage = transcript.turns[0].usage.as_ref().expect("pure cache-read turn must still record usage");
+    assert_eq!(usage.cache_read_tokens, 5000, "real cache read tokens must not be dropped");
+    assert_eq!(transcript.economics.cache_read_tokens, 5000, "cache read tokens must reach the running total/economics");
+}
+
+#[test]
+fn test_opencode_pure_cache_write_turn_is_not_dropped() {
+    // Same defect, mirrored for cache_creation_input_tokens (a pure cache-write turn with
+    // zero input_tokens/output_tokens).
+    let sample = r#"{"timestamp":"2026-08-19T12:00:00Z","action":"read","args":{"path":"src/main.rs"},"metrics":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":3000}}
+"#;
+
+    let adapter = OpenCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse OpenCode session");
+
+    let usage = transcript.turns[0].usage.as_ref().expect("pure cache-write turn must still record usage");
+    assert_eq!(usage.cache_creation_tokens, 3000, "real cache write tokens must not be dropped");
+    assert_eq!(transcript.economics.cache_creation_tokens, 3000, "cache write tokens must reach the running total/economics");
+}
