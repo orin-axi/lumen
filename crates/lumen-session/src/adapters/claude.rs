@@ -44,8 +44,9 @@ impl SessionAdapter for ClaudeCodeAdapter {
         let mut total_output: u64 = 0;
         let mut total_cache_creation: u64 = 0;
         let mut total_cache_read: u64 = 0;
+        let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
 
-        for line_res in reader.lines() {
+        for (idx, line_res) in reader.lines().enumerate() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(e) => return Err(IngestionError::Io(e)),
@@ -59,8 +60,15 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
             let val: serde_json::Value = match serde_json::from_str(clean_line) {
                 Ok(v) => v,
-                Err(_) => {
-                    // Skip corrupted or incomplete JSON lines gracefully
+                Err(e) => {
+                    // Skip corrupted or incomplete JSON lines gracefully, but record the
+                    // failure so it survives the parse_stream call (CRIT-LUMEN-025).
+                    parse_failures.push(ParseFailureRecord {
+                        session_id: session_id.clone(),
+                        line_number: idx + 1,
+                        byte_offset: 0,
+                        error: CompactString::new(e.to_string()),
+                    });
                     continue;
                 }
             };
@@ -254,7 +262,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
             detected_anomalies: SmallVec::new(),
             otel_conversation_id: None,
             service_tier: None,
-            parse_failures: SmallVec::new(),
+            parse_failures,
         })
     }
 }

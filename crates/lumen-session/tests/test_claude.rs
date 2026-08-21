@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 #[test]
 fn test_claude_code_fingerprint_detection() {
-    let sample = b"{\"type\":\"mode\",\"mode\":\"normal\",\"sessionId\":\"ef175eb8-0825-4122-934b\"}\n{\"type\":\"permission-mode\"}";
+    let sample = b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"message\":{}}";
     let start = std::time::Instant::now();
     let detected = detect_orchestrator(sample);
     let duration = start.elapsed();
@@ -12,6 +12,12 @@ fn test_claude_code_fingerprint_detection() {
     assert_eq!(detected, Some(OrchestratorKind::ClaudeCode));
     // CRIT-LUMEN-020: under 1ms
     assert!(duration.as_micros() < 1000);
+}
+
+#[test]
+fn test_claude_code_fingerprint_sessionid_alone_is_not_claude_code() {
+    let sample = b"{\"sessionId\":\"ef175eb8-0825-4122-934b\"}";
+    assert_ne!(detect_orchestrator(sample), Some(OrchestratorKind::ClaudeCode));
 }
 
 #[test]
@@ -63,6 +69,12 @@ fn test_claude_code_adapter_corrupted_lines_resilience() {
     assert_eq!(transcript.turns.len(), 2);
     assert_eq!(transcript.turns[0].role, TurnRole::User);
     assert_eq!(transcript.turns[1].role, TurnRole::Assistant);
+
+    // CRIT-LUMEN-025: surviving parse-failure records
+    assert_eq!(transcript.parse_failures.len(), 2);
+    assert_eq!(transcript.parse_failures[0].line_number, 2);
+    assert_eq!(transcript.parse_failures[1].line_number, 4);
+    assert!(!transcript.parse_failures[0].error.is_empty());
 }
 
 #[test]

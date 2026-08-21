@@ -4,12 +4,7 @@ use lumen_model::OrchestratorKind;
 pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
     let sample_str = std::str::from_utf8(sample_bytes).unwrap_or("");
 
-    if sample_str.contains("\"sessionId\"")
-        && (sample_str.contains("\"permission-mode\"")
-            || sample_str.contains("\"leafUuid\"")
-            || sample_str.contains("\"parentUuid\"")
-            || sample_str.contains("\"isSidechain\""))
-    {
+    if sample_str.contains("\"sessionId\"") && sample_str.contains("\"parentUuid\"") {
         return Some(OrchestratorKind::ClaudeCode);
     }
 
@@ -45,8 +40,14 @@ mod tests {
 
     #[test]
     fn test_detect_claude_code() {
-        let sample = b"{\"type\":\"mode\",\"mode\":\"normal\",\"sessionId\":\"ef175eb8-0825-4122-934b\"}\n{\"type\":\"permission-mode\"}";
+        let sample = b"{\"type\":\"assistant\",\"sessionId\":\"ef175eb8-0825-4122-934b\",\"parentUuid\":\"turn-0\",\"message\":{}}";
         assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::ClaudeCode));
+    }
+
+    #[test]
+    fn test_detect_claude_code_sessionid_alone_is_not_claude_code() {
+        let sample = b"{\"sessionId\":\"ef175eb8-0825-4122-934b\"}";
+        assert_ne!(detect_orchestrator(sample), Some(OrchestratorKind::ClaudeCode));
     }
 
     #[test]
