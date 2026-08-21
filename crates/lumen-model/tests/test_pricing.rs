@@ -211,3 +211,106 @@ fn test_extended_pricing_matrix() {
         );
     }
 }
+
+/// CRIT-LUMEN-159: PricingTable::rate_for must select the row whose [effective_from,
+/// effective_until) window contains the CALLING TURN's own as_of timestamp -- not wall-clock
+/// now -- and must resolve authoring-error overlaps deterministically: latest effective_from
+/// wins, and among ties on effective_from, the row LAST in PricingTable.rates' declaration
+/// order wins.
+#[test]
+fn test_rate_for_versioned_lookup_and_tie_break() {
+    // (a) Two non-overlapping consecutive windows for the same (model, tier, kind)
+    // representing a price change. as_of inside each window must select that window's row.
+    let jan_1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let jun_1 = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+    let dec_1 = Utc.with_ymd_and_hms(2024, 12, 1, 0, 0, 0).unwrap();
+
+    let windowed_table = PricingTable {
+        rates: vec![
+            PricingRate {
+                model: "test-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 1.00,
+                effective_from: jan_1,
+                effective_until: Some(jun_1),
+            },
+            PricingRate {
+                model: "test-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 2.00,
+                effective_from: jun_1,
+                effective_until: None,
+            },
+        ],
+    };
+
+    let mid_first_window = Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+    let mid_second_window = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
+
+    assert!(
+        (windowed_table.rate_for("test-model", None, TokenRateKind::Input, mid_first_window) - 1.00).abs() < 1e-9,
+        "as_of inside the first window must select the first rate, proving the CALLING TURN's \
+         own timestamp -- not wall-clock now -- selects the row"
+    );
+    assert!(
+        (windowed_table.rate_for("test-model", None, TokenRateKind::Input, mid_second_window) - 2.00).abs() < 1e-9,
+        "as_of inside the second window must select the second rate"
+    );
+
+    // (b) Identical effective_from, no effective_until: an authoring-error overlap.
+    // rate_for must return whichever row is LAST in PricingTable.rates' declaration order.
+    let tie_table = PricingTable {
+        rates: vec![
+            PricingRate {
+                model: "tie-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 5.00,
+                effective_from: jan_1,
+                effective_until: None,
+            },
+            PricingRate {
+                model: "tie-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 9.00,
+                effective_from: jan_1,
+                effective_until: None,
+            },
+        ],
+    };
+    assert!(
+        (tie_table.rate_for("tie-model", None, TokenRateKind::Input, dec_1) - 9.00).abs() < 1e-9,
+        "identical effective_from must resolve to the LAST row in declaration order (index 1)"
+    );
+
+    // (c) Different effective_from values whose windows overlap. rate_for must return the
+    // row with the LATER effective_from, regardless of declaration order.
+    let overlap_table = PricingTable {
+        rates: vec![
+            PricingRate {
+                model: "overlap-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 7.00,
+                effective_from: jun_1,
+                effective_until: None,
+            },
+            PricingRate {
+                model: "overlap-model".into(),
+                tier: None,
+                kind: TokenRateKind::Input,
+                rate_per_m: 4.00,
+                effective_from: jan_1,
+                effective_until: None,
+            },
+        ],
+    };
+    assert!(
+        (overlap_table.rate_for("overlap-model", None, TokenRateKind::Input, dec_1) - 7.00).abs() < 1e-9,
+        "overlapping windows must resolve to the row with the LATER effective_from (7.00, \
+         declared first but effective later), not the row that appears later in the vector"
+    );
+}
