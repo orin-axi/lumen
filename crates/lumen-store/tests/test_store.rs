@@ -125,7 +125,7 @@ fn test_session_repository_idempotent_upsert_and_list() {
     assert_eq!(list[0].turn_count, 15);
     assert_eq!(list[0].cache_hit_ratio, 75.0);
 
-    let detail = repo.get_session("sess-abc-123").expect("Get session failed").expect("Session not found");
+    let detail = repo.get_session("claude", "sess-abc-123").expect("Get session failed").expect("Session not found");
     assert_eq!(detail.summary.session_id, "sess-abc-123");
     assert_eq!(detail.economics.net_savings_usd, 0.135);
 }
@@ -409,7 +409,8 @@ fn test_session_repository_get_session_populates_tool_counts_from_internal_id() 
     ];
     tool_repo.insert_tool_calls(internal_id, &calls).unwrap();
 
-    let detail = session_repo.get_session("sess-tool-3").expect("get_session failed").expect("session not found");
+    let detail =
+        session_repo.get_session("claude", "sess-tool-3").expect("get_session failed").expect("session not found");
     assert_eq!(detail.tool_counts.get("Read").copied(), Some(1));
     assert_eq!(detail.tool_counts.get("Bash").copied(), Some(1));
     assert_eq!(detail.error_counts.get("Bash").copied(), Some(1));
@@ -601,7 +602,7 @@ fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
     let cmd_repo = CommandEventRepository::new(&conn);
 
     // Empty slice must insert zero rows without error.
-    cmd_repo.insert_command_events("sess-cmd-1", &[]).expect("empty slice insert failed");
+    cmd_repo.insert_command_events("claude", "sess-cmd-1", &[]).expect("empty slice insert failed");
     let count_after_empty: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM command_events ce JOIN sessions s ON ce.session_id = s.id WHERE s.provider_session_id = ?1",
@@ -620,7 +621,7 @@ fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
         CommandEventFactRecord { command_base: "rm".to_string(), sanitized_args: None, is_error: true },
     ];
 
-    cmd_repo.insert_command_events("sess-cmd-1", &events).expect("insert_command_events failed");
+    cmd_repo.insert_command_events("claude", "sess-cmd-1", &events).expect("insert_command_events failed");
 
     let count: i64 = conn
         .query_row(
@@ -652,9 +653,9 @@ fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
         },
         CommandEventFactRecord { command_base: "ls".to_string(), sanitized_args: None, is_error: false },
     ];
-    cmd_repo.insert_command_events("sess-cmd-2", &events).expect("insert_command_events failed");
+    cmd_repo.insert_command_events("claude", "sess-cmd-2", &events).expect("insert_command_events failed");
 
-    let listed = cmd_repo.list_by_session("sess-cmd-2").expect("list_by_session failed");
+    let listed = cmd_repo.list_by_session("claude", "sess-cmd-2").expect("list_by_session failed");
     assert_eq!(listed.len(), 2);
 
     assert_eq!(listed[0].command_base, "git");
@@ -678,14 +679,14 @@ fn test_command_event_repository_nonexistent_session_returns_error() {
     let events =
         vec![CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: None, is_error: false }];
 
-    let insert_result = cmd_repo.insert_command_events("no-such-session", &events);
+    let insert_result = cmd_repo.insert_command_events("claude", "no-such-session", &events);
     assert!(
         insert_result.is_err(),
         "insert_command_events against a nonexistent session must error, not silently corrupt data"
     );
     assert!(matches!(insert_result.unwrap_err(), StoreError::NotFound(_)));
 
-    let list_result = cmd_repo.list_by_session("no-such-session");
+    let list_result = cmd_repo.list_by_session("claude", "no-such-session");
     assert!(list_result.is_err(), "list_by_session against a nonexistent session must error");
     assert!(matches!(list_result.unwrap_err(), StoreError::NotFound(_)));
 }
@@ -826,7 +827,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
     };
 
     let token_repo = TokenUsageRepository::new(&conn);
-    token_repo.insert_token_usage("sess-token-1", &economics).expect("insert_token_usage failed");
+    token_repo.insert_token_usage("claude", "sess-token-1", &economics).expect("insert_token_usage failed");
 
     let internal_id: i64 = conn
         .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-token-1"], |row| row.get(0))
@@ -875,7 +876,7 @@ fn test_token_usage_repository_nonexistent_session_returns_error() {
     let token_repo = TokenUsageRepository::new(&conn);
     let economics = empty_token_economics();
 
-    let insert_result = token_repo.insert_token_usage("no-such-session", &economics);
+    let insert_result = token_repo.insert_token_usage("claude", "no-such-session", &economics);
     assert!(insert_result.is_err(), "insert_token_usage against a nonexistent session must error");
     assert!(matches!(insert_result.unwrap_err(), StoreError::NotFound(_)));
 }
@@ -893,7 +894,7 @@ fn test_token_usage_repository_empty_per_model_inserts_zero_rows() {
     let token_repo = TokenUsageRepository::new(&conn);
     let economics = empty_token_economics();
 
-    token_repo.insert_token_usage("sess-token-empty", &economics).expect("empty per_model insert failed");
+    token_repo.insert_token_usage("claude", "sess-token-empty", &economics).expect("empty per_model insert failed");
 
     let internal_id: i64 = conn
         .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-token-empty"], |row| row.get(0))
@@ -966,7 +967,10 @@ fn test_upsert_session_persists_and_reads_back_per_model_token_usage() {
     session_repo.upsert_session(&record).expect("upsert_session failed");
 
     let detail =
-        session_repo.get_session("sess-economics-roundtrip").expect("get_session failed").expect("session not found");
+        session_repo
+            .get_session("claude", "sess-economics-roundtrip")
+            .expect("get_session failed")
+            .expect("session not found");
 
     assert_eq!(detail.economics.per_model, record.economics.per_model, "per_model must round-trip exactly");
     assert_eq!(detail.economics.input_tokens, 3000, "input_tokens must be the sum across per_model entries");
@@ -1027,7 +1031,10 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
     session_repo.upsert_session(&record).expect("second upsert_session failed");
 
     let detail =
-        session_repo.get_session("sess-economics-reupsert").expect("get_session failed").expect("session not found");
+        session_repo
+            .get_session("claude", "sess-economics-reupsert")
+            .expect("get_session failed")
+            .expect("session not found");
 
     assert_eq!(detail.economics.per_model, second_per_model, "get_session must reflect only the second upsert's data");
     assert_eq!(detail.economics.input_tokens, 500);
@@ -1044,4 +1051,56 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
         .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0))
         .unwrap();
     assert_eq!(row_count, 1, "re-upsert must fully replace token_usage rows, not accumulate duplicates");
+}
+
+#[test]
+fn test_get_session_scoped_by_provider_avoids_cross_provider_collision() {
+    // The `sessions` table's real uniqueness constraint is UNIQUE(provider, provider_session_id)
+    // (see migrations.rs V2) -- a session is only truly identified by the PAIR, not by
+    // provider_session_id alone. Two different providers can legitimately report the same
+    // provider_session_id. get_session must resolve the correct row for the (provider,
+    // session_id) pair given, not whichever row happens to match provider_session_id first.
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("session_provider_collision_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+
+    let shared_session_id = "shared-session-id-123";
+
+    let mut claude_record = make_test_session_record(shared_session_id);
+    claude_record.provider = "claude-code".to_string();
+    claude_record.model_family = "claude-3-5-sonnet-20241022".to_string();
+    claude_record.economics.total_cost_usd = 1.11;
+    claude_record.economics.net_savings_usd = 0.11;
+
+    let mut codex_record = make_test_session_record(shared_session_id);
+    codex_record.provider = "codex".to_string();
+    codex_record.model_family = "gpt-5-codex".to_string();
+    codex_record.economics.total_cost_usd = 9.99;
+    codex_record.economics.net_savings_usd = 0.99;
+
+    session_repo.upsert_session(&claude_record).expect("claude-code upsert failed");
+    session_repo.upsert_session(&codex_record).expect("codex upsert failed");
+
+    let claude_detail = session_repo
+        .get_session("claude-code", shared_session_id)
+        .expect("get_session for claude-code failed")
+        .expect("claude-code session not found");
+    assert_eq!(
+        claude_detail.summary.model_family, "claude-3-5-sonnet-20241022",
+        "get_session(\"claude-code\", ..) must return the claude-code row, not codex's"
+    );
+    assert_eq!(claude_detail.summary.total_cost_usd, 1.11);
+
+    let codex_detail = session_repo
+        .get_session("codex", shared_session_id)
+        .expect("get_session for codex failed")
+        .expect("codex session not found");
+    assert_eq!(
+        codex_detail.summary.model_family, "gpt-5-codex",
+        "get_session(\"codex\", ..) must return the codex row, not claude-code's"
+    );
+    assert_eq!(codex_detail.summary.total_cost_usd, 9.99);
 }

@@ -62,15 +62,15 @@ impl<'a> SessionRepository<'a> {
         let internal_id: i64 = self
             .conn
             .query_row(
-                "SELECT id FROM sessions WHERE provider_session_id = ?1",
-                params![record.provider_session_id],
+                "SELECT id FROM sessions WHERE provider = ?1 AND provider_session_id = ?2",
+                params![record.provider, record.provider_session_id],
                 |row| row.get(0),
             )
             .map_err(StoreError::Sqlite)?;
 
         let token_usage_repo = TokenUsageRepository::new(self.conn);
         token_usage_repo.delete_for_session(internal_id)?;
-        token_usage_repo.insert_token_usage(&record.provider_session_id, &record.economics)?;
+        token_usage_repo.insert_token_usage(&record.provider, &record.provider_session_id, &record.economics)?;
 
         Ok(())
     }
@@ -116,7 +116,11 @@ impl<'a> SessionRepository<'a> {
         Ok(result)
     }
 
-    pub fn get_session(&self, session_id: &str) -> Result<Option<SessionDetailReadModel>, StoreError> {
+    pub fn get_session(
+        &self,
+        provider: &str,
+        session_id: &str,
+    ) -> Result<Option<SessionDetailReadModel>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -124,12 +128,12 @@ impl<'a> SessionRepository<'a> {
                         wall_duration_ms, cache_hit_ratio, total_cost_usd, net_savings_usd, baseline_cost_usd,
                         efficiency_multiplier, created_at
                  FROM sessions
-                 WHERE provider_session_id = ?1",
+                 WHERE provider = ?1 AND provider_session_id = ?2",
             )
             .map_err(StoreError::Sqlite)?;
 
         let mut rows = stmt
-            .query_map(params![session_id], |row| {
+            .query_map(params![provider, session_id], |row| {
                 let id: i64 = row.get(0)?;
                 let provider: String = row.get(1)?;
                 let sess_id: String = row.get(2)?;

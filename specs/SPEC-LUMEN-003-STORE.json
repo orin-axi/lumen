@@ -29,8 +29,8 @@
     },
     {
       "name": "SessionRepository",
-      "signature": "pub struct SessionRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> SessionRepository<'a> { pub fn upsert_session(&self, record: &SessionFactRecord) -> Result<(), StoreError>; pub fn get_session(&self, id: &str) -> Result<Option<SessionDetailReadModel>, StoreError>; pub fn list_recent(&self, filter: &SessionFilter) -> Result<Vec<SessionSummaryReadModel>, StoreError>; }",
-      "description": "Repository for normalized session facts, supporting idempotent upserts keyed on (provider, provider_session_id) and typed read models.",
+      "signature": "pub struct SessionRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> SessionRepository<'a> { pub fn upsert_session(&self, record: &SessionFactRecord) -> Result<(), StoreError>; pub fn get_session(&self, provider: &str, id: &str) -> Result<Option<SessionDetailReadModel>, StoreError>; pub fn list_recent(&self, filter: &SessionFilter) -> Result<Vec<SessionSummaryReadModel>, StoreError>; }",
+      "description": "Repository for normalized session facts, supporting idempotent upserts keyed on (provider, provider_session_id) and typed read models. get_session requires a provider parameter because the sessions table's real uniqueness constraint is UNIQUE(provider, provider_session_id) -- a session is only truly identified by the pair, not by provider_session_id alone. A provider_session_id-only lookup can theoretically resolve the wrong row if two different providers happen to report an identical session id.",
       "error_conditions": []
     },
     {
@@ -53,8 +53,8 @@
     },
     {
       "name": "CommandEventRepository",
-      "signature": "pub struct CommandEventRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> CommandEventRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_command_events(&self, session_id: &str, events: &[CommandEventFactRecord]) -> Result<(), StoreError>; pub fn list_by_session(&self, session_id: &str) -> Result<Vec<CommandEventReadModel>, StoreError>; }",
-      "description": "Repository for the command_events table. insert_command_events persists command_base and redacted argument patterns per CRIT-LUMEN-037's redaction requirement, ensuring zero raw private arguments are written.",
+      "signature": "pub struct CommandEventRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> CommandEventRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_command_events(&self, provider: &str, session_id: &str, events: &[CommandEventFactRecord]) -> Result<(), StoreError>; pub fn list_by_session(&self, provider: &str, session_id: &str) -> Result<Vec<CommandEventReadModel>, StoreError>; }",
+      "description": "Repository for the command_events table. insert_command_events persists command_base and redacted argument patterns per CRIT-LUMEN-037's redaction requirement, ensuring zero raw private arguments are written. Both methods require a provider parameter because the sessions table's real uniqueness constraint is UNIQUE(provider, provider_session_id) -- a session is only truly identified by the pair, not by provider_session_id alone. A provider_session_id-only lookup can theoretically resolve the wrong row if two different providers happen to report an identical session id.",
       "error_conditions": []
     },
     {
@@ -67,8 +67,8 @@
     },
     {
       "name": "TokenUsageRepository",
-      "signature": "pub struct TokenUsageRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> TokenUsageRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_token_usage(&self, session_id: &str, economics: &lumen_model::TokenEconomics) -> Result<(), StoreError>; }",
-      "description": "Repository for the token_usage table (created by migration V1 per CRIT-LUMEN-032). insert_token_usage inserts one row per entry in TokenEconomics.per_model (keyed by model name, using ModelTokenSummary's input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/cost_usd/turns fields directly) rather than an invented intermediate record type.",
+      "signature": "pub struct TokenUsageRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> TokenUsageRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_token_usage(&self, provider: &str, session_id: &str, economics: &lumen_model::TokenEconomics) -> Result<(), StoreError>; }",
+      "description": "Repository for the token_usage table (created by migration V1 per CRIT-LUMEN-032). insert_token_usage inserts one row per entry in TokenEconomics.per_model (keyed by model name, using ModelTokenSummary's input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/cost_usd/turns fields directly) rather than an invented intermediate record type. Requires a provider parameter because the sessions table's real uniqueness constraint is UNIQUE(provider, provider_session_id) -- a session is only truly identified by the pair, not by provider_session_id alone. A provider_session_id-only lookup can theoretically resolve the wrong row if two different providers happen to report an identical session id.",
       "error_conditions": []
     },
     {

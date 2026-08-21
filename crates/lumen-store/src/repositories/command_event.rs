@@ -12,19 +12,28 @@ impl<'a> CommandEventRepository<'a> {
         Self { conn }
     }
 
-    fn resolve_session_id(&self, session_id: &str) -> Result<i64, StoreError> {
+    fn resolve_session_id(&self, provider: &str, session_id: &str) -> Result<i64, StoreError> {
         self.conn
-            .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", params![session_id], |row| row.get(0))
+            .query_row(
+                "SELECT id FROM sessions WHERE provider = ?1 AND provider_session_id = ?2",
+                params![provider, session_id],
+                |row| row.get(0),
+            )
             .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    StoreError::NotFound(format!("session with provider_session_id '{session_id}' not found"))
-                }
+                rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(format!(
+                    "session with provider '{provider}' and provider_session_id '{session_id}' not found"
+                )),
                 other => StoreError::Sqlite(other),
             })
     }
 
-    pub fn insert_command_events(&self, session_id: &str, events: &[CommandEventFactRecord]) -> Result<(), StoreError> {
-        let internal_id = self.resolve_session_id(session_id)?;
+    pub fn insert_command_events(
+        &self,
+        provider: &str,
+        session_id: &str,
+        events: &[CommandEventFactRecord],
+    ) -> Result<(), StoreError> {
+        let internal_id = self.resolve_session_id(provider, session_id)?;
 
         let mut stmt = self
             .conn
@@ -42,8 +51,8 @@ impl<'a> CommandEventRepository<'a> {
         Ok(())
     }
 
-    pub fn list_by_session(&self, session_id: &str) -> Result<Vec<CommandEventReadModel>, StoreError> {
-        let internal_id = self.resolve_session_id(session_id)?;
+    pub fn list_by_session(&self, provider: &str, session_id: &str) -> Result<Vec<CommandEventReadModel>, StoreError> {
+        let internal_id = self.resolve_session_id(provider, session_id)?;
 
         let mut stmt = self
             .conn
