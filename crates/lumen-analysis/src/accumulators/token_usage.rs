@@ -1,5 +1,5 @@
-use compact_str::CompactString;
 use chrono::Utc;
+use compact_str::CompactString;
 use lumen_model::{ModelTokenSummary, PricingTable, TokenEconomics, TurnPricingInput, TurnTokenUsage};
 use std::collections::HashMap;
 
@@ -48,6 +48,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                     output_tokens: 0,
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
+                    reasoning_tokens: 0,
                     cost_usd: 0.0,
                     turns: 0,
                 });
@@ -69,6 +70,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                     output_tokens: self.output_tokens,
                     cache_creation_tokens: self.cache_creation_tokens,
                     cache_read_tokens: self.cache_read_tokens,
+                    reasoning_tokens: 0,
                 },
                 timestamp: Utc::now(),
                 tier: None,

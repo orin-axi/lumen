@@ -44,6 +44,7 @@ fn test_claude_sonnet_pricing_calculation() {
         output_tokens: 1_000_000,         // $15.00
         cache_creation_tokens: 1_000_000, // $3.75 (1.25x)
         cache_read_tokens: 1_000_000,     // $0.30 (0.10x - 90% savings)
+        reasoning_tokens: 0,
     };
 
     let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
@@ -125,6 +126,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_creation_tokens: 100,
             cache_read_tokens: 200,
             output_tokens: 50,
+            reasoning_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -140,6 +142,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             output_tokens: 500_000,
+            reasoning_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -150,8 +153,13 @@ fn test_token_economics_zero_division_clamping_and_scale() {
 
     // (d) CRIT-LUMEN-010: TurnTokenUsage::prompt_tokens returns the sum of input, cache
     // creation, and cache read tokens.
-    let usage =
-        TurnTokenUsage { input_tokens: 100, cache_creation_tokens: 200, cache_read_tokens: 300, output_tokens: 400 };
+    let usage = TurnTokenUsage {
+        input_tokens: 100,
+        cache_creation_tokens: 200,
+        cache_read_tokens: 300,
+        output_tokens: 400,
+        reasoning_tokens: 0,
+    };
     assert_eq!(usage.prompt_tokens(), 600);
 
     // (e) CRIT-LUMEN-006: a mixed-cache turn's efficiency_multiplier equals
@@ -162,6 +170,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_creation_tokens: 50_000,
             cache_read_tokens: 50_000,
             output_tokens: 10_000,
+            reasoning_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -223,10 +232,7 @@ fn test_extended_pricing_matrix() {
     for model in ["gpt-4o", "deepseek-r1", "kimi-k1.5", "glm-4-plus", "gemini-2.0-flash", "gemini-2.0-pro"] {
         let input_rate = table.rate_for(model, None, TokenRateKind::Input, as_of);
         let cache_write_rate = table.rate_for(model, None, TokenRateKind::CacheWrite, as_of);
-        assert!(
-            (input_rate - cache_write_rate).abs() < 1e-9,
-            "{model}: CacheWrite rate should equal Input rate"
-        );
+        assert!((input_rate - cache_write_rate).abs() < 1e-9, "{model}: CacheWrite rate should equal Input rate");
     }
 }
 
@@ -499,6 +505,7 @@ fn test_provided_cost_usd_twin_field() {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             output_tokens: 0,
+            reasoning_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -526,6 +533,48 @@ fn test_provided_cost_usd_twin_field() {
     assert_eq!(econ_without_provided.provided_cost_usd, None);
 }
 
+/// High-severity adversarial finding: TokenRateKind had no Reasoning variant and
+/// TurnTokenUsage had no reasoning_tokens field, so no adapter could ever price reasoning
+/// tokens into total_cost_usd -- reasoning_output_tokens reached the final struct only via a
+/// post-hoc field overwrite that never touched the pricing math. This test proves the DOLLAR
+/// AMOUNT includes the reasoning contribution, not merely that a counter field is populated.
+#[test]
+fn test_reasoning_tokens_priced_into_total_cost() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
+
+    let usage = TurnTokenUsage {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        reasoning_tokens: 500_000,
+    };
+
+    let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
+    let econ = TokenEconomics::calculate(&[turn], "gpt-4o", &pricing, None);
+
+    let reasoning_rate = pricing.rate_for("gpt-4o", None, TokenRateKind::Reasoning, as_of);
+    assert!((reasoning_rate - 10.00).abs() < 1e-9, "gpt-4o's Reasoning rate must equal its Output rate ($10.00/M)");
+
+    // input 1M @ $2.50 + output 1M @ $10.00 + reasoning 0.5M @ $10.00
+    let expected_cost = 2.50 + 10.00 + 5.00;
+    assert!(
+        (econ.total_cost_usd - expected_cost).abs() < 1e-6,
+        "total_cost_usd ({}) must include the reasoning tokens' dollar contribution, expected {}",
+        econ.total_cost_usd,
+        expected_cost
+    );
+
+    // reasoning tokens must be priced identically in the no-cache baseline, so the presence of
+    // reasoning cost alone never skews net_savings_usd/efficiency_multiplier.
+    let expected_baseline = 2.50 + 10.00 + 5.00;
+    assert!((econ.baseline_cost_no_cache_usd - expected_baseline).abs() < 1e-6);
+    assert_eq!(econ.net_savings_usd, 0.0);
+
+    assert_eq!(econ.reasoning_output_tokens, 500_000);
+}
+
 /// Blocker #1 from adversarial review: rate_for must normalize raw, provider-versioned model
 /// strings (as real adapters actually pass them, e.g. ClaudeCodeAdapter's `message.model`
 /// field) down to seed()'s short canonical keys BEFORE doing the recognized/exact-match
@@ -542,18 +591,14 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
         (table.rate_for("claude-3-5-haiku-20241022", None, TokenRateKind::Input, as_of) - 0.80).abs() < 1e-9,
         "raw dated Haiku model string must normalize to claude-3-5-haiku's $0.80/M input rate"
     );
-    assert!(
-        (table.rate_for("claude-3-5-haiku-20241022", None, TokenRateKind::Output, as_of) - 4.00).abs() < 1e-9
-    );
+    assert!((table.rate_for("claude-3-5-haiku-20241022", None, TokenRateKind::Output, as_of) - 4.00).abs() < 1e-9);
 
     // Real ClaudeCodeAdapter message.model string for Opus.
     assert!(
         (table.rate_for("claude-opus-4-20250514", None, TokenRateKind::Input, as_of) - 15.00).abs() < 1e-9,
         "raw dated Opus model string must normalize to claude-opus's $15.00/M input rate"
     );
-    assert!(
-        (table.rate_for("claude-opus-4-20250514", None, TokenRateKind::Output, as_of) - 75.00).abs() < 1e-9
-    );
+    assert!((table.rate_for("claude-opus-4-20250514", None, TokenRateKind::Output, as_of) - 75.00).abs() < 1e-9);
 
     // Real ClaudeCodeAdapter message.model string for Sonnet.
     assert!(
@@ -567,9 +612,7 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
         "raw dated GPT-4o model string must normalize to gpt-4o's $2.50/M input rate, not \
          Sonnet's $3.00/M fallback"
     );
-    assert!(
-        (table.rate_for("gpt-4o-2024-08-06", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9
-    );
+    assert!((table.rate_for("gpt-4o-2024-08-06", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9);
 
     // Real Gemini 2.0 Flash versioned strings (two different suffix shapes).
     assert!(
@@ -601,7 +644,5 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
         "recognized-after-normalization model missing a specific rate kind must still return \
          exactly 0.0, never a substituted rate"
     );
-    assert!(
-        (table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9
-    );
+    assert!((table.rate_for("qwen-2.5-coder-32b-instruct", None, TokenRateKind::Input, as_of) - 0.20).abs() < 1e-9);
 }

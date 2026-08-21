@@ -176,16 +176,13 @@ impl SessionAdapter for CodexAdapter {
                 output_tokens,
                 cache_creation_tokens: 0,
                 cache_read_tokens: 0,
+                reasoning_tokens: reasoning_output_tokens,
             },
             timestamp: ended_at,
             tier: service_tier.clone(),
         };
 
-        let mut economics =
-            TokenEconomics::calculate(&[pricing_input], &model_family, &PricingTable::seed(), None);
-        // TurnPricingInput/TurnTokenUsage carry no reasoning-tokens field, so this last-write
-        // value (CRIT-LUMEN-110) is applied to the computed economics afterward.
-        economics.reasoning_output_tokens = reasoning_output_tokens;
+        let economics = TokenEconomics::calculate(&[pricing_input], &model_family, &PricingTable::seed(), None);
 
         Ok(CanonicalTranscript {
             session_id,

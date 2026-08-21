@@ -71,6 +71,7 @@ pub struct TurnTokenUsage {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    pub reasoning_tokens: u64,
 }
 
 impl TurnTokenUsage {

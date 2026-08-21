@@ -196,8 +196,9 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
 
     // Empty slice must insert zero rows without error (CRIT-LUMEN-117).
     tool_repo.insert_tool_calls(internal_id, &[]).expect("empty slice insert failed");
-    let count_after_empty: i64 =
-        conn.query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    let count_after_empty: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0))
+        .unwrap();
     assert_eq!(count_after_empty, 0);
 
     let calls = vec![
@@ -229,8 +230,9 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
 
     tool_repo.insert_tool_calls(internal_id, &calls).expect("Insert tool calls failed");
 
-    let count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tool_calls WHERE session_id = ?1", [internal_id], |row| row.get(0))
+        .unwrap();
     assert_eq!(count, 3);
 
     let listed = tool_repo.list_by_session(internal_id).expect("list_by_session failed");
@@ -448,9 +450,11 @@ fn test_rollup_repository_upsert_is_idempotent_on_period_start_and_type() {
     repo.upsert_rollup(&second).expect("second upsert failed");
 
     let row_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM rollups WHERE period_start = ?1 AND period_type = 'daily'", [period_start], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM rollups WHERE period_start = ?1 AND period_type = 'daily'",
+            [period_start],
+            |row| row.get(0),
+        )
         .expect("failed to count rollups");
     assert_eq!(row_count, 1, "upsert_rollup must not create a duplicate row for the same period_start/period_type");
 
@@ -489,12 +493,9 @@ fn test_rollup_repository_list_rollups_filters_orders_and_limits() {
     let daily_3 = Utc.with_ymd_and_hms(2026, 8, 3, 0, 0, 0).unwrap();
     let weekly_1 = Utc.with_ymd_and_hms(2026, 7, 27, 0, 0, 0).unwrap();
 
-    for (period_start, period_type, session_count) in [
-        (daily_1, "daily", 1),
-        (daily_2, "daily", 2),
-        (daily_3, "daily", 3),
-        (weekly_1, "weekly", 100),
-    ] {
+    for (period_start, period_type, session_count) in
+        [(daily_1, "daily", 1), (daily_2, "daily", 2), (daily_3, "daily", 3), (weekly_1, "weekly", 100)]
+    {
         repo.upsert_rollup(&RollupFactRecord {
             period_start,
             period_type: period_type.to_string(),
@@ -508,7 +509,10 @@ fn test_rollup_repository_list_rollups_filters_orders_and_limits() {
 
     let daily_rollups = repo.list_rollups("daily", 2).expect("list_rollups failed");
     assert_eq!(daily_rollups.len(), 2, "limit must be respected");
-    assert!(daily_rollups.iter().all(|r| r.period_type == "daily"), "only matching period_type rows should be returned");
+    assert!(
+        daily_rollups.iter().all(|r| r.period_type == "daily"),
+        "only matching period_type rows should be returned"
+    );
     assert_eq!(daily_rollups[0].period_start, daily_3, "results must be ordered by period_start descending");
     assert_eq!(daily_rollups[1].period_start, daily_2);
 
@@ -591,7 +595,11 @@ fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
     assert_eq!(count_after_empty, 0);
 
     let events = vec![
-        CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: Some("commit -m <REDACTED>".to_string()), is_error: false },
+        CommandEventFactRecord {
+            command_base: "git".to_string(),
+            sanitized_args: Some("commit -m <REDACTED>".to_string()),
+            is_error: false,
+        },
         CommandEventFactRecord { command_base: "rm".to_string(), sanitized_args: None, is_error: true },
     ];
 
@@ -620,7 +628,11 @@ fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
     let cmd_repo = CommandEventRepository::new(&conn);
 
     let events = vec![
-        CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: Some("push <REDACTED>".to_string()), is_error: false },
+        CommandEventFactRecord {
+            command_base: "git".to_string(),
+            sanitized_args: Some("push <REDACTED>".to_string()),
+            is_error: false,
+        },
         CommandEventFactRecord { command_base: "ls".to_string(), sanitized_args: None, is_error: false },
     ];
     cmd_repo.insert_command_events("sess-cmd-2", &events).expect("insert_command_events failed");
@@ -650,7 +662,10 @@ fn test_command_event_repository_nonexistent_session_returns_error() {
         vec![CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: None, is_error: false }];
 
     let insert_result = cmd_repo.insert_command_events("no-such-session", &events);
-    assert!(insert_result.is_err(), "insert_command_events against a nonexistent session must error, not silently corrupt data");
+    assert!(
+        insert_result.is_err(),
+        "insert_command_events against a nonexistent session must error, not silently corrupt data"
+    );
     assert!(matches!(insert_result.unwrap_err(), StoreError::NotFound(_)));
 
     let list_result = cmd_repo.list_by_session("no-such-session");
@@ -685,7 +700,10 @@ fn test_snapshot_repository_get_latest_returns_none_when_absent() {
     let repo = SnapshotRepository::new(&conn);
 
     let result = repo.get_latest_snapshot("claude", "no-such-session").expect("get_latest_snapshot must not error");
-    assert_eq!(result, None, "get_latest_snapshot must return Ok(None), not an error, when no snapshot exists (CRIT-LUMEN-124)");
+    assert_eq!(
+        result, None,
+        "get_latest_snapshot must return Ok(None), not an error, when no snapshot exists (CRIT-LUMEN-124)"
+    );
 }
 
 #[test]
@@ -755,6 +773,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
             output_tokens: 200,
             cache_creation_tokens: 50,
             cache_read_tokens: 30,
+            reasoning_tokens: 0,
             cost_usd: 1.25,
             turns: 3,
         },
@@ -766,6 +785,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
             output_tokens: 400,
             cache_creation_tokens: 80,
             cache_read_tokens: 60,
+            reasoning_tokens: 0,
             cost_usd: 2.50,
             turns: 5,
         },
@@ -862,7 +882,8 @@ fn test_token_usage_repository_empty_per_model_inserts_zero_rows() {
         .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["sess-token-empty"], |row| row.get(0))
         .unwrap();
 
-    let count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0)).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id = ?1", [internal_id], |row| row.get(0))
+        .unwrap();
     assert_eq!(count, 0);
 }

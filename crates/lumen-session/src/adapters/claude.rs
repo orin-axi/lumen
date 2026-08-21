@@ -197,6 +197,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                             output_tokens: out_tok,
                             cache_creation_tokens: cache_write,
                             cache_read_tokens: cache_read,
+                            reasoning_tokens: 0,
                         });
                     }
 
@@ -319,6 +320,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
                     output_tokens: total_output,
                     cache_creation_tokens: total_cache_creation,
                     cache_read_tokens: total_cache_read,
+                    reasoning_tokens: 0,
                 },
                 timestamp: ended_at,
                 tier: None,

@@ -189,6 +189,7 @@ fn test_context_growth_and_autonomy_accumulators() {
             cache_creation_tokens: 0,
             cache_read_tokens: 500,
             output_tokens: 50,
+            reasoning_tokens: 0,
         }),
     };
     cg.update(&t1);
@@ -216,6 +217,7 @@ fn test_context_growth_and_autonomy_accumulators() {
             cache_creation_tokens: 0,
             cache_read_tokens: 500,
             output_tokens: 80,
+            reasoning_tokens: 0,
         }),
     };
     cg.update(&t2);
@@ -268,6 +270,7 @@ fn test_context_growth_skips_missing_usage_and_zero_growth_floor() {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             output_tokens: 0,
+            reasoning_tokens: 0,
         }),
     };
 
@@ -334,7 +337,10 @@ fn test_context_growth_skips_missing_usage_and_zero_growth_floor() {
     empty.update(&no_usage_turn(0));
     let empty_metrics = empty.finalize();
     assert_eq!(empty_metrics.avg_growth_per_turn, 0.0, "turn_count == 0 must yield avg_growth_per_turn 0.0");
-    assert_eq!(empty_metrics.initial_prompt_tokens, 0, "no usage-bearing turns means initial_prompt_tokens defaults to 0");
+    assert_eq!(
+        empty_metrics.initial_prompt_tokens, 0,
+        "no usage-bearing turns means initial_prompt_tokens defaults to 0"
+    );
 }
 
 #[test]
@@ -711,6 +717,7 @@ fn test_subagent_and_plugin_skill_attribution() {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             output_tokens: 0,
+            reasoning_tokens: 0,
         }),
     };
 
@@ -823,6 +830,7 @@ fn test_by_subagent_keyed_by_subagent_role_when_session_ids_collide() {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             output_tokens: 0,
+            reasoning_tokens: 0,
         }),
     };
 
@@ -1146,10 +1154,7 @@ fn test_tool_inventory_last_call_wins_and_running_error_key() {
         usage: None,
     };
     inv.update(&t0);
-    assert!(
-        inv.last_tool_name.is_none(),
-        "no tool_call has run yet, so last_tool_name must remain None"
-    );
+    assert!(inv.last_tool_name.is_none(), "no tool_call has run yet, so last_tool_name must remain None");
     assert!(
         inv.errors_by_tool.is_empty(),
         "an error observed before any tool_call must be dropped, not recorded under a None key"
@@ -1192,15 +1197,8 @@ fn test_tool_inventory_last_call_wins_and_running_error_key() {
         Some(1),
         "the error must be keyed by the running last_tool_name (edit_file), not by call_id"
     );
-    assert!(
-        !inv.errors_by_tool.contains_key("call_b"),
-        "the error must never be keyed by the result's own call_id"
-    );
-    assert_eq!(
-        inv.errors_by_tool.len(),
-        1,
-        "only one tool must have an error entry after this turn"
-    );
+    assert!(!inv.errors_by_tool.contains_key("call_b"), "the error must never be keyed by the result's own call_id");
+    assert_eq!(inv.errors_by_tool.len(), 1, "only one tool must have an error entry after this turn");
 
     let metrics = inv.finalize();
     assert_eq!(metrics.total_invocations, 2);
@@ -1336,9 +1334,7 @@ fn test_pr_link_accumulator_vcs_vs_text_source() {
             line_count: 1,
             is_error: false,
             error_class: None,
-            truncated_output: Some(CompactString::new(
-                "Created https://github.com/acme/widgets/pull/42 successfully"
-            )),
+            truncated_output: Some(CompactString::new("Created https://github.com/acme/widgets/pull/42 successfully")),
             otel_span_id: None,
         }],
         usage: None,
@@ -1423,9 +1419,7 @@ fn test_pr_link_cross_turn_vcs_result() {
             line_count: 1,
             is_error: false,
             error_class: None,
-            truncated_output: Some(CompactString::new(
-                "Created https://github.com/acme/widgets/pull/42 successfully"
-            )),
+            truncated_output: Some(CompactString::new("Created https://github.com/acme/widgets/pull/42 successfully")),
             otel_span_id: None,
         }],
         usage: None,
@@ -1670,10 +1664,7 @@ fn test_trajectory_dag_cross_turn_had_error() {
     assert_eq!(nodes.len(), 1);
     let edit_node = &nodes[0];
     assert_eq!(edit_node.call_id.as_str(), "call_edit");
-    assert!(
-        edit_node.had_error,
-        "call on turn 0 and its error result on turn 1 must still correlate via call_id"
-    );
+    assert!(edit_node.had_error, "call on turn 0 and its error result on turn 1 must still correlate via call_id");
 }
 
 #[test]

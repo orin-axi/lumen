@@ -115,6 +115,7 @@ impl SessionAdapter for OpenCodeAdapter {
                         cache_creation_tokens: c_write,
                         cache_read_tokens: c_read,
                         output_tokens: out_tok,
+                        reasoning_tokens: 0,
                     });
                     current_input_tokens += in_tok;
                     current_output_tokens += out_tok;
@@ -219,6 +220,7 @@ impl SessionAdapter for OpenCodeAdapter {
                     output_tokens: current_output_tokens,
                     cache_creation_tokens: current_cache_write,
                     cache_read_tokens: current_cache_read,
+                    reasoning_tokens: 0,
                 },
                 timestamp: ended_at,
                 tier: None,

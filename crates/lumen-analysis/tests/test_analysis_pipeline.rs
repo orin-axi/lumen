@@ -220,6 +220,7 @@ fn build_full_coverage_transcript() -> CanonicalTranscript {
             output_tokens: 50,
             cache_creation_tokens: 0,
             cache_read_tokens: 20,
+            reasoning_tokens: 0,
         }),
         attribution: Some(AttributionSource::Plugin { name: "proof".into() }),
     };

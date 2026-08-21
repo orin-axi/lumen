@@ -60,8 +60,10 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
     assert_eq!(transcript.economics.input_tokens, 1500);
     assert_eq!(transcript.economics.output_tokens, 110);
 
-    // model_family is "gpt-4o" ($2.50/M input, $10.00/M output): 1500 * 2.50e-6 + 110 * 10.00e-6
-    let expected_cost = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0;
+    // model_family is "gpt-4o" ($2.50/M input, $10.00/M output, $10.00/M reasoning -- same as
+    // output, per PricingTable::seed()'s documented reasoning-rate policy): 1500 * 2.50e-6 +
+    // 110 * 10.00e-6 + 55 * 10.00e-6 (55 reasoning tokens, last-write value from the fixture).
+    let expected_cost = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0 + 55.0 * 10.00 / 1_000_000.0;
     assert!(
         transcript.economics.total_cost_usd > 0.0,
         "a Codex session with a real service_tier must not silently price at $0.00"
@@ -70,6 +72,35 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
         (transcript.economics.total_cost_usd - expected_cost).abs() < 1e-9,
         "expected total_cost_usd {expected_cost}, got {}",
         transcript.economics.total_cost_usd
+    );
+}
+
+#[test]
+fn test_codex_adapter_reasoning_tokens_flow_into_pricing_math() {
+    // High-severity adversarial finding: reasoning_output_tokens was tracked but structurally
+    // could never be priced -- it was patched onto TokenEconomics AFTER calculate() had already
+    // summed total_cost_usd, so the dollar amount never reflected it. This proves the fixture's
+    // 55 reasoning tokens now flow through TurnTokenUsage into the actual pricing math, not
+    // just that the disconnected reasoning_output_tokens counter is populated.
+    let sample = real_codex_session_dump();
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_eq!(transcript.economics.reasoning_output_tokens, 55);
+
+    let cost_without_reasoning = 1500.0 * 2.50 / 1_000_000.0 + 110.0 * 10.00 / 1_000_000.0;
+    let reasoning_contribution = 55.0 * 10.00 / 1_000_000.0;
+
+    assert!(
+        (transcript.economics.total_cost_usd - (cost_without_reasoning + reasoning_contribution)).abs() < 1e-9,
+        "total_cost_usd must include the reasoning tokens' own dollar contribution ({reasoning_contribution}), \
+         not just the input/output cost ({cost_without_reasoning})"
+    );
+    assert!(
+        (transcript.economics.total_cost_usd - cost_without_reasoning).abs() > 1e-9,
+        "total_cost_usd must differ from the input/output-only cost -- proving reasoning tokens \
+         genuinely reach the pricing math rather than being priced at an effective $0.00"
     );
 }
 
@@ -148,9 +179,8 @@ fn test_codex_adapter_parse_failure_byte_offset_tracks_real_position() {
     let first_line_malformed = "not valid json\n{\"timestamp\":\"2026-08-20T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_id\":\"t\",\"thread_settings\":{\"service_tier\":\"Standard\"}}}\n";
 
     let adapter = CodexAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(first_line_malformed)))
-        .expect("Failed to parse Codex session");
+    let transcript =
+        adapter.parse_stream(Box::new(Cursor::new(first_line_malformed))).expect("Failed to parse Codex session");
     assert_eq!(transcript.parse_failures.len(), 1);
     assert_eq!(transcript.parse_failures[0].byte_offset, 0, "a malformed first line has byte_offset 0");
 

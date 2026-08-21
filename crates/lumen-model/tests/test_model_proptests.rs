@@ -18,7 +18,8 @@ proptest! {
                     output_tokens: output,
                     cache_creation_tokens: cache_write,
                     cache_read_tokens: cache_read,
-                },
+                reasoning_tokens: 0,
+},
                 timestamp: Utc::now(),
                 tier: None,
             }],
@@ -66,7 +67,8 @@ proptest! {
             output_tokens: output,
             cache_creation_tokens: cache_creation,
             cache_read_tokens: cache_read,
-        };
+        reasoning_tokens: 0,
+};
 
         prop_assert_eq!(usage.prompt_tokens(), input + cache_creation + cache_read);
         prop_assert_eq!(usage.total_tokens(), input + cache_creation + cache_read + output);
@@ -112,6 +114,7 @@ fn test_all_commercial_model_pricing_matrix() {
             output_tokens: 1_000_000,
             cache_creation_tokens: 1_000_000,
             cache_read_tokens: 1_000_000,
+            reasoning_tokens: 0,
         };
         let econ =
             TokenEconomics::calculate(&[TurnPricingInput { usage, timestamp: now, tier: None }], model, &pricing, None);
@@ -125,12 +128,14 @@ fn test_extreme_boundary_token_values() {
     let pricing = PricingTable::seed();
     let now = Utc::now();
 
-    let turn = |usage: TurnTokenUsage| TokenEconomics::calculate(
-        &[TurnPricingInput { usage, timestamp: now, tier: None }],
-        "claude-3-5-sonnet-20241022",
-        &pricing,
-        None,
-    );
+    let turn = |usage: TurnTokenUsage| {
+        TokenEconomics::calculate(
+            &[TurnPricingInput { usage, timestamp: now, tier: None }],
+            "claude-3-5-sonnet-20241022",
+            &pricing,
+            None,
+        )
+    };
 
     // Zero tokens across all fields
     let zero_econ = turn(TurnTokenUsage {
@@ -138,6 +143,7 @@ fn test_extreme_boundary_token_values() {
         output_tokens: 0,
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
+        reasoning_tokens: 0,
     });
     assert_eq!(zero_econ.cache_hit_ratio, 0.0);
     assert_eq!(zero_econ.efficiency_multiplier, 1.0);
@@ -149,6 +155,7 @@ fn test_extreme_boundary_token_values() {
         output_tokens: 1000,
         cache_creation_tokens: 0,
         cache_read_tokens: 500_000,
+        reasoning_tokens: 0,
     });
     assert_eq!(full_cache.cache_hit_ratio, 100.0);
     assert!(full_cache.efficiency_multiplier > 9.0);
@@ -159,6 +166,7 @@ fn test_extreme_boundary_token_values() {
         output_tokens: 1000,
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
+        reasoning_tokens: 0,
     });
     assert_eq!(zero_cache.cache_hit_ratio, 0.0);
     assert_eq!(zero_cache.net_savings_usd, 0.0);

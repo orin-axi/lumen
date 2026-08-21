@@ -41,6 +41,7 @@ pub struct ModelTokenSummary {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    pub reasoning_tokens: u64,
     pub cost_usd: f64,
     pub turns: u64,
 }
@@ -62,6 +63,7 @@ impl TokenEconomics {
         let mut output_tokens = 0u64;
         let mut cache_creation_tokens = 0u64;
         let mut cache_read_tokens = 0u64;
+        let mut reasoning_tokens_total = 0u64;
         let mut total_cost_usd = 0.0f64;
         let mut baseline_cost_no_cache_usd = 0.0f64;
 
@@ -73,19 +75,26 @@ impl TokenEconomics {
             let cache_write_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite, turn.timestamp);
             let cache_read_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheRead, turn.timestamp);
             let output_rate = pricing.rate_for(model_name, tier, TokenRateKind::Output, turn.timestamp);
+            let reasoning_rate = pricing.rate_for(model_name, tier, TokenRateKind::Reasoning, turn.timestamp);
 
             let turn_cost = (usage.input_tokens as f64 / 1_000_000.0) * input_rate
                 + (usage.cache_creation_tokens as f64 / 1_000_000.0) * cache_write_rate
                 + (usage.cache_read_tokens as f64 / 1_000_000.0) * cache_read_rate
-                + (usage.output_tokens as f64 / 1_000_000.0) * output_rate;
+                + (usage.output_tokens as f64 / 1_000_000.0) * output_rate
+                + (usage.reasoning_tokens as f64 / 1_000_000.0) * reasoning_rate;
 
+            // Reasoning tokens are priced at the same rate in both the actual and no-cache
+            // baseline cost -- caching doesn't apply to reasoning tokens, so omitting this term
+            // from one side but not the other would skew net_savings_usd/efficiency_multiplier.
             let turn_baseline_cost = (usage.prompt_tokens() as f64 / 1_000_000.0) * input_rate
-                + (usage.output_tokens as f64 / 1_000_000.0) * output_rate;
+                + (usage.output_tokens as f64 / 1_000_000.0) * output_rate
+                + (usage.reasoning_tokens as f64 / 1_000_000.0) * reasoning_rate;
 
             input_tokens += usage.input_tokens;
             output_tokens += usage.output_tokens;
             cache_creation_tokens += usage.cache_creation_tokens;
             cache_read_tokens += usage.cache_read_tokens;
+            reasoning_tokens_total += usage.reasoning_tokens;
             total_cost_usd += turn_cost;
             baseline_cost_no_cache_usd += turn_baseline_cost;
         }
@@ -108,6 +117,7 @@ impl TokenEconomics {
                     output_tokens,
                     cache_creation_tokens,
                     cache_read_tokens,
+                    reasoning_tokens: reasoning_tokens_total,
                     cost_usd: total_cost_usd,
                     turns: turns.len() as u64,
                 },
@@ -128,7 +138,7 @@ impl TokenEconomics {
             net_savings_usd,
             efficiency_multiplier,
             per_model,
-            reasoning_output_tokens: 0,
+            reasoning_output_tokens: reasoning_tokens_total,
         }
     }
 }

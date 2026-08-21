@@ -8,6 +8,7 @@ pub enum TokenRateKind {
     CacheWrite,
     CacheRead,
     Output,
+    Reasoning,
 }
 
 /// A single versioned pricing row: the rate for one (model, tier, kind) combination,
@@ -106,6 +107,36 @@ impl PricingTable {
         push("gemini-2.0-pro", TokenRateKind::CacheWrite, 1.25);
         push("gemini-2.0-pro", TokenRateKind::CacheRead, 0.30);
         push("gemini-2.0-pro", TokenRateKind::Output, 5.00);
+
+        // Adversarial finding (high severity): reasoning tokens were tracked
+        // (TurnTokenUsage/TokenEconomics::reasoning_output_tokens) but had no rate row at all,
+        // so no adapter could ever price them. OpenAI's reasoning-capable models (the o-series
+        // and GPT-4o's own reasoning mode) publish that reasoning tokens are billed as part of
+        // completion/output tokens, at the SAME published output rate -- this is genuine,
+        // documented billing behavior, not a fabricated number. No provider seeded in this
+        // table publishes a distinct, separate reasoning-token rate. Given that, "same as
+        // Output" is the closest defensible default for every seeded model: 0.0 would silently
+        // under-price every reasoning-heavy session (worse than a documented approximation),
+        // and inventing a distinct number for non-OpenAI models would fabricate data this table
+        // has no source for. This is an explicit judgment call, not verified per-model pricing
+        // for every seeded provider -- revisit if a provider publishes a differing rate.
+        // Each value below is copied verbatim from that same model's Output row pushed above --
+        // deliberately duplicated, not looked up, so this loop can run without re-borrowing
+        // `rates` while `push` still holds it mutably.
+        for (model, output_rate) in [
+            ("claude-3-5-sonnet", 15.00),
+            ("claude-3-5-haiku", 4.00),
+            ("qwen-2.5-coder", 0.60),
+            ("claude-opus", 75.00),
+            ("gpt-4o", 10.00),
+            ("deepseek-r1", 2.19),
+            ("kimi-k1.5", 2.00),
+            ("glm-4-plus", 1.40),
+            ("gemini-2.0-flash", 0.40),
+            ("gemini-2.0-pro", 5.00),
+        ] {
+            push(model, TokenRateKind::Reasoning, output_rate);
+        }
 
         Self { rates }
     }
