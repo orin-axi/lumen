@@ -1,0 +1,904 @@
+Please take a look at the lumen specs and docs to understand what we're building here
+
+---
+
+These docs were put together from a combination of research from Claude and Antigravity with a Gemini model and might need a round of analysis and deep research to validate that we're going in the right direction and we've thought things through.
+
+---
+
+<task-notification>
+<task-id>a58be22f5ee69a0db</task-id>
+<tool-use-id>toolu_01PrPCsZ4qjpDpjKs7dij9nJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a58be22f5ee69a0db.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate CLI/store/daemon docs vs code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Directive: audit docs 05 (CLI) and 06 (SQLite/daemon) against actual code in `lumen-cli`, `lumen-store`, and cross-check against SPEC-003/004/008.
+
+**1. CLI (doc 05 / SPEC-008) — MISMATCH, large gap**
+`lumen-cli/src/main.rs` only implements `trace`, `audit`, `scan` (matches README, matches doc 05's first 3 bullets). CONFIRMED: comfy-table UTF8 tables used throughout; `miette::Result`/`into_diagnostic()` used for errors (satisfies AGENTS.md rule 5). But `anstream` and `indicatif` are NOT imported/used anywhere in main.rs — doc 05's ANSI-styling/spinner claims are UNIMPLEMENTED. `lumen insights` (doc 05 bullet 4) is UNIMPLEMENTED — no such subcommand. SPEC-008-CLI describes an entirely different CLI surface (`status`, `refresh`, `sessions`, `session`, `categories`, `insights`, `weekly`, `export`, `doctor`, `daemon`, `--toon` output, `DoctorEngine`, `ToonFormatter`, IPC-to-daemon) — none of it exists. SPEC-008 is ~90% fiction relative to current code.
+
+**2. Daemon — UNIMPLEMENTED, total vaporware**
+`grep -rli "daemon"` across all `.rs`/`.toml` files returned zero hits. No `lumen-daemon` crate exists (not in `crates/`, not in workspace `Cargo.toml` members implied by the crate listing). SPEC-004-DAEMON's entire API surface (`DaemonServer`, `HookHandler`, `LaunchAgentManager`) and all 8 acceptance criteria (CRIT-LUMEN-050 through 057) are pure fiction — zero corresponding code anywhere. Doc 06's Unix-socket/hook-latency architecture is 100% design-doc, 0% implementation.
+
+**3. lumen-store WAL / single-writer — PARTIALLY CONFIRMED**
+CONFIRMED: `store.rs:23` sets `PRAGMA journal_mode = WAL` on the writer pool; `open_read_only` (store.rs:47-50) sets `PRAGMA query_only = ON`. This matches CRIT-LUMEN-030/031 exactly. MISMATCH: "single-writer" is asserted only by convention (a second process could still call `SqliteStore::open()` and get a writable pool — nothing in code enforces daemon-exclusivity, no PID lockfile, no socket gating). The single-writer invariant in doc 06 is a daemon-layer promise that has no enforcing code because the daemon doesn't exist.
+
+**4. Spec-vs-code schema/API drift**
+`migrations.rs` implements V1-V5 with **11 tables**, matching CRIT-LUMEN-032's table list, and matches SPEC-003's `SqliteStore`/`QueueRepository`/`SessionRepository`/`FindingsRepository` signatures closely (repositories/session.rs, queue.rs, findings.rs all confirmed present with matching method signatures). However doc 06's SQL schema (§3) is a **different, richer schema** than migrations.rs actually creates — e.g. doc 06's `sessions` table has `id TEXT PRIMARY KEY`, `repo_name`, `repo_org`, `branch`, `bimodal_mode`, `pipeline_version`; actual migrations.rs `sessions` table (line 49) has `id INTEGER PRIMARY KEY AUTOINCREMENT` and none of those columns. Doc 06 also references `rtk_observed`, `byte_offset` in `session_snapshots`/`command_events` — none present in actual migrations. `CommandEventRepository`, `RollupRepository` from SPEC-003's scope line are UNIMPLEMENTED (no files for them under repositories/). CRIT-LUMEN-034 (dead-letter after 3 retries) — `queue.rs mark_failed` exists but not verified for the retry_count=3→dead_letter transition logic (would need line-level read to confirm; flagging as unverified, not confirmed).
+
+**5. Layering/licensing — omission, not violation**
+`lumen-store/Cargo.toml` depends only on `lumen-model` (Layer 1) plus infra crates (rusqlite, r2d2, camino) — no dependency on `lumen-analysis`/`lumen-pattern`/`lumen-cli`, so it does NOT violate the AGENTS.md Layer 1/1.5→2/4 boundary rule. But `ARCHITECTURE.md`'s layer diagram (read earlier in context) omits `lumen-store` entirely — it isn't placed in any layer. Given it only depends on L1 and is licensed FSL-1.1-MIT (matching L2/L4 crates, not L1's MIT/Apache-2.0), it likely belongs as its own layer between 1.5 and 2, or folded into L2. This is a doc omission that needs fixing, not a code violation.
+
+**Bottom line:** store layer is real and roughly spec-aligned (schema details drift from doc 06 though); daemon layer is 100% aspirational with zero code; CLI implements a small fraction of what SPEC-008 and doc 05 describe.</result>
+<usage><subagent_tokens>104189</subagent_tokens><tool_uses>12</tool_uses><duration_ms>33620</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a748671db7ec94290</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a748671db7ec94290.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate core docs against code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Good, this confirms spec explicitly names all 22 accumulators including 11 that don't exist. Enough evidence gathered — writing the report.
+
+**Directive**: Audit docs 01-04 + specs 001/002/005/006 vs. actual code in lumen-model/session/analysis/pattern.
+
+**1. Pricing/economics (doc 01, ARCHITECTURE.md) — MISMATCH**
+- "4-tier" (uncached, 5m write, 1h write, read, output) is really 3 tiers in code. `ModelPricing` (pricing.rs:5-10) has no `cache_write_1h_per_m` field — only one `cache_write_per_m`. `TokenEconomics::calculate` (economics.rs:37-85) hardcodes `ephemeral_1h_tokens: 0` (line 77) — the 1h tier is never computed from real data, just zeroed.
+- Formula itself (compute_cost, pricing.rs:75-82) matches doc's Cost(t) formula for the 3 tiers it does track. No division-by-zero: `cache_hit_ratio` (economics.rs:46) and `efficiency_multiplier` (line 56) both guard denominator == 0 — CONFIRMED safe.
+- Doc 01's "Official Rates Matrix" (Sonnet/Haiku/Opus) matches pricing.rs constants exactly — CONFIRMED. But pricing.rs also silently includes GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini constants not mentioned in doc 01 at all — doc is incomplete, not wrong.
+
+**2. "22 accumulators" (doc 03, README, SPEC-005) — MISMATCH, significant**
+SPEC-LUMEN-005 scope line explicitly names 22: token_usage, circuit_breaker, mcp_affinity, flow, turn_duration, tool_inventory, context_growth, permission_mode, hook_activity, api_health, pr_link, fuzzy_tools, attribution, self_correction, autonomy, schema_extractor, stats, timeline, artifacts, otel_correlation, span_mapping, trajectory_dag. Only **11 files exist** in `crates/lumen-analysis/src/accumulators/`: api_health, artifacts, autonomy, circuit_breaker, context_growth, mcp_affinity, schema_extractor, self_correction, stats, tool_inventory, turn_duration. Missing entirely: flow, hook_activity, pr_link, fuzzy_tools, attribution, timeline, otel_correlation, span_mapping, trajectory_dag (9 of 22 don't exist as files). `engine.rs` (`AnalysisReport`/`AnalyticsEngine`) wires only 11 accumulators — `schema_extractor.rs` exists as a file but is **not** wired into the engine at all (missing from both the struct and `process_transcript`), so it's effectively dead code, dropping real coverage to 10/22 in the actual report output.
+
+**3. Tarjan SCC (doc 04, AGENTS.md rule 4) — CONFIRMED core algorithm, but ASPIRATIONAL in the convenience path**
+`detect_circular_loops` (lib.rs:64-82) correctly checks `component.len() &gt;= 3` and requires identical `target_symbol` + `!is_mutation` across all nodes — matches the stated invariant exactly. However, `calculate_monotonicity()` free function (lib.rs:168-185), the only public convenience entry point besides the raw `TrajectoryGraph`, builds every `ToolNode` with `target_symbol: None` (line 179). Since `detect_circular_loops` only records an anomaly when `first_symbol` is `Some(...)` (line 78), this path can **never** detect a loop — the feature is implemented but unreachable via the documented convenience API. No caller in the workspace currently populates `target_symbol`, so the SCC detector is effectively dormant end-to-end right now.
+
+**4. Adapters/fingerprint (doc 02, ARCHITECTURE.md) — CONFIRMED, doc oversimplified**
+All four adapters exist as real files (claude.rs 13K, agy.rs 6K, opencode.rs 10.1K, codex.rs 1.8K) — not stubs. `fingerprint.rs` detection logic is real and tested (2 unit tests) but is considerably richer than ARCHITECTURE.md's one-liner heuristics table — e.g. ClaudeCode checks 7 different substrings, not just `"sessionId"`; Codex checks `"choices"`/`"prompt_tokens"`/`"thread_id"`, not `"prompt_tokens"` alone. Not wrong, just under-documented.
+
+**5. Test coverage** — real tests exist (966 lines across 7 test files: test_accumulators.rs, test_analysis_pipeline.rs, test_pricing.rs, test_transcript.rs, test_model_proptests.rs, test_graph_topology.rs, test_pattern.rs), backing the 11 implemented accumulators and pricing math. No tests reference the 9 missing accumulators (they can't — the types don't exist).
+
+**Net assessment**: pricing/economics doc is basically accurate for what exists but overclaims a 4th tier that's stubbed at zero. The "22 accumulators" claim, repeated in README, doc 03, and SPEC-005's scope, is the biggest doc/code gap — only half are built. Tarjan cycle detection is real but currently inert because nothing populates `target_symbol`.</result>
+<usage><subagent_tokens>92696</subagent_tokens><tool_uses>10</tool_uses><duration_ms>43955</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a949850b9bcc44956</task-id>
+<tool-use-id>toolu_017zX3JbUncxX1ct6tG4m35b</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a949850b9bcc44956.output</output-file>
+<status>completed</status>
+<summary>Agent "Scrutinize speculative docs and marketing claims" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task: assess docs 07–10 and README's benchmark/comparative claims for hype, inconsistency, and reality gaps.
+
+**README benchmarks/comparative matrix — fabricated.** No `bench/` directory, no `criterion` dependency anywhere in the workspace, no benchmark harness of any kind. The "1.5 GB/s SIMD parser," "31.4ms/50MB," "0.4ms Tarjan SCC on 500-node DAG," "&lt;0.08ms fingerprint," and the entire comparative matrix against OpenTelemetry GenAI/Arize Phoenix/LangSmith are unmeasured numbers presented as measured results. These are marketing copy, not benchmarks, and should be labeled "target" or removed until real `criterion` benches exist.
+
+**Doc 08 (Swift Mac app) — architecturally sound but entirely unbuilt, and one FFI claim is currently false.** It correctly avoids FFI by having `lumen-daemon` write SQLite and Swift read it via GRDB — no bindings needed, consistent with the "Zero-Bridge" framing. But: no `apps/` directory, no Swift files, no Xcode project exist. More importantly, it depends on `lumen-daemon`, which **does not exist as a crate** — only `SPEC-LUMEN-004-DAEMON.json` exists, no implementation, no plan file. The doc presents a dependency on vaporware as if it were a given.
+
+**Doc 09 (commercial strategy) — license table doesn't match the actual LICENSE file.** LICENSE (root) covers only `lumen-cli`/`lumen-analysis`/`lumen-pattern` under FSL-1.1-MIT per AGENTS.md's layer table, with `lumen-model`/`lumen-session` MIT/Apache-2.0. Doc 09's table adds four crates that don't exist yet (`lumen-store` as FSL, `lumen-daemon`, `lumen-insights`, and re-lists `lumen-cli`) and asserts `lumen-store` is "Free for devs; forbids competitor SaaS" — different wording/carve-out than the actual FSL grant, which has one Excluded Purpose clause, not a per-crate one. No per-crate LICENSE files exist to back any of this — it's aspirational licensing architecture, not implemented. The FSL mechanics (2-year MIT conversion, competing-SaaS exclusion) are represented correctly in isolation, but the doc's 3-tier enterprise roadmap (OTLP export, fleet PII redaction) has zero grounding: no `opentelemetry`/`otlp` dependency anywhere in the workspace, and no code path touches redaction.
+
+**Doc 10 (six generational leaps) — almost entirely disconnected from the spec backlog.** Cross-checking against `specs/`: only 8 specs exist (001–008: model, session, store, daemon, analysis, pattern, insights, CLI). Doc 10 invents capabilities with **no spec at all**: `lumen distill` (golden trace → skill compilation), `lumen cache inspect` (KV-cache heatmap), `lumen-mcp` (MCP memory server), `lumen replay` (Prism/APFS CoW sandbox replay), and in-daemon "flight controller" turn injection. None of `distill`, `replay`, `cache inspect`, `lumen-mcp`, or "flight controller" appear anywhere in `crates/` (grep for prism/distill/replay/flight-controller returns only an unrelated `Cargo.toml` metadata hit and a stray string in a test file). This doc is pure aspiration layered on top of a backlog it doesn't reference.
+
+**Doc 07 (UI design standard) — substantially ahead of the implemented CLI.** `crates/lumen-cli/src/main.rs` only implements `trace`/`audit`/`scan` with plain `comfy-table` tables and a few `Color::Green/Cyan/Yellow` cells — no sparklines, no bullet graphs, no `--toon` flag, no `michi-toon` dependency (confirmed absent from all `Cargo.toml`s). Doc 07 describes a fully-realized design system (Tufte/Few/Shneiderman-grounded palette, Unicode sparklines, bullet-graph cache-health bars, TOON compact output) none of which exists in code yet.
+
+**Bottom line:** docs 07–10 read as a product vision/pitch deck, not documentation of the system. Every one of them describes capabilities, crates, or measurements that don't exist in the repo — the gap is total, not partial, for daemon, insights, store-as-FSL, distill, replay, cache-inspect, mcp-memory, Swift app, and all benchmark numbers. Scope: not a Rust-vs-non-Rust conflict (doc 08's architecture is fine) — the conflict is "described as if built" vs. "0% implemented."</result>
+<usage><subagent_tokens>90839</subagent_tokens><tool_uses>8</tool_uses><duration_ms>35908</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a49d2d0f3603260f5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a49d2d0f3603260f5.output</output-file>
+<status>completed</status>
+<summary>Agent "Adversarial audit of all 8 specs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Audit all 8 Lumen specs + 3 plans for testability, ambiguity, error coverage, scope conflicts, and plannability.
+
+## Verdicts
+
+**SPEC-001-MODEL — PASS (minor gap).** Criteria are precise, formula-based, testable. Gap: `api_surface` lists 10 `ModelPricing` constants (Sonnet, Haiku, Opus, GPT_4O, DEEPSEEK_R1, QWEN_2_5_CODER, KIMI_K1_5, GLM_4_PLUS, GEMINI_2_0_FLASH, GEMINI_2_0_PRO) but only 3 (Sonnet, Haiku, Qwen) have acceptance criteria. The other 6 pricing tables are unverifiable — nothing stops them from being wrong or unimplemented. Plan check: all 10 criteria are covered by PLAN-001 tasks, no orphans.
+
+**SPEC-002-SESSION — FAIL (adapter coverage gap).** Scope names four adapters (Claude Code, AGY, Codex, OpenCode) but **CodexAdapter and OpenCodeAdapter have zero acceptance criteria** — only Claude Code and AGY are specified. Two of four "multi-orchestrator" adapters are unfalsifiable. `CRIT-LUMEN-029` ("50MB file in under 35ms") requires a 50MB fixture not yet defined anywhere. Plan check: PLAN-002 covers all 10 existing criteria, no orphans — but inherits the missing-adapter gap.
+
+**SPEC-003-STORE — FAIL (blocks planning).** `CRIT-LUMEN-038`: "byte-identical JSON matching the **Mac app** and CLI read contracts" references a contract owned by a separate, not-yet-built Swift app (per `docs/08-...swift-native-app-blueprint.md`) with no schema artifact in this repo to test against — unplannable as written. `ToolCallRepository` and `RollupRepository` are named in scope but have zero method signatures or criteria; `CommandEventRepository` only partially covered (CRIT-037).
+
+**SPEC-004-DAEMON — FAIL (blocks planning).** `CRIT-LUMEN-053` requires the daemon to "insert fact rows" via `SqliteStore`, but SPEC-003's `api_surface` only defines `upsert_session`, queue methods, and findings insert — no insert methods for tool_calls, command_events, or token_usage tables. A planner has no signatures to implement against. This is a downstream consequence of SPEC-003's gaps.
+
+**SPEC-005-ANALYSIS — FAIL (largest gap in the set).** Scope claims "22 single-pass streaming accumulators" but only **8 of 22 have any acceptance criterion** (token_usage, circuit_breaker, schema_extractor, turn_duration, api_health, mcp_affinity, self_correction, plus synthetic-model exclusion). `flow`, `tool_inventory`, `context_growth`, `permission_mode`, `hook_activity`, `pr_link`, `fuzzy_tools`, `attribution`, `stats`, `timeline`, `artifacts`, `otel_correlation`, `span_mapping`, `trajectory_dag` — 14 accumulators — are named but have zero defined behavior. Plan check: **PLAN-005 orphans CRIT-060, 062, 064, and 069** (O(N)/zero-alloc invariant, circuit breaker, turn duration, subagent attribution) — none appear in any task's `covers_criteria`, despite being in the spec.
+
+**SPEC-006-PATTERN — FAIL (undefined symbol).** `CRIT-LUMEN-072` references "Error Recovery Index R" — no `compute_error_recovery_index` (or equivalent) appears anywhere in `api_surface`. A planner has no function to target.
+
+**SPEC-007-INSIGHTS — FAIL (untestable thresholds).** `CRIT-080`/`081`: "high tool mutation density and **low** search turn count" / "**high** search tool density and **high** turn count" — no numeric thresholds defined; two valid, contradictory implementations could both claim compliance. `discover_fingerprint`'s clustering algorithm is in `api_surface` with no criteria at all.
+
+**SPEC-008-CLI — PASS (chain risk only).** Locally testable; risk is inherited from STORE/DAEMON gaps upstream, not local defects.
+
+## Bottom line
+3 of 8 specs (001, 002, 008) are sound with minor coverage gaps. 5 (003, 004, 005, 006, 007) have real blockers — which explains why none of them have plans yet. SPEC-005's 14-of-22 undefined accumulators and PLAN-005's 4 orphaned criteria are the most urgent fixes.</result>
+<usage><subagent_tokens>103110</subagent_tokens><tool_uses>12</tool_uses><duration_ms>57062</duration_ms></usage>
+</task-notification>
+
+---
+
+Let's implement everything that is needed for prism
+
+---
+
+<task-notification>
+<task-id>a748671db7ec94290</task-id>
+<tool-use-id>toolu_01MvnqhamNsMQ3bMwapaevv5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a748671db7ec94290.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate core docs against code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I got a message from another Claude session (`a20e1bb59274b53a5`) claiming I'm producing a "STORE amendment" for `SPEC-LUMEN-003-STORE` and asking me to add repository methods (`SnapshotRepository`, `CommandEventRepository`, etc.) to keep in sync with their DAEMON spec work.
+
+I checked before acting on it: this session has no such amendment in progress — I've only been auditing docs/specs against the actual code (the fork report on the 22-accumulators/pricing/Tarjan gaps just came back, and I'll get its full findings shortly). `git status` and `specs/` confirm no STORE amendment exists anywhere in this workspace. I also tried replying to flag the mismatch, but the send failed — `a20e1bb59274b53a5` isn't a resumable session I (or `ListAgents`) can see, so the message may be stale, misdirected, or from a session that's already gone.
+
+**Bottom line for you:** if you do have another Claude session working a STORE/DAEMON spec amendment, it's expecting a STORE-side counterpart that isn't being produced anywhere I can find — worth checking that session directly. I'm not going to fabricate repository method signatures to satisfy it since that's not work this session actually did.
+
+---
+
+Back to your actual ask — the core-technical-audit fork just returned results on docs 01–04 vs. code. Headline findings:
+
+- **Pricing/economics**: mostly accurate, but the "4-tier" claim is really 3 tiers — `ephemeral_1h_tokens` is hardcoded to `0` in `economics.rs`, never computed.
+- **"22 accumulators"**: only **11 exist** as files, and only **10 are actually wired into the engine** (`schema_extractor.rs` exists but isn't hooked into `AnalyticsEngine`). 9 of the 22 named in SPEC-005 and the README table (`flow`, `hook_activity`, `pr_link`, `fuzzy_tools`, `attribution`, `timeline`, `otel_correlation`, `span_mapping`, `trajectory_dag`) don't exist at all.
+- **Tarjan SCC cycle detection**: correctly implemented per the stated invariant (depth ≥3, identical target symbol, zero mutation) — but the only public convenience function (`calculate_monotonicity`) builds nodes with `target_symbol: None`, so it can never actually flag a loop in practice. The algorithm is real but currently dead end-to-end.
+- **Adapters**: all four (Claude Code, Antigravity, Codex, OpenCode) are real, non-stub implementations — doc just oversimplifies the fingerprint heuristics.
+
+Want me to keep going with a second fork pass over docs 05–10 (CLI/TUI, SQLite store/daemon, UI design standard, the Swift app blueprint, and the "six generational leaps" doc) and the remaining specs (003-STORE, 004-DAEMON, 007-INSIGHTS, 008-CLI), or dig deeper into fixing the two concrete bugs just found (the dormant Tarjan path and the 22-vs-11 accumulator gap) first?</result>
+<usage><subagent_tokens>87373</subagent_tokens><tool_uses>4</tool_uses><duration_ms>58070</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>w1dezfdf9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/w1dezfdf9.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Research and close acceptance-criteria/doc gaps across Lumen specs" completed</summary>
+<result>{"a":{"lane":"lane-a","spec_id":"SPEC-LUMEN-001-MODEL","research":"## Researched Pricing (per 1M tokens, USD)\n\n**GPT-4o** — Input $2.50 / Cached input $1.25 / Output $10.00. Confirmed live on OpenAI's official pricing page. [developers.openai.com/api/docs/pricing](https://developers.openai.com/api/docs/pricing)\n\n**DeepSeek R1/V3** — Historical (pre-Apr 2026) standard rate: Input(miss) $0.55 / Cache-hit $0.14 / Output $2.19. DeepSeek has since replaced these models with V4-Flash/V4-Pro and moved to peak/off-peak billing (V4-Flash off-peak: $0.22/$0.007/$0.66). [api-docs.deepseek.com](https://api-docs.deepseek.com/quick_start/pricing), [cloudzero.com/blog/deepseek-pricing](https://www.cloudzero.com/blog/deepseek-pricing/)\n\n**Qwen2.5-Coder-32B** — DashScope/Model Studio no longer lists this legacy model on its current pricing page (only qwen3.x shown); third-party aggregators cite ~$0.05 input/$0.10 output. Not independently confirmed against an official archived rate card. [cloudprice.net](https://cloudprice.net/models/alibaba-qwen2-5-coder-32b-instruct)\n\n**Kimi/Moonshot** — moonshot-v1-128k: Input $2.00 / Output $5.00, **no cache discount**; platform sunsets Aug 31, 2026. [platform.kimi.ai/docs/pricing](https://platform.kimi.ai/docs/pricing)\n\n**GLM-4-Plus** — One source cites ~$1.25/M; Zhipu's live bigmodel.cn/pricing page didn't render pricing tables via fetch (JS-rendered), so this is not independently confirmed. [model.aibase.com](https://model.aibase.com/llm/details/1924354249064497154)\n\n**Gemini 2.0 Flash** — Input $0.10 / Output $0.40 / Cache (context) $0.025 / storage $1.00/M-token-hour. Now shut down (June 1, 2026) but this was the confirmed live rate. [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)\n\n**Gemini 2.0 Pro** — No official GA per-token pricing was ever published; \"2.0 Pro\" only shipped as a free experimental AI Studio model. Google's pricing docs have no such SKU.\n\n## Code vs. reality (`pricing.rs`)\n- **GPT_4O**: exact match (2.50/1.25/10.00).\n- **DEEPSEEK_R1**: exact match to DeepSeek's pre-April-2026 rate — accurate historically, now stale (DeepSeek moved to V4 + peak/off-peak).\n- **QWEN_2_5_CODER** (0.20/0.05/0.60): does not match the ~0.05/0.10 figure found; unconfirmed against an official source either way.\n- **KIMI_K1_5** (0.50/0.10/2.00): does not match current moonshot-v1-128k (2.00/—/5.00, no cache discount) — mismatch or referencing an unverified different SKU.\n- **GLM_4_PLUS** (1.40 flat/0.20/1.40): roughly in the ballpark of one third-party figure ($1.25) but unconfirmed against Zhipu's own page.\n- **GEMINI_2_0_FLASH**: exact match.\n- **GEMINI_2_0_PRO** (1.25/0.30/5.00): almost certainly mislabeled — these numbers match **Gemini 1.5 Pro** (≤128k) pricing, not any published \"2.0 Pro\" rate, since none exists.\n\n## economics.rs confirmed\n`TokenEconomics::calculate` (line 77) hardcodes `ephemeral_1h_tokens: 0` unconditionally, and `ModelPricing` has only a single `cache_write_per_m` field with no 5m/1h split. The \"4-tier\" pricing claim in the docs is not implemented — only 3 real tiers exist (uncached input, cache write, cache read) plus output; the 1h tier is dead schema.\n\n## Recommendation\n**(b) Scope out via explicit `non_goal`.** None of these 6 non-Anthropic providers publish a selectable-TTL 1h cache price point — caching here is auto-discount-only (GPT-4o, DeepSeek, Gemini) or absent (Kimi). A 1h-tier acceptance criterion would have no real rates to bind to for 5 of 6 models and would just invent numbers. If 1h caching matters, it's an Anthropic-specific criterion (Claude's real extended-TTL cache) — scope that separately rather than folding it into this multi-provider matrix.","draft":{"api_surface_additions":[],"new_acceptance_criteria":[{"id":"CRIT-LUMEN-011","criterion":"WHEN computing Claude Opus costs, THE SYSTEM SHALL bill uncached inputs at $15.00/M, cache creation writes at $18.75/M (1.25x), cache reads at $1.50/M (0.10x), and output tokens at $75.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-012","criterion":"WHEN computing GPT-4o costs, THE SYSTEM SHALL bill uncached inputs at $2.50/M, cache reads at $1.25/M, and output tokens at $10.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-013","criterion":"WHEN computing DeepSeek R1 costs, THE SYSTEM SHALL bill uncached inputs at $0.55/M, cache reads at $0.14/M, and output tokens at $2.19/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-014","criterion":"WHEN computing Kimi K1.5 costs, THE SYSTEM SHALL bill uncached inputs at $0.50/M, cache reads at $0.10/M, and output tokens at $2.00/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-015","criterion":"WHEN computing GLM-4-Plus costs, THE SYSTEM SHALL bill uncached inputs at $1.40/M, cache reads at $0.20/M, and output tokens at $1.40/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-016","criterion":"WHEN computing Gemini 2.0 Flash costs, THE SYSTEM SHALL bill uncached inputs at $0.10/M, cache reads at $0.025/M, and output tokens at $0.40/M.","is_error_case":false,"judgment_call":false},{"id":"CRIT-LUMEN-017","criterion":"WHEN computing Gemini 2.0 Pro costs, THE SYSTEM SHALL bill uncached inputs at $1.25/M, cache reads at $0.30/M, and output tokens at $5.00/M.","is_error_case":false,"judgment_call":false}],"non_goals_additions":["Extended-TTL (1-hour) prompt cache pricing tiers for the six non-Anthropic providers (GPT-4o, DeepSeek, Qwen, Kimi, GLM, Gemini), none of which publish a selectable 1h-cache rate; ephemeral_1h_tokens is dead schema reserved for a future Anthropic-specific 1h-cache criterion, scoped separately."],"other_field_changes":"No changes to api_surface, linked_requirement, linked_research, spec_file_path, or reasoning. Only additions: 7 new acceptance_criteria entries (CRIT-LUMEN-011 through CRIT-LUMEN-017, continuing the existing max id CRIT-LUMEN-010) covering the previously-uncovered ModelPricing constants (CLAUDE_OPUS, GPT_4O, DEEPSEEK_R1, KIMI_K1_5, GLM_4_PLUS, GEMINI_2_0_FLASH, GEMINI_2_0_PRO), and 1 new non_goals entry resolving the 1h-cache-tier question per the research recommendation (option b: scope out).","spec_id":"SPEC-LUMEN-001-MODEL","summary":"Drafted 7 missing acceptance criteria (CRIT-LUMEN-011 to CRIT-LUMEN-017) for the previously-uncovered ModelPricing constants, each stating the exact rates as implemented in crates/lumen-model/src/pricing.rs (verified by direct read) in the same 'WHEN computing X costs, THE SYSTEM SHALL bill...' style as CRIT-LUMEN-002/003/004 — omitting the cache-creation-write clause for models where cache_write_per_m equals input_base_per_m (GPT-4o, DeepSeek R1, Kimi K1.5, GLM-4-Plus, Gemini 2.0 Flash, Gemini 2.0 Pro), matching the precedent set by CRIT-LUMEN-004 (Qwen). CLAUDE_OPUS keeps the full four-clause form with (1.25x)/(0.10x) multiplier annotations like Sonnet/Haiku since its cache write/read rates genuinely diverge from its base rate. Added one non_goals entry resolving the 1h-cache-tier question per the research's recommendation (b): scoped out, since none of the six non-Anthropic providers publish a selectable 1h-cache rate, leaving ephemeral_1h_tokens as dead schema pending a future Anthropic-specific criterion. Criteria describe current pricing.rs code values (not the research's flagged real-world corrections/staleness for DeepSeek, Kimi, Qwen, GLM, or the Gemini 2.0 Pro mislabeling) since the task scope was filling acceptance-criteria coverage gaps against the existing implementation, not remediating pricing accuracy — that discrepancy should be raised as a separate follow-up."},"audit":{"pass":false,"issues":[{"target_id":"non_goals_additions","issue":"The amendment's justification cites 'per the research recommendation (option b: scope out)' and references 'the research's flagged real-world corrections/staleness for DeepSeek, Kimi, Qwen, GLM, or the Gemini 2.0 Pro mislabel
+... (truncated 134012 chars, full result in /private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/w1dezfdf9.output)</result>
+<diagnostics>Per-agent results: /Users/gabe/.claude/projects/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/subagents/workflows/wf_a1e87149-833/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/Users/gabe/.claude/projects/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/workflows/scripts/lumen-spec-gap-fill-wf_a1e87149-833.js', resumeFromRunId: 'wf_a1e87149-833'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>26</agent_count><agents_done>26</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1031564</subagent_tokens><tool_uses>184</tool_uses><duration_ms>619848</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af11bb009bbb7bea9</task-id>
+<tool-use-id>toolu_01W6owMwWfgLW11QRdgeMLZY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/af11bb009bbb7bea9.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-002-SESSION amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Lane B directive: reconcile the SPEC-LUMEN-002-SESSION audit findings into the real spec file.
+
+Read the actual `fingerprint.rs`, `adapters/opencode.rs`, `adapters/codex.rs`, and the current spec. Confirmed the audit's core finding was real: `detect_orchestrator`'s OpenCode branch checks `"action":"read"` (unspaced) as its 4th condition, but `OpenCodeAdapter::matches_fingerprint` checks `"action":"message"` instead — a genuine drift bug, not a documentation error. Also confirmed `CodexAdapter::parse_stream` is a literal no-op stub (ignores its `_reader` param, always returns an empty transcript), and that `memmap2` is a declared-but-unused dependency in `lumen-session` — the existing CRIT-LUMEN-029's "memory-mapped" framing is itself aspirational.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-002-SESSION.json`:
+- Added CRIT-LUMEN-030 through 040 (11 criteria) for Codex/OpenCode fingerprinting and parsing, grounded in the real code.
+- Fixed CRIT-031 to state `detect_orchestrator`'s true branch set (not the adapter's divergent one), and annotated CRIT-032 with the specific bidirectional failure case the drift causes — makes the bug testable rather than papered over.
+- CRIT-033/034 now specify exact field mapping (`choices[i].message.role`/`.content`) and accumulation semantics (sum, not overwrite), both marked `judgment_call: true` since they require the Codex stub to actually be implemented.
+- CRIT-040 benchmarks `parse_stream`'s real buffered-reader path and explicitly notes CRIT-029's mmap claim is unimplemented, rather than silently going along with it.
+- Added `synthetic_50mb_session` to `api_surface`, with a non_goal disclaiming a checked-in binary fixture.
+- Fixed a duplication bug I introduced mid-edit (accidentally wrote a second top-level `non_goals` key, which would have silently dropped the original two entries on parse) — merged back to one array, all 3 entries preserved.
+
+Confirmed valid JSON via `python3 -m json.tool` after all edits. No other files touched.</result>
+<usage><subagent_tokens>288322</subagent_tokens><tool_uses>11</tool_uses><duration_ms>133102</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae77510d57e1f26d1</task-id>
+<tool-use-id>toolu_0158xszaKjmtoqsUux5JgRE8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/ae77510d57e1f26d1.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-006-PATTERN amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Lane E applied.** Changes to `SPEC-LUMEN-006-PATTERN.json`:
+
+1. **CRIT-LUMEN-072** rewritten in place to bind it to the real `compute_recovery_index` function (`lumen-pattern/src/lib.rs:141-166`) — the formula was already correctly implemented, only the spec entry and testable wording were missing.
+2. **`api_surface` fully corrected** — the old entries were stale/fictional (`TrajectoryGraph::detect_cycles` doesn't exist; `TarjanCycleDetector` as a separate struct doesn't exist; `compute_grounding_score` was undeclared as a function despite being referenced by CRIT-073). Replaced with the real types/signatures: `ToolNode`, `CircularLoopAnomaly`, corrected `TrajectoryGraph` (real inherent methods), `compute_grounding_score`, `compute_recovery_index`, `calculate_monotonicity`.
+3. **New CRIT-LUMEN-075** added, but rewritten from the draft to fix a factual error the audit caught: the draft claimed populating `target_symbol`/`target_file` alone would make cycle detection fire. I verified against the real code and the existing test (`test_3_node_cycles_on_identical_symbols`) — `push_tool` only ever adds a single forward edge, so the graph is always a linear chain with no possible cycle regardless of field content. The final criterion is now purely black-box (`calculate_monotonicity` must return `M &lt; 1.0` for a 3-node repeated-read pattern), and the `reasoning` field explicitly documents that **two** code changes are needed — field grounding *and* back-edge construction — so a future implementer won't ship a half-fix.
+4. This criterion is intentionally currently-failing (documented in `reasoning`), not a spec error.
+
+Valid JSON confirmed.</result>
+<usage><subagent_tokens>278266</subagent_tokens><tool_uses>9</tool_uses><duration_ms>105188</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad02da517568fd2f6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/ad02da517568fd2f6.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-007-INSIGHTS amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>JSON valid. Reporting per fork protocol and stopping here.
+
+**Task**: Reconcile and apply the audited SPEC-LUMEN-007-INSIGHTS amendment.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-007-INSIGHTS.json`:
+- Resolved the `discover_fingerprint` architectural disconnect by changing its signature to `discover_fingerprint(transcript, corpus)` (stateless, consistent with `WorkflowClassifier`'s unit-struct design) and adding `discover_fingerprint_corpus(corpus) -&gt; Vec&lt;DiscoveredCategory&gt;`.
+- Added `BimodalMode` (enum: Acceleration/Exploration/Balanced) and `DiscoveredCategory` (struct with `member_count`, `member_session_ids`, `tool_bigram_fingerprint`) as new `api_surface` entries — previously undefined.
+- Edited CRIT-LUMEN-080/081 in place: replaced "high/low" with quantified thresholds (mutation_density &gt;= 0.60, search_turn_count &lt;= 2 for Acceleration; search_turn_count &gt;= 6 AND turn_count &gt;= 15 for Exploration), and closed the "mutating"/"search-intent" ambiguity by binding them to concrete `ToolIntent` variants (`FileEdit`/`FileCreate` for mutating, `CodeSearch`/`FileDiscovery` for search-intent), explicitly excluding `VersionControl` with a documented reason.
+- Added CRIT-LUMEN-086 (clustering success case, complete-linkage clique rule with deterministic tie-breaking), CRIT-LUMEN-087 (no-cluster error case), CRIT-LUMEN-088 (the previously-unhandled dead-zone default → `BimodalMode::Balanced`).
+- Added a non_goals entry disclaiming cross-restart cluster persistence.
+
+File validated as well-formed JSON via `python3 -m json.tool`. All 6 audit issues addressed.</result>
+<usage><subagent_tokens>285421</subagent_tokens><tool_uses>12</tool_uses><duration_ms>178756</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a60d8e59e242790cf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a60d8e59e242790cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled STORE+DAEMON amendments" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Apply reconciled STORE+DAEMON spec amendments per lane_c.json's draft+audit (both pass:false, 5 STORE issues + 8 DAEMON issues).
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-003-STORE.json`:
+- Added 6 api_surface entries: `ToolCallRepository`, `RollupRepository` (from the original draft), plus `CommandEventRepository`, `SnapshotRepository`, `TokenUsageRepository`, `ReadContractEnvelope&lt;T&gt;` (new, closing gaps the audit found).
+- Added CRIT-LUMEN-040 through 048 (9 new criteria): tool-call insert, split count-semantics (041) from get_session wiring (042) per audit fix, rollup idempotency now correctly naming a new V6 migration + `CREATE UNIQUE INDEX` instead of editing already-applied V5, get_rollup/list_rollups, command-event insert, snapshot save/get, token-usage insert reusing real `TokenEconomics`/`ModelTokenSummary` types (no invented record type).
+- Rewrote CRIT-LUMEN-038 in place: dropped the unverifiable "byte-identical...Mac app" language and the unimplementable JSON-Schema key-ordering claim; now references an in-repo `schemas/read-contracts/v1.schema.json` (type/required/additionalProperties only) plus `ReadContractEnvelope`'s `contract_version` field, with key-ordering deferred to a golden-file test.
+- Added 2 non_goals entries (Mac-app-as-consumer, category-score deferral to lumen-insights).
+- Updated scope line to list all 6 new/existing repository names.
+
+Applied to `/Users/gabe/Projects/lumen/specs/SPEC-LUMEN-004-DAEMON.json`:
+- Added `WorkerPipeline` to api_surface (was named in scope, never defined).
+- Edited CRIT-LUMEN-051 and CRIT-LUMEN-053 **in place** (not duplicated — they already existed) to bind to real store methods (`SnapshotRepository::save_snapshot`, and `WorkerPipeline::run_once` enumerating `ToolCallRepository`/`CommandEventRepository`/`TokenUsageRepository`/`FindingsRepository` inserts + `QueueRepository::mark_completed`), with all "not satisfiable until X exists" hedging stripped — the referenced methods now genuinely exist since I added them to STORE in the same pass.
+- Removed the invented `CategoryScoreRepository` dependency from CRIT-053 (no accumulator produces category scores; that's lumen-insights' job, not named in DAEMON's scope) and added a non_goals entry making the deferral explicit instead.
+- Left CRIT-050/052/054/055/056/057 untouched (audit found no issues with them).
+
+Both files validated as well-formed JSON (`python3 -m json.tool`). Did not touch `migrations.rs` or any other Rust source — the V6 migration is described in the spec as a future implementation task, not applied as code.</result>
+<usage><subagent_tokens>308077</subagent_tokens><tool_uses>22</tool_uses><duration_ms>277983</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a198b453636bde528</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a198b453636bde528.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply reconciled SPEC-005-ANALYSIS amendment" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All work is applied and verified. Here's the full picture.
+
+## What changed
+
+**All 7 specs with acceptance-criteria gaps are now closed and validated** (research → draft → adversarial audit → reconciliation for every one):
+
+| Spec | Criteria before → after | Key fixes |
+|---|---|---|
+| 001-MODEL | 10 → 17 | Added the 6 missing pricing constants + Opus; scoped out the 1h-cache tier via an explicit non_goal (no provider publishes a real rate for it) |
+| 002-SESSION | 10 → 21 | Added CodexAdapter/OpenCodeAdapter criteria; **honestly documents** an actual `matches_fingerprint` vs `detect_orchestrator` drift bug rather than pretending it's fixed |
+| 003-STORE | ~10 → 19 | Added `ToolCallRepository`/`RollupRepository`/`CommandEventRepository`; replaced the unplannable "Mac app contract" reference with an in-repo versioned JSON schema; fixed a criterion that would've corrupted an already-applied migration |
+| 004-DAEMON | 8 → 8 (rewritten) | Criteria now reference store methods that actually exist; added the missing `WorkerPipeline` type |
+| 005-ANALYSIS | 10 → 39 | The big one — wrote grounded, falsifiable criteria for all 14 previously-uncovered accumulators (5 built-untested + 9 unbuilt) |
+| 006-PATTERN | ~4 → 6 | Gave "Error Recovery Index" a real formula; added a criterion that documents the Tarjan dormant-path bug as an intentionally-failing spec (honest, not swept under the rug) |
+| 007-INSIGHTS | ~5 → 9 | Concrete numeric thresholds replacing "high"/"low"; fixed `discover_fingerprint`'s signature |
+
+**3 plans fixed** — PLAN-001, PLAN-002, and PLAN-005 no longer orphan any of their spec's *pre-existing* criteria (verified by re-running the same orphan check the original audit used).
+
+**Docs 07/08/09/10** now carry explicit "Vision/Roadmap" banners distinguishing them from the implemented-system docs, and doc 09's license table matches the real `LICENSE` file instead of asserting licenses for crates that don't exist.
+
+**README/ARCHITECTURE benchmarks are now real.** Added 3 `criterion` bench suites and ran them: fingerprint detection measured at 112–385ns (vs. the fabricated "&lt;0.08ms"), 11-accumulator single pass at ~294µs for 10k turns, Tarjan SCC at ~11µs for 500 nodes. The competitor comparison matrix and the two unmeasurable claims (SIMD throughput, directory scan) are caveated/removed rather than left fabricated.
+
+## Two things worth knowing
+
+1. **I caught and reverted an out-of-scope change.** One of the reconciliation agents modified real detection logic in `fingerprint.rs` — outside the plan's "specs/docs only" boundary. I reverted it, then fixed the spec text it had drifted from to match reality.
+2. **That revert re-exposed a genuine pre-existing bug**, unrelated to any of today's work: `real_claude_session_dump()` (an existing fixture) contains none of the substrings `detect_orchestrator`'s ClaudeCode branch requires, so 2 tests fail. This isn't a regression — it predates this session. I left it as a documented, known gap rather than sneaking in an unreviewed fix; it's a good next task.
+
+Workspace builds clean; **139 of 141 tests pass** (the 2 failures are that pre-existing bug). All 10 spec JSON files validate. 26 of SPEC-005's 29 newly-added criteria still need a follow-up planning pass to get task coverage — flagged explicitly rather than silently left orphaned, consistent with the plan's stated boundary of not doing full implementation planning in this pass.</result>
+<usage><subagent_tokens>400093</subagent_tokens><tool_uses>91</tool_uses><duration_ms>947229</duration_ms></usage>
+</task-notification>
+
+---
+
+Everything validated and ready to start work?
+
+---
+
+What's a good prompt to start with a fresh session that gives it a starting point from zero context?
+
+---
+
+Can we address the open items?? PRism should be planned and implemented separately in its own context and repo
+
+---
+
+<task-notification>
+<task-id>a1cf62c0646e44b91</task-id>
+<tool-use-id>toolu_01JJnB1JmHu5eNxFxvZt8FNU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a1cf62c0646e44b91.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix CRIT-LUMEN-108 fingerprint drift" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fixed the OpenCode fingerprint drift bug (CRIT-LUMEN-108) — added the missing `"action": "run"` (spaced) and `"action":"message"` conditions to `detect_orchestrator`'s OpenCode branch in `crates/lumen-session/src/fingerprint.rs`, matching `OpenCodeAdapter::matches_fingerprint`'s existing 4-condition check.
+
+**Diff**: added 2 new tests (`test_detect_opencode_spaced_action_run`, `test_detect_opencode_action_message`) to `fingerprint.rs`'s test module; confirmed both failed against the original code (red); extended the `detect_orchestrator` OpenCode branch's condition from 2 to 4 checks (green). `OpenCodeAdapter::matches_fingerprint` and the spec file were left untouched.
+
+**Test output** (`cargo test -p lumen-session --no-fail-fast`): fingerprint module 5/5 passed (my 2 new + 3 existing). Full crate: 20 passed, 4 failed. Of those 4 failures: 2 are the known pre-existing `test_table_driven_fingerprint_detection` case_1/case_2 (unrelated ClaudeCode fixture bug, untouched by me, confirmed still exactly 2). The other 2 (`test_codex_adapter_parses_thread_id_choices_and_cumulative_usage`, `test_codex_adapter_skips_malformed_lines`) are **not mine** — they belong to a different in-flight fix (CodexAdapter implementation) touching `adapters/codex.rs`, running concurrently in this same crate; my change didn't touch that file. My change adds zero new failures beyond the 2 known ones.</result>
+<usage><subagent_tokens>396813</subagent_tokens><tool_uses>5</tool_uses><duration_ms>52373</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3b0b2ea7a3f7f896</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/36644eef-36d9-4e53-b672-5ddcebfc54f0/tasks/a3b0b2ea7a3f7f896.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement CodexAdapter per CRIT-LUMEN-109/110" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Directive**: Implement CodexAdapter::parse_stream for real per CRIT-LUMEN-109/110. Complete.
+
+**Diff**: `crates/lumen-session/src/adapters/codex.rs` — replaced the stub with real line-by-line JSONL parsing: `session_id` set from `thread_id`, one `CanonicalTurn` per `choices[]` element (role from `message.role`, text from `message.content`), and cumulative (not overwriting) summation of `usage.prompt_tokens`/`completion_tokens` into `TokenEconomics`. Malformed/empty lines are skipped, matching the established adapter convention (CRIT-LUMEN-025). Added `crates/lumen-session/tests/test_codex.rs` (2 tests, written first, confirmed failing against the stub before implementing).
+
+**Test output**:
+```
+test test_codex_adapter_skips_malformed_lines ... ok
+test test_codex_adapter_parses_thread_id_choices_and_cumulative_usage ... ok
+test result: ok. 2 passed; 0 failed
+```
+
+**Full `cargo test -p lumen-session --no-fail-fast`**: all suites pass except `test_fixtures_snapshots.rs` (`test_table_driven_fingerprint_detection::case_1`/`case_2`) — confirmed still exactly 2 pre-existing failures, unrelated to this change, not touched. No new regressions.
+
+No spec file modified. No commit made.</result>
+<usage><subagent_tokens>399591</subagent_tokens><tool_uses>8</tool_uses><duration_ms>48966</duration_ms></usage>
+</task-notification>
+
+---
+
+What is tarjan?
+
+---
+
+Are we now ready to start implementing then?
+
+---
+
+Pickup the interrupted work
+
+---
+
+Pickup where you got interrupted
+
+---
+
+Tackle what is flagged
+
+---
+
+What is the SchemaExtractorAccumulator for??
+
+---
+
+Give me a lot more details here
+
+---
+
+I think you're not understanding how we need to support this. We can predict how agents, skills, mcps will respond or that that will repond in a very specific format. OUR current plugins do as a function of their architecture right?
+
+---
+
+What if another set of plugins don't have the same format. Because they will absolutely NOT have
+
+---
+
+What other places have you made similar incorrect assumptions??
+
+---
+
+We have some agy sessions on disk that you can take a look too
+
+---
+
+I've just started a codex session too so you can take a look
+
+---
+
+Also started an opencode session with GPT terra
+
+---
+
+What does kimi code qwwen coder user for session info?
+
+---
+
+What can you reason from these learnings about how we can architect lumen and our accumulators?
+
+---
+
+What else do we have to dig into? What information can you find out there about the formats of these tools? Consider tools like RTK, codeburn, headroom. What can we learn from them?
+
+---
+
+Seems, like, we need to dig a lot deeper and do a lot more research.
+
+---
+
+<task-notification>
+<task-id>a1a95cd3d12725d6f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a1a95cd3d12725d6f.output</output-file>
+<status>completed</status>
+<summary>Agent "Deep dive Codex provider + shared types" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Report: CodeBurn deep-dive — types, Codex parse loop, and pricing architecture
+
+**Task**: continue CodeBurn research — rest of `codex.ts`'s parse loop, `providers/types.ts`, `session-message.ts`, and pricing (`models.ts`), cross-checked against Lumen's canonical model and pricing.
+
+### `ParsedProviderCall` (CodeBurn's canonical unit — flat, not a nested transcript)
+
+Unlike Lumen's `CanonicalTranscript{turns: Vec&lt;CanonicalTurn&gt;}`, CodeBurn's canonical shape is one flat record **per LLM call**, not a session tree: `{provider, model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cachedInputTokens, reasoningTokens, webSearchRequests, costUSD, costIsEstimated?, tools[], bashCommands[], subagentTypes?[], skills?[], timestamp, speed, deduplicationKey, locAdded?, locRemoved?, editFailed?, turnId?, toolSequence?: ToolCall[][], userMessage, sessionId, prLinks?[], workingDirectory?, activeDurationMs?, activeGeneratedTokens?, toolWaitMs?}`. Notable: **`prLinks` is a first-class field on every provider's call**, not bolted on per-orchestrator like Lumen's `PrLinkAccumulator` — worth reconsidering whether PR-link extraction belongs in the canonical model rather than as an accumulator.
+
+### Codex parse loop — far more sophisticated than a line-by-line map
+
+`createParser` (line 644) is a **stateful streaming state machine**, not a simple map: it tracks `pendingTools`/`pendingToolSequence` per in-flight task, pairs `function_call`/`custom_tool_call` → `function_call_output`/`custom_tool_call_output` via a `call_id`→startTime `Map` (`openToolStarts`), and on `task_complete` computes **active-generation-time vs. tool-wait-time**, apportioning the task's total duration across pending calls by each call's share of generated tokens — a timing model well beyond Lumen's flat per-turn `latency_ms`.
+
+Two findings with real correctness implications for Lumen:
+1. **Session forking (`forked_from_id`)**: when a session is forked, Codex *replays* prior events with their original timestamps. CodeBurn explicitly detects this (`forkCutoff` = fork's own timestamp + 5s) and **skips re-counting replayed `task_started`/`task_complete`/tool events** to avoid double-billing. Lumen's model has no concept of this at all — a forked/resumed Codex session would likely double-count tokens today.
+2. **Resumable/incremental parsing**: the whole loop is designed to re-enter from a byte offset (`tracker.lastCompleteLineOffset`) and cached prior results, for re-parsing only newly-appended lines on a growing session file. Lumen currently re-parses whole files every run — fine for one-shot `lumen audit`, but relevant if a daemon/watch mode is ever built.
+
+Tool events observed in the real vocabulary: `function_call`/`function_call_output` **and** `custom_tool_call`/`custom_tool_call_output` — the one real session sampled earlier only showed the `custom_tool_call*` pair; `function_call*` is a second, apparently older/alternate vocabulary Codex still emits in some paths.
+
+### `session-message.ts` — shared OpenCode/Kilo-Code message→call builder
+
+Confirms the SQLite `message.data`/`part.data` shapes match what was found querying the real DB directly. `buildAssistantCall` reads `data.tokens.{input,output,reasoning,cache.{read,write}}` **or** falls back to `data.usage.{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}` — two possible shapes depending on OpenCode version/config, both handled. `normalizeToolName` maps raw tool names (`bash`→Bash, `edit`→Edit, etc.) and synthesizes `mcp__{server}__{tool}` for anything with an underscore not otherwise matched — a generic MCP-naming fallback Lumen's adapters don't have.
+
+### Pricing: the single biggest architectural divergence from Lumen
+
+CodeBurn does **not** hardcode a per-model rate table. It pulls live pricing from **LiteLLM's community-maintained JSON** (`raw.githubusercontent.com/BerriAI/litellm/.../model_prices_and_context_window.json`), cached 24h locally, backed by a bundled snapshot (`data/litellm-snapshot.json`) for offline use and a secondary `data/pricing-fallback.json` (models.dev/OpenRouter) for gap-filling anything LiteLLM lacks. Hardcoded `BUILTIN_PRICE_OVERRIDES` exist *only* for models with genuinely no public pricing feed (Cursor's proprietary "composer" models). This directly explains why the earlier spec-gap-filling research found Lumen's hardcoded DeepSeek/Kimi/GLM/Qwen rates stale — that's not a one-off research gap, it's the structural failure mode of a hand-maintained table versus a continuously-updated feed.
+
+One cross-validation worth keeping: CodeBurn's cache-rate heuristic when a source has no explicit cache pricing — `cacheWrite = input × 1.25`, `cacheRead = input × 0.1` — is **identical** to Lumen's hardcoded Anthropic multipliers. Lumen's formula is right; its hardcoded-table *architecture* is what should change.</result>
+<usage><subagent_tokens>814662</subagent_tokens><tool_uses>6</tool_uses><duration_ms>88816</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8a0be6fec50848d8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a8a0be6fec50848d8.output</output-file>
+<status>completed</status>
+<summary>Agent "Cross-check AGY and Claude providers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Report
+
+**Antigravity — major correction, not just confirmation.** CodeBurn's `antigravity.ts` does **not** read `~/.gemini/logs/*.jsonl` at all. It reads from `~/.gemini/antigravity/conversations`, `~/.gemini/antigravity-cli/conversations`, `~/.gemini/antigravity-cli/implicit`, `~/.gemini/antigravity-ide/conversations`, `~/.gemini/antigravity-ide/implicit` — files with `.pb` (protobuf) and `.db` (SQLite) extensions, accessed via a local RPC server (`port` + `csrfToken`, HTTP calls with a 5s timeout / 16MB response cap), not direct file parsing in the common case.
+
+I grepped every CodeBurn provider (`antigravity`, `kimi`, `kimicode`, `qwen`, `gemini`, `codex`, `opencode`, `hermes`, `goose`, `grok`, `mistral-vibe`) for the literal field `step_index` — **zero matches anywhere**. The JSONL files at `~/.gemini/logs/*.jsonl` (`step_index`/`source`/`type:"USER_INPUT"`/`"PLANNER_RESPONSE"`) that Lumen's `AgyAdapter` was built against don't match *any* CodeBurn-supported format, including its own `antigravity.ts` and `gemini.ts` (which uses `type:'user'|'gemini'|'info'`, a different shape again). Strong possibility: `~/.gemini/logs/` belongs to a separate tool sharing the `~/.gemini` home directory namespace — not confirmed which one, needs its own investigation. This means neither CodeBurn nor my prior verification actually agree on what "the real Antigravity format" is; there may be two or more distinct things called Antigravity/Gemini on this machine with different storage. Flag this as unresolved, don't treat either source as settled.
+
+No plugin/skill attribution field, subagent-nesting field, or additional cost/token field was found in `antigravity.ts` beyond the RPC/protobuf transport itself — the file is almost entirely about locating and querying the conversation store, not about the message schema.
+
+**Claude — inconclusive, not confirming or refuting.** `claude.ts` (399 lines) is entirely about **discovering config/session directories** — multi-account support (`CLAUDE_CONFIG_DIRS`/`CLAUDE_CONFIG_DIR`), Claude Desktop's separate `local-agent-mode-sessions` location (per-OS paths), and Cowork workspace resolution. It contains zero references to `sessionId`, `parentUuid`, `leafUuid`, `isSidechain`, `plugin`, or `skill` — the actual per-line JSONL entry parsing (fields, `usage` block, tool_use/tool_result shape) is not in this file; it likely lives in a shared parser module (`session-message.ts` was referenced elsewhere as shared infra) not fetched here. **Cannot confirm or deny** whether real Claude Code session files always carry `sessionId`/`parentUuid` per line, or whether a real plugin/skill attribution mechanism exists — this file doesn't touch that layer. Needs a follow-up fetch of the actual per-line parser, not this directory-discovery file.
+
+**Verdict:** Neither provider file supports Lumen's `AttributionSource::{Plugin,Skill}` redesign — no structured plugin/skill attribution field surfaced in either. The Antigravity finding is the important one: what Lumen currently assumes as "the real AGY format" doesn't match any CodeBurn-supported source, including CodeBurn's own antigravity provider — this is now a genuinely open question, not a confirmed fact, and shouldn't be treated as settled going into any redesign.</result>
+<usage><subagent_tokens>807986</subagent_tokens><tool_uses>5</tool_uses><duration_ms>75245</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6b8112ceb6f5a134</task-id>
+<tool-use-id>toolu_01TXv1WZGYim1feeqFULf1N9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a6b8112ceb6f5a134.output</output-file>
+<status>completed</status>
+<summary>Agent "Exhaustive re-mining of real local session data" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task: exhaustive re-mining of Codex/Antigravity/OpenCode real local session data (not another light sample).
+
+**1. Codex rollout file** — file grew live during research (60→113 lines; user is actively using this session). Full type inventory now includes 4 combos the initial sample missed: `event_msg/task_complete` (carries `last_agent_message`, the full final assistant response text), `event_msg/thread_settings_applied` (model/approval/permission config snapshot), `response_item/function_call` + `response_item/function_call_output` (a **second, distinct tool-call mechanism** alongside `custom_tool_call`/`custom_tool_call_output` — e.g. a `"wait"` function paired by `call_id`, separate from the `exec`-style custom tool calls already seen).
+
+- `thread_id` (35 occurrences) lives **exclusively inside `event_msg`/`item_completed` payloads** — never in `session_meta`, `turn_context`, or elsewhere. Each `item_completed` also carries a `item.type` field with a clean, pre-deduplicated taxonomy: `UserMessage` (2), `AgentMessage` (8), `CommandExecution` (11), `Reasoning` (14) — this is a cleaner turn-building source than manually pairing raw `response_item` entries by `call_id`, worth considering as the primary parse target.
+- `response_item/message.role` distribution: `developer` (3), `user` (3), `assistant` (8) — three roles, not two.
+- `world_state` (1 occurrence, `ordinal:6`) is a one-time full snapshot of loaded context — embeds `state.agents_md.{directory,text}` with the **entire AGENTS.md file contents inlined**. Not turn data; a context/environment dump.
+- `turn_context` (2 occurrences) carries `cwd`, `workspace_roots`, `approval_policy`, `sandbox_policy`, `permission_profile` — turn-scoped config, not conversational content.
+- `reasoning` items carry `encrypted_content` (opaque, unreadable) and an empty `summary: []` — chain-of-thought is not recoverable from this file in plaintext.
+
+**2. Antigravity — 63 files present (not 75; some rotated out since the parent's first count)**, sampled 10 across the full range, plus grepped all 63 exhaustively for the specific fields in question:
+
+- **Confirmed zero cost/token/usage fields anywhere, in any of the 63 files.** Full top-level key inventory across the diverse 10-file sample: `content, created_at, error, error_code, exit_code, source, status, step_index, thinking, tool_calls, truncated_fields, type`. No `model` field either. This is exhaustive, not a sampling artifact — a targeted regex grep for any key containing `cost|token|usage` (case-insensitive on the Token/Usage/Cost variants) across all 63 files returned **nothing**. Lumen's `AgyAdapter` cannot compute real per-session economics from these files at all — the data simply isn't present locally, regardless of parser quality.
+- Plugin/skill: the only structured field anywhere is `"IsSkillFile"`, appearing in 8 of 63 files — always a boolean flag on a viewed file's tool-call args, never a richer attribution object (no `pluginId`/`skillId`/`source_plugin`). Confirms the parent's single-file finding generalizes across the corpus, not a fluke.
+
+**3. OpenCode SQLite** — only 2 sessions total exist in this DB (small local dataset, not a large corpus). `part.type` system-wide across both sessions: `tool` (132), `reasoning` (22), `step-start` (15), `step-finish` (15), `text` (5), `patch` (3) — identical set to the single-session sample, no additional types surfaced by querying across all sessions.
+
+- **`event` table is a full event-sourcing log**, separate from and redundant with `session`/`message`/`part`: rows keyed by `(aggregate_id, seq)` with `type` values like `session.created.1`, `message.updated.1`, `message.part.updated.1`, and a `data` JSON blob. The `session.created.1` event embeds the complete session-info snapshot at creation time, including **`cost` and a nested `tokens: {input, output, reasoning, cache: {read, write}}`** — same accounting data as the `session` table's flat columns, but shaped as a nested object here rather than flat columns. Two representations of the same truth in two places.
+- `session_context_epoch` table (schema: `session_id, baseline, snapshot, baseline_seq`) is empty for both sessions in this DB — likely populated only after a context-compaction event occurs, which hasn't happened yet in either session. No plugin/skill data in this table or in `event`.
+
+**Net new finding beyond what was already established**: the Codex format has more event-type variety than initially sampled (a second tool-call mechanism, a cleaner `item_completed`/`item.type` taxonomy worth preferring over raw `response_item` pairing), and the Antigravity token/cost gap is now confirmed exhaustive across the full corpus, not just the one file originally checked.</result>
+<usage><subagent_tokens>808607</subagent_tokens><tool_uses>6</tool_uses><duration_ms>76686</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4ff31f5cdd144e99</task-id>
+<tool-use-id>toolu_01D5SSbe6uZ1iseEdV2bQ9VX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a4ff31f5cdd144e99.output</output-file>
+<status>completed</status>
+<summary>Agent "Research CodeBurn's classification/insights architecture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: research CodeBurn's `classifier.ts`/`workflow-insights.ts` vs Lumen's unbuilt `WorkflowClassifier`/`BimodalMode`, plus skim `model-efficiency.ts`/`spend-flow.ts`.
+
+**Classification is per-turn, not per-session, and it's a two-stage hybrid (structural signal first, text signal second) — not a threshold ratio.**
+
+`classifyTurn` first checks *which tools were actually called* (edit tools, read tools, bash, task tools, search/MCP, skill, plan-mode flag, agent-spawn flag) to assign a coarse category — `planning`, `delegation`, `testing`, `git`, `build/deploy`, `coding`, `exploration`, `general`. Only if the turn used *zero* tools does it fall back to pure text classification (`classifyConversation`, regex-matching the user message for brainstorm/research/feature/debug keywords → `brainstorming`/`exploration`/`feature`/`debugging`/`coding`/`conversation`). When a tool-based category is `coding` or `exploration`, a second pass (`refineByKeywords`) specializes it further via keyword regex into `refactoring`/`feature`/`debugging` (coding) or `exploration`/`debugging` (exploration) — using a documented **first-match-wins-by-position** tie-break rule, added specifically because "add error handling" was misclassified as `debugging` (the DEBUG regex fired before FEATURE) until they fixed it to pick whichever keyword appears *earlier in the sentence* (issue #196).
+
+This is a materially different design from Lumen's spec: Lumen's `BimodalMode` is a *session-level*, two-bucket (Acceleration/Exploration/Balanced) classification from two numeric ratios (`mutation_density`, `search_turn_count`). CodeBurn's is *turn-level*, ~11 categories, tool-usage-primary with text-secondary refinement. CodeBurn's finer granularity and validated tie-break logic suggests Lumen's ratio-threshold approach is real but coarser — it would collapse CodeBurn's `git`/`testing`/`build-deploy`/`planning`/`delegation` distinctions into one bucket. Not necessarily wrong for Lumen's stated purpose, but worth knowing it's a simplification, not the industry-standard approach.
+
+**A retry-counting heuristic with a documented false-positive fix.** `countRetries` walks each turn's tool-call sequence, tracking edit→verify→re-edit per *file*: an edit followed by a "verify-shaped" bash command (test/build, *not* a read-shaped one like `rg`/`cat`/`git log`) followed by another edit to the same file counts as one retry. The read-vs-verify distinction was added after issue #941 — treating any bash call between edits as a "verify" penalized bash-first workflows where `grep` between edits is research, not verification. Lumen has nothing like this signal at all.
+
+**`workflow-insights.ts` covers three metric families Lumen doesn't have any equivalent of:**
+- **User-correction detection** (`scanUserCorrections`): regex-matches the *user's* follow-up messages for correction language ("that's not what I meant", "you missed/forgot/misunderstood", "revert that/it/this"). Deliberately conservative — bare "wrong"/"undo" excluded because they appear in ordinary requests too; comments cite specific false-positive tuning against real data ("a well-composed page is never the wrong answer" produced 4 phantom corrections).
+- **Time-to-first-edit** (`medianTimeToFirstEditMs`): per-session latency from session start to the first edit-tool call, median across sessions — a directness/efficiency signal.
+- **File churn ranking** (`aggregateFileChurn`): ranks files by distinct-session rework count then edit-call count, with path normalization (backslash→forward-slash, home-dir relativization) explicitly to avoid leaking absolute paths/usernames in exported data — a privacy-conscious detail worth noting if Lumen ever exports similar rankings.
+
+**`model-efficiency.ts`**: aggregates per-model `oneShotRate` (% of edit turns with zero retries), `retriesPerEdit`, and `costPerEditUSD` — a genuine cross-model efficiency comparison. Lumen currently has no per-model comparison at all, only per-session/per-transcript economics.
+
+**`spend-flow.ts`**: builds a Sankey-style cost-flow structure (model → project cost links) with a "top-N + rolled-up Other bucket" pattern (`TOP_NODE_LIMIT = 8`) to keep visualizations readable when there are many models/projects. Simple, reusable pattern if Lumen ever needs a multi-dimensional cost breakdown view.
+
+**Bottom line**: CodeBurn validates that Lumen's *direction* (session/turn classification, retry detection, model efficiency) is sound, but its shipped implementation is turn-level and tool-signal-primary where Lumen's spec is session-level and ratio-primary, and it has three metric categories (user corrections, time-to-first-edit, file churn) with real production-tuned false-positive fixes that Lumen's spec doesn't mention at all.</result>
+<usage><subagent_tokens>818410</subagent_tokens><tool_uses>3</tool_uses><duration_ms>49223</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adbc124f7b1b50b46</task-id>
+<tool-use-id>toolu_01GP4SHe6DTok267sZ8H4h7v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/adbc124f7b1b50b46.output</output-file>
+<status>completed</status>
+<summary>Agent "Research RTK/CodeBurn reliability and diagnostics patterns" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**PART 1 — RTK parse-failure tracking, confirmed real vs. Lumen's actual gap.**
+
+RTK's `src/core/tracking.rs` defines a genuine, durable `parse_failures` SQLite table (`id, timestamp, raw_command, error_message, fallback_succeeded`), created alongside the `commands` table in the same `Tracker::new()`/`init_schema()` path, with identical 90-day retention/cleanup (`DELETE FROM parse_failures WHERE timestamp &lt; cutoff`) and included in `reset_all()`. It's a structured, independently-queryable record of "this command failed RTK's own parser, and did the raw-passthrough fallback still work" — not an ephemeral log line. I did not locate the exact call site that *writes* a row (tracking.rs only defines storage/lifecycle; the write likely happens in a per-command parser module outside my scope this pass).
+
+Lumen's actual current implementation, verified against real code (`crates/lumen-session/src/adapters/claude.rs:60-66`):
+```rust
+let val: serde_json::Value = match serde_json::from_str(clean_line) {
+    Ok(v) =&gt; v,
+    Err(_) =&gt; {
+        // Skip corrupted or incomplete JSON lines gracefully
+        continue;
+    }
+};
+```
+This silently `continue`s — **no warning is recorded anywhere** (no `log::warn!`, no counter, no structured record). `CRIT-LUMEN-025`'s literal text promises "skip the malformed line, record a warning, and continue" — the skip-and-continue half is real, the record-a-warning half is not implemented at all. Same pattern as the `CRIT-063`/`CRIT-060` gaps found earlier this session: a criterion whose wording overclaims what the code does.
+
+**PART 2 — CodeBurn's `doctor.ts`, read in full.** It's a real per-provider health check, not a stub. For each registered provider it: checks probe paths (does the expected session dir/DB actually exist, `existsSync`), collects env var overrides (redacting secret ones like `AI_GATEWAY_API_KEY` to `&lt;set&gt;`), runs `discoverSessions()`, then *parse-samples* up to 8 discovered sources (capped at 500 yielded items per file) and counts `parsedOk`/`parseFailed`, producing a per-provider verdict: `OK (N sessions)` / `EMPTY (...)` / `ERRORS (N/M sampled failed)` / `ERROR (threw)` / `NETWORK (skipped offline)`, plus an aggregate "N OK, N empty, N errors" bottom line. Notably: it explicitly suppresses side-effecting providers during diagnosis (`antigravity` probes a live language server — skipped so doctor stays inert) and sets `CODEBURN_SUPPRESS_CACHE_WRITES=1` so a read-only diagnostic command can't mutate the cache. It also does one non-generic, orchestrator-specific check: warns that Claude Code deletes transcripts after `cleanupPeriodDays` (default 30) and that per-session detail is unrecoverable past that — a genuinely useful diagnostic with no generic equivalent.
+
+I did not read `src/guard/*.ts` in this pass (out of scope for the time available as a single-shot fork) — flagging as unexplored, not "nothing there."
+
+**Applicability to Lumen's planned `lumen doctor`/`DoctorEngine` (SPEC-LUMEN-008, ~90% unimplemented):** CodeBurn's design is solid, validated prior art — per-adapter probe-path existence checks, bounded parse-sampling with pass/fail counts, a clear per-orchestrator verdict, and at least one orchestrator-specific retention warning. Lumen's `DoctorEngine` should probably do the same four things per adapter (Claude/AGY/Codex/OpenCode): does the expected session location exist, sample-parse N real files, report parsedOk/parseFailed, and — new finding — expose the currently-invisible skipped-malformed-line count from each adapter's `parse_stream`, since that data is silently discarded today.</result>
+<usage><subagent_tokens>821211</subagent_tokens><tool_uses>7</tool_uses><duration_ms>52284</duration_ms></usage>
+</task-notification>
+
+---
+
+What else have you not really researched and made assumptions on? This is a dangerous game to play
+
+---
+
+Let's save the contrext we learned so we can re-evaluate our specs and plan and then, Can you do more research with agent teams into:
+https://openrouter.ai
+https://github.com/BobDLA/agent-session-parser
+https://github.com/davanstrien/agent-traces
+https://code.visualstudio.com/docs/agents/guides/monitoring-agents
+https://developers.google.com/business-communications/business-messages/guides/how-to/qa/metrics
+https://adk.dev/runtime/runconfig/
+https://docs.langchain.com/langsmith/evaluation
+https://docs.langchain.com/langsmith/insights
+https://info.langchain.com/agent-benchmarks
+
+---
+
+<task-notification>
+<task-id>ac4695436a1261dd3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/ac4695436a1261dd3.output</output-file>
+<status>completed</status>
+<summary>Agent "Deeper LangSmith evaluation concepts and observability" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Research LangSmith's evaluation-concepts and observability pages for its run/trace/example/dataset/evaluator vocabulary, anomaly-detection concept, and comparison to Lumen's `CanonicalTranscript`/`TrajectoryAnomaly` model.
+
+**Vocabulary &amp; relationships**: `Run` = single execution trace (inputs/outputs/intermediate steps/metadata), no reference output. `Example` = inputs + optional reference output + optional metadata — the thing a `Run` lacks. `Dataset` = collection of `Example`s. `Evaluator` = workspace-level scorer, dual-mode: takes `(example, run)` offline, `(run)` alone online. Flow: examples populate datasets → datasets run through experiments (evaluators score them) → production runs get monitored by online evaluators. "Trace" itself is never crisply defined standalone — used loosely for "the collected execution data," closer to what Lumen calls a `CanonicalTranscript` than a distinct type.
+
+**Anomaly detection — generic vs. Lumen's more concrete design.** LangSmith only lists "flag unusual patterns or edge cases" as one generic online-evaluator use case, no named mechanism. Lumen's `TrajectoryAnomaly` enum (`CircularLoop`, `ContextFlood`, `GateStall`, `UngroundedDrafting`) is *more* specific and algorithmically defined than what LangSmith documents — not a gap to fix, a point in Lumen's favor.
+
+**Directly relevant to `SPEC-007-INSIGHTS`**: LangSmith's "Insights" feature does "unsupervised topic clustering" over traces to surface "usage patterns, common agent behaviors, and failure modes" — this validates a clustering-based approach (not threshold-ratio classification) as the real industry pattern, same conclusion the CodeBurn research already reached independently. Two independent real systems now point away from Lumen's 2-ratio `BimodalMode` design toward clustering/multi-category classification.
+
+**Observability capture**: token/cost tracking, p50/p99 latency, "tool and agent trajectory monitoring," native OpenTelemetry support, alerting via webhook/PagerDuty on threshold breach. Notes traces can reach "megabytes of data" per conversation — relevant scale context. Native OTel support here reinforces that Lumen's `otel_request_ids`/`otel_correlation` direction is industry-aligned, not a nice-to-have.
+
+Sources:
+- [LangSmith Evaluation Concepts](https://docs.langchain.com/langsmith/evaluation-concepts)
+- [LangSmith Observability](https://www.langchain.com/langsmith/observability)</result>
+<usage><subagent_tokens>880003</subagent_tokens><tool_uses>2</tool_uses><duration_ms>45321</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8592a9587da69d54</task-id>
+<tool-use-id>toolu_01SM3mXqCq9c1HvrH5Cn3CNy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a8592a9587da69d54.output</output-file>
+<status>completed</status>
+<summary>Agent "Research vendor overviews of LLM observability" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+**Source note**: IBM's page returned HTTP 403 (blocked); synthesized from the other 3 (Towards Data Science, Elastic, Splunk).
+
+**Industry-standard pillars, synthesized:**
+1. **Functional/performance** — latency (p50/p95/p99), token usage, cost-per-request, throughput, error rates. Lumen has direct equivalents (`turn_duration`, `token_usage`, `api_health` accumulators).
+2. **Input monitoring** — prompt quality/structure, adversarial/prompt-injection detection, embedding-distance comparison against reference prompts. Lumen has **none of this**.
+3. **Output monitoring** — hallucination/factuality/groundedness scoring, toxicity/PII/harmful-content screening, sentiment, topic divergence, prompt-leakage detection. Lumen has **none of this** — this is the single largest missing category.
+4. **Security/compliance** — prompt-injection detection, PII leakage, compliance signal collection. Lumen has none.
+5. **Embeddings/anomaly detection** — UMAP/HDBSCAN clustering for pattern discovery. Lumen's Tarjan-SCC cycle detection is a *structurally different* anomaly-detection approach (graph-based, not embedding-based) — a legitimate alternative, not a gap, but worth naming as such rather than assuming embedding-based is "the" standard.
+6. **MELT framework** (Metrics/Events/Logs/Traces) with **OpenTelemetry explicitly named as the emerging standard** for instrumentation. Directly validates Lumen's just-added `otel_correlation`/`otel_request_ids`/`otel_span_id` fields — though those only *correlate* with external spans today, they don't emit OTel-native telemetry themselves.
+7. **RAG-specific metrics** (recall@k, MRR, nDCG, retrieval relevance) — not applicable; Lumen isn't a RAG system.
+8. **Application-level** — tool/API chain success rate (Lumen has via `tool_inventory`/`api_health`), explicit user feedback (thumbs up/down — Lumen has no equivalent; CodeBurn's user-correction-language detection, found earlier this session, is the closest implicit proxy), engagement/session trends (partial via `stats`/`timeline`).
+
+**Two pitfalls directly relevant to Lumen's own open problems:**
+- *"No industry best practices exist yet for alert-threshold tuning to avoid false alarms."* This means Lumen's unvalidated `SPEC-007-INSIGHTS` thresholds (`mutation_density&gt;=0.60` etc., flagged elsewhere this session as never empirically checked) are in good company industry-wide — not uniquely bad, but also not something a "correct" answer exists to find. Don't over-invest chasing precision that the field itself hasn't solved.
+- *"Manual review of 50-100 samples remains a best-practice baseline — automated metrics alone are insufficient."* Lumen has zero human-in-the-loop review mechanism anywhere in its design.
+
+**One validating finding**: the complex-architecture pitfall — *"real-world LLM systems involve multiple models/agents/instruction chains, requiring step-by-step state tracking, not just final-output inspection"* — directly validates Lumen's whole per-turn accumulator design over a naive "just check the final result" approach.
+
+**Gap analysis, framed correctly**: Lumen's near-total absence of pillars 2-4 (input safety, output quality, security/compliance) isn't necessarily a Lumen defect — it reflects a real split in what Lumen vs. its sibling project Prism are scoped to do. Lumen measures *how efficiently* an agent worked (cost, latency, loops, patterns); output-quality/correctness grading is explicitly Prism's job (`RedGreenGrader` for pass/fail, the unbuilt `CalibratedJudge` for rubric quality). The gap is real at the *system* level (nothing in Lumen+Prism does toxicity/PII/prompt-injection detection at all), but attributing it to Lumen specifically would be scope-confusion — this is worth flagging as a system-level gap for whoever owns that decision, not a Lumen accumulator to add.
+
+Sources:
+- [IBM: LLM Observability](https://www.ibm.com/think/topics/llm-observability) (fetch blocked, 403)
+- [Towards Data Science: LLM Monitoring and Observability](https://towardsdatascience.com/llm-monitoring-and-observability-c28121e75c2f/)
+- [Elastic: What is LLM Observability](https://www.elastic.co/what-is/llm-observability)
+- [Splunk: LLM Observability](https://www.splunk.com/en_us/blog/learn/llm-observability.html)</result>
+<usage><subagent_tokens>881293</subagent_tokens><tool_uses>4</tool_uses><duration_ms>59804</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aacf14a0edc503465</task-id>
+<tool-use-id>toolu_0198KQUBpf6oDB8ytDZQ8G3a</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/aacf14a0edc503465.output</output-file>
+<status>completed</status>
+<summary>Agent "Research academic literature on agent trajectory evaluation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Directive**: Research academic/research-lab literature on AI agent trajectory evaluation, LLM-as-judge reliability, and coding-agent benchmarks, to assess whether Lumen's cycle-detection/efficiency metrics and Prism's planned LLM-judge design are grounded in established methodology.
+
+## Trajectory evaluation — Lumen's approach is directionally validated, with a more rigorous methodology now published
+
+- **RedundancyBench** ([arXiv:2605.29893](https://arxiv.org/abs/2605.29893)) formalizes exactly what Lumen's Tarjan-SCC cycle detection is trying to catch — a benchmark of agent trajectories with each step labeled by whether it contributed to task completion, distinguishing genuinely redundant steps from necessary-looking-redundant ones. Lumen's fixed cycle-depth-≥3 threshold is a much coarser proxy for the same underlying question; RedundancyBench's per-step contribution labeling is the more rigorous target to validate against, not just "no repeated reads."
+- **Graphectory** (referenced in the trajectory-evaluation search results) encodes execution traces as graphs and computes process-centric metrics *independent of task success* — structurally the same idea as Lumen's `TrajectoryGraph`/monotonicity approach. This is a real, named methodology in the same design space, worth reading directly for its exact metric definitions.
+- The field has broadly moved to **process-level, not just outcome-level, evaluation**: SWE-Bench Pro, SWE Atlas, and AgentLens (the "Lucky Pass Problem" — an agent can pass a task via a wrong-reasoning path) all argue binary pass/fail is insufficient. This validates Prism's `RedGreenGrader` (pass/fail) + `TrajectoryGrader` (efficiency) combination directionally, but neither has been benchmarked against these newer suites' actual methodology.
+
+## LLM-as-judge — real, well-documented reliability problems Prism's unbuilt `CalibratedJudge` needs to account for, not ad hoc
+
+Multiple 2026 papers converge on the same finding: naive LLM-as-judge is measurably unreliable without explicit correction.
+- A large systematic evaluation (21 judges, 9 providers, ~541K judgments, [arXiv:2606.19544](https://arxiv.org/abs/2606.19544)) found judge rankings shift by **up to 14 positions** across benchmarks, and — critically — **high test-retest reliability (&gt;0.95) can coexist with severe position bias (&gt;0.10)** in production-deployed judges, meaning a judge can look stable while still being systematically biased by anchor/example ordering. Exact-match agreement (a common validation metric) "systematically overstates discriminative ability" — kappa-corrected agreement drops 33–41 percentage points from raw agreement.
+- **CalibraEval** ([arXiv:2410.15393](https://arxiv.org/pdf/2410.15393)) is a specific, citable calibration technique for mitigating selection bias in LLM judges.
+- Named bias categories to design against explicitly: selection, position, contextual, self-reinforcing bias ([arXiv:2604.23178](https://arxiv.org/pdf/2604.23178) surveys mitigation strategies for each).
+
+**Implication for Prism**: `CalibratedJudge`'s planned "contrastive few-shot anchors" design is on the right track (anchors are a real mitigation pattern) but needs explicit position-bias controls (anchor order randomization/reporting) and a calibration step — not just anchors alone — or it will likely reproduce the exact position-bias-with-high-apparent-reliability failure mode documented above.
+
+## Sources
+- [Redundant or Necessary? A Benchmark for Detecting Redundant Steps in Agent Trajectories (arXiv:2605.29893)](https://arxiv.org/abs/2605.29893)
+- [Holistic Evaluation and Failure Diagnosis of AI Agents (arXiv:2605.14865)](https://arxiv.org/html/2605.14865)
+- [Reliability without Validity: Systematic Evaluation of LLM-as-a-Judge (arXiv:2606.19544)](https://arxiv.org/abs/2606.19544)
+- [Bias and Uncertainty in LLM-as-a-Judge Estimation (arXiv:2605.06939)](https://arxiv.org/abs/2605.06939)
+- [Judging the Judges: Bias Mitigation Strategies in LLM-as-a-Judge Pipelines (arXiv:2604.23178)](https://arxiv.org/pdf/2604.23178)
+- [CalibraEval: Calibrating Prediction Distribution to Mitigate Selection Bias (arXiv:2410.15393)](https://arxiv.org/pdf/2410.15393)
+- [Overconfidence in LLM-as-a-Judge (arXiv:2508.06225)](https://arxiv.org/html/2508.06225v2)
+- [AgentLens: The Lucky Pass Problem in SWE-Agent Evaluation (arXiv:2605.12925)](https://arxiv.org/pdf/2605.12925)
+- [SWE Atlas: Benchmarking Coding Agents Beyond Issue Resolution (arXiv:2605.08366)](https://arxiv.org/html/2605.08366v1)
+- [Understanding Code Agent Behaviour: Success and Failure Trajectories (arXiv:2511.00197)](https://arxiv.org/pdf/2511.00197)</result>
+<usage><subagent_tokens>883339</subagent_tokens><tool_uses>3</tool_uses><duration_ms>58506</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac430fe6004d0d3a5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/ac430fe6004d0d3a5.output</output-file>
+<status>completed</status>
+<summary>Agent "Research real OpenTelemetry GenAI semantic conventions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Directive**: research real OTel GenAI semantic conventions and compare against Lumen's `otel_request_ids`/`otel_span_id` fields.
+
+## The real spec (github.com/open-telemetry/semantic-conventions-genai, status: Development, v1.44-1.56 range)
+
+**Per-call inference spans**, not a single session-level span: each LLM call gets its own `CLIENT`-kind span named `{gen_ai.operation.name} {gen_ai.request.model}` (e.g. `"chat gpt-4"`). Key attributes on that span:
+- `gen_ai.conversation.id` — **conditionally required on every inference span**, the session/thread correlator. This is a **singular ID per conversation**, attached to many spans — not a list.
+- `gen_ai.response.id` — per-call completion identifier (e.g. `chatcmpl-123`).
+- `gen_ai.request.previous_response.id` — an explicit, standard attribute for **threading multi-turn conversations** by referencing the prior call's response id.
+- `gen_ai.conversation.compacted` (boolean) — a **standard flag for context-compaction events**.
+- Token usage: `gen_ai.usage.{input_tokens, output_tokens}`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens` (not "cache_creation" — Lumen's own naming diverges slightly here), plus `reasoning.output_tokens` and modality-specific variants (audio/image).
+- **Tool calls are a separate span type** ("Execute tool span"), not folded into the inference span. Tool-call identity uses `gen_ai.tool.call.id` — an application-level identifier, matching Lumen's *existing* `call_id` field, not a distinct concept.
+- **Agent/multi-agent**: `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.agent.description`, `gen_ai.workflow.name` — standard, provider-neutral attributes for representing an agent and multi-agent workflow, entirely separate from any application's own plugin/skill vocabulary.
+- A dedicated `mcp.md` file exists — MCP tool calls have their own semantic conventions, separate from generic tool calls.
+
+## Verdict on Lumen's design
+
+**`otel_request_ids: SmallVec&lt;[CompactString; 2]&gt;` on `CanonicalTranscript` is built backwards relative to the real spec.** The real correlator is `gen_ai.conversation.id` — one ID per session, attached to *many* per-call spans — not a small list of "request ids" collected at the transcript level. Lumen's field name and shape don't map cleanly onto either `gen_ai.conversation.id` (singular, session-scoped) or `gen_ai.response.id` (per-call, would need to live on `CanonicalTurn`, not the transcript). `OtelCorrelationAccumulator`'s "dedupe multiple IDs into a unique set" behavior only makes sense if it was implicitly modeling "one `gen_ai.response.id` per turn" — but that's not how it's named or where the field lives.
+
+**`otel_span_id: Option&lt;CompactString&gt;` on `CanonicalToolResult` conflates two distinct real concepts.** A real OTel *trace span_id* is a protocol-level 16-hex-char identifier from distributed tracing — a materially bigger feature (proper trace_id/span_id/parent-span linkage) than what `SpanMappingAccumulator` currently does (a flat `call_id → span_id string` map). What Lumen's `SpanMappingAccumulator` is actually trying to represent — correlating a tool invocation to *something* — already has a real, simpler answer: `gen_ai.tool.call.id`, which is functionally identical to the `call_id` field Lumen's `CanonicalToolCall`/`CanonicalToolResult` already have. If the goal is real distributed-tracing span correlation (linking into a Jaeger/Tempo backend), that's a legitimately bigger, currently-unscoped feature; if the goal was just "which tool call is this," Lumen may not need a new field at all.
+
+**Not represented in Lumen's canonical model at all, but standard:** `gen_ai.agent.name`/`gen_ai.workflow.name` for multi-agent representation — a cleaner, ecosystem-agnostic alternative to the `AttributionSource::{Plugin,Skill}` taxonomy problem found earlier this session (Antigravity's real plugin/skill concept doesn't map onto Lumen's enum; the OTel convention's agent/workflow attributes are generic enough that any orchestrator's adapter could plausibly populate them). Also unrepresented: `gen_ai.conversation.compacted` (Lumen has its own PreCompact snapshot-merge logic already — this is a real, standard way to flag the same concept for OTel export) and `gen_ai.request.previous_response.id` (a standard turn-threading mechanism Lumen's own turn-ordering doesn't need since it has `turn_index`, but relevant if Lumen ever *exports* OTel data rather than just correlating with externally-produced traces).
+
+**Bottom line**: neither `otel_request_ids` nor `otel_span_id` should be built as currently named/shaped without a redesign. The real spec gives exact target attribute names and a clear span/attribute structure to build against instead of inventing field names that sound OTel-adjacent.
+
+Sources:
+- [OpenTelemetry GenAI attribute registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
+- [gen-ai-spans.md, open-telemetry/semantic-conventions-genai](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md)
+- [open-telemetry/semantic-conventions-genai repo](https://github.com/open-telemetry/semantic-conventions-genai) (docs/gen-ai/ directory listing: anthropic.md, aws-bedrock.md, azure-ai-inference.md, gen-ai-agent-spans.md, gen-ai-events.md, gen-ai-exceptions.md, gen-ai-metrics.md, gen-ai-spans.md, mcp.md, openai.md)
+- Medium article (kartikdudeja21) returned HTTP 403, not accessible — not used as a source.</result>
+<usage><subagent_tokens>891465</subagent_tokens><tool_uses>6</tool_uses><duration_ms>103829</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aefbdea20b67f5565</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/aefbdea20b67f5565.output</output-file>
+<status>completed</status>
+<summary>Agent "Research OpenRouter pricing/model catalog" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## All nine sources researched — full synthesis
+
+**Pricing**: OpenRouter (`openrouter.ai/api/v1/models`) is a public, unauthenticated live feed with an explicit `cache_write` field — a good second source alongside LiteLLM, not a replacement.
+
+**Format knowledge**: `agent-session-parser` confirms Gemini CLI is real and distinct (`session.json`, not JSONL) — narrows but doesn't resolve the `~/.gemini/logs/` mystery. `agent-traces` surfaced a 4th format ("ATIF") not yet investigated, and its Codex detection rule contradicts what I verified live on this machine — a real discrepancy to flag, not treat as authoritative.
+
+**A genuine architecture critique of Lumen itself**: `agent-traces`' three-table design (sessions/events/content) was built specifically to avoid "the 80%-null problem of a single wide table" — which is exactly the shape `AnalysisReport` is becoming as more sparse, accumulator-specific fields pile on.
+
+**A third independent signal confirming the same gap**: VS Code/Copilot's real OTel metrics include edit-survival tracking (four-gram similarity survival, no-revert survival — did the user actually keep the agent's output). Combined with CodeBurn's user-correction-detection and retry-counting, that's three separate real tools all measuring "did this stick," and Lumen has none of it.
+
+**Two honest non-findings, reported as such rather than force-fit**: Google Business Messages is genuinely unrelated (different product). LangChain's agent-benchmarks page is marketing copy with zero statistical-rigor content — meaning Prism's `MetricDifferential` (exact percentage deltas from single trial runs, no variance treatment) remains a real, unaddressed gap that this research did not resolve.
+
+**Three competing classification philosophies now on record** for the eventual `SPEC-007-INSIGHTS` redesign — Lumen's cheap ratio-thresholds, CodeBurn's validated tool-signal+regex rules, and LangSmith's LLM-driven bottom-up clustering — a deliberate choice, not a default to whichever was found first.
+
+Everything's saved to memory (`lumen-adapter-accumulator-real-data-gaps` + the sibling-repos file), so this survives past this session. Ready to move into re-evaluating the specs and plan against all of it whenever you want to start.</result>
+<usage><subagent_tokens>895580</subagent_tokens><tool_uses>17</tool_uses><duration_ms>252736</duration_ms></usage>
+</task-notification>
+
+---
+
+What other research do we need to do before we commit to making updates? Have you extensivelly read the docs related to the tools I posted? Any relevant codebases that could give us information about hard earned lessons?
+
+---
+
+What about other open source projects that are doing something similar?
+
+---
+
+<task-notification>
+<task-id>a36fa28096e219ed5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/a36fa28096e219ed5.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Langfuse's session/trace data model" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Research Langfuse's (github.com/langfuse/langfuse, ~33k stars, OSS LLM observability platform) data model, OTel integration, session handling, scoring model, agent hierarchy, and cost calculation — for architectural lessons applicable to Lumen/Prism. Research only, no code/file changes.
+
+## Findings
+
+**1. Core data model — the single most useful finding.** Trace/Observation/Score are NOT in the Postgres/Prisma schema (`packages/shared/prisma/schema.prisma`) — they live in a separate ClickHouse (columnar OLAP) schema (`packages/shared/clickhouse/migrations/unclustered/0001_traces.up.sql`, `0002_observations.up.sql`, `0003_scores.up.sql`). This is itself a lesson: high-volume, append-heavy observability event data outgrew relational storage at their scale and was split into its own store; Postgres keeps only low-volume config/metadata (projects, users, `TraceSession`, `ScoreConfig`, etc.).
+
+- `traces`: one row per session-scoped root event, has a nullable `session_id` (just a string FK, no separate strong session-boundary table at this layer).
+- `observations`: `trace_id` FK + **`parent_observation_id` (nullable, self-referencing)** — an arbitrary-depth tree, not a fixed enum of levels. This is exactly the generalization Lumen's `CircuitBreakerAccumulator`'s single-level `parent-&gt;{agent_type}` pairing lacks for real multi-level subagent spawns.
+- `scores`: separate table, FK's to `trace_id` + optional `observation_id` (so a score can attach at session-level or single-call granularity), with `source` (string) and `data_type` (enum `CATEGORICAL|NUMERIC|BOOLEAN|TEXT`, from Postgres `ScoreConfigDataType`) — a generic, user-configurable evaluator-result schema, not fixed columns per grader type.
+- **Usage/cost fields are open maps, not fixed columns**: `usage_details Map(String, UInt64)` and `cost_details Map(String, Decimal64(12))`, each paired with a `provided_*` twin (raw as-reported vs. canonicalized). New token categories (reasoning tokens, a new cache tier) need no schema migration. Directly relevant to Lumen's stale hardcoded `pricing.rs`.
+- Both tables use `ReplacingMergeTree(event_ts, is_deleted)` — an idempotent, append-only, last-write-wins pattern for exactly this kind of out-of-order/duplicate/updated-event ingestion. This is a proven real answer to the session-forking/replay double-counting gap flagged for `CodexAdapter`.
+
+**2. OTel integration is real and substantial**: `packages/shared/src/server/otel/OtelIngestionProcessor.ts` + `ObservationTypeMapper.ts`. The type-mapper is a **priority-ordered, pluggable registry** of `SimpleAttributeMapper` (exact attribute-value → type lookup table) and `CustomAttributeMapper` (conditional logic) instances — not a hardcoded if/else — because different SDKs/frameworks emit `gen_ai.*` spans slightly differently. This is strong independent validation for the pluggable-registry redesign already proposed for Lumen's `SchemaExtractorAccumulator` — same underlying problem (heterogeneous producers of a nominally-standard format).
+
+**3. Session boundaries**: confirmed always explicit, never auto-detected. `TraceSession` (Prisma) is a near-empty shell (id, bookmarked, public, environment) — all real session semantics come from whatever `session_id` string the client SDK supplies. No automatic gap-timeout or boundary heuristic found anywhere in the schema layer.
+
+**4. Evaluation model**: `EvalTemplate` has `type: LLM_AS_JUDGE | CODE` only (no separate "pairwise" or "human" template type at the schema level — human scores just get `source` set differently on the same `scores` table). `EvaluatorBlockReason` enum handles judge-model failure states (auth, billing, endpoint unreachable) explicitly. **No bias-mitigation/anchor-randomization field found anywhere in the schema** — if Langfuse does anchor-order calibration for LLM-judges, it's runtime app logic, not a schema-level concept; not found after reasonable search, not claiming it doesn't exist.
+
+**5. Cost calculation**: `Model`/`Price`/`PricingTier` are real Postgres tables (schema.prisma lines 777, 802, 820) joined against `internal_model_id` on observations — i.e. **configurable, queryable pricing data, not a hardcoded match statement** — a direct structural answer to Lumen's `pricing.rs` staleness problem.
+
+Not found / not investigated further given scope: exact contents of `Price`/`PricingTier` schemas (only confirmed they exist as separate tables), live-feed vs. manual-update mechanism for pricing data, and whether/how LLM-judge calibration is implemented outside the schema.</result>
+<usage><subagent_tokens>147714</subagent_tokens><tool_uses>10</tool_uses><duration_ms>91259</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac9abc5dc09f9254d</task-id>
+<tool-use-id>toolu_012y5nJQVa7oxrXuUp2x93r5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/ac9abc5dc09f9254d.output</output-file>
+<status>completed</status>
+<summary>Agent "Research OpenLLMetry's gen_ai instrumentation code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Instrumentation span (root) created via `_instrumented_get_final_message`/similar — single span per LLM call, populated once the stream completes via `_complete_instrumentation()`. No per-chunk span. I have what I need to report.
+
+**Research directive**: investigate `traceloop/openllmetry`'s real instrumentation source for actual `gen_ai.*` attribute usage vs. the spec, tool-call span representation, streaming behavior, and cost attributes.
+
+**1. Attributes actually set (Anthropic instrumentation, `packages/opentelemetry-instrumentation-anthropic/opentelemetry/instrumentation/anthropic/span_utils.py`):**
+`gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`, `gen_ai.request.top_p`, `gen_ai.is_streaming`, `gen_ai.input_messages`/`gen_ai.output_messages`, `gen_ai.system_instructions`, `gen_ai.tool.definitions`, `gen_ai.response.finish_reasons`, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`/`output_tokens`/`total_tokens`. **`gen_ai.conversation.id` is never set anywhere in this file** — confirms it's aspirational at the direct-provider-instrumentation layer (makes sense: an Anthropic SDK call has no concept of "conversation," only whatever wraps it). `gen_ai.response.id` **is** populated in practice, matching spec. Tool calls are embedded as structured entries (`{"type": "tool_call", "id", "name", "arguments"}`) inside `gen_ai.input_messages`/`gen_ai.output_messages` — not a separate attribute or span, for this instrumentation path.
+
+**2. Real migration gap, confirmed and more severe than expected:** `packages/opentelemetry-semantic-conventions-ai/MIGRATION.md` documents a v0.4→v0.5 breaking change where OpenLLMetry's own legacy `LLM_*` namespace was partially aligned to the official `gen_ai.*` registry — but only *partially*. Attributes now split across two sources: upstream official (`GenAIAttributes.GEN_AI_*` from `opentelemetry-semantic-conventions`) for things the spec defines, and OpenLLMetry's own **non-standard** `SpanAttributes.GEN_AI_*` (same prefix, different package, project-invented) for things it doesn't — `GEN_AI_IS_STREAMING`, `GEN_AI_USAGE_TOTAL_TOKENS`, full prompt/completion capture, watsonx-specific fields. Even within one vendor's real code, exact attribute *string values* have changed across versions (e.g. `gen_ai.usage.cache_creation_input_tokens` → `gen_ai.usage.cache_creation.input_tokens`), and `gen_ai.system` enum values changed case (`"Anthropic"` → `"anthropic"`). Concretely validates the registry's own `stability: development` caveat — this is not theoretical churn.
+
+**3. Tool-call span representation — a real hybrid, more nuanced than a single model:** MCP instrumentation (`packages/opentelemetry-instrumentation-mcp/.../instrumentation.py`) creates a **dedicated child span per tool call** (`_handle_tool_call`, span named `"{tool_name}.tool"`), separate from the LLM-call span. But — striking finding — that span uses **zero official `gen_ai.tool.*` attributes**. It uses OpenLLMetry's own proprietary "Traceloop entity" vocabulary instead: `TRACELOOP_SPAN_KIND` (`"tool"`), `TRACELOOP_ENTITY_NAME`, `TRACELOOP_ENTITY_INPUT`/`OUTPUT`. So the real-world picture is bimodal: native function-calling (Anthropic/OpenAI direct) embeds tool calls as content on the parent LLM span; protocol-level tool calls (MCP) get their own span but via a vendor-specific attribute set, not the official `gen_ai.tool.call.id` this session's earlier research assumed would be used. Direct implication for Lumen: a `SpanMappingAccumulator` built strictly against the official registry's `gen_ai.tool.*` fields would miss how the most popular real OTel GenAI instrumentation library actually tags MCP tool spans today.
+
+**4. Streaming:** confirmed single span per call, not per-chunk. Streaming responses are wrapped in an iterator class that accumulates chunks and calls `_complete_instrumentation()` once exhausted, setting all attributes post-hoc at stream end. No incremental span updates. Good news for Lumen: a span is the same granularity as a completed turn regardless of streaming, so offline/batch parsing isn't fighting the live model.
+
+**5. Cost/pricing attributes:** not found anywhere in the instrumentation or MCP source (`grep -n "cost\|price\|USD\|pricing"` returned nothing). Cost is not emitted at the span level in this ecosystem — consistent with Lumen's existing downstream-pricing-table approach, not a gap OTel instrumentation closes for you.
+
+Not investigated this pass: the `traceloop-sdk` package itself (higher-level session/workflow wrapping, which might set `gen_ai.conversation.id` where the provider instrumentation doesn't) and the OpenAI/LangChain instrumentation packages — plausible `gen_ai.conversation.id` actually does get set one layer up, in framework-level instrumentation (LangChain tracks `session_id` natively), not provider-level. Flagging as an open thread, not claiming it either way.</result>
+<usage><subagent_tokens>150719</subagent_tokens><tool_uses>8</tool_uses><duration_ms>86879</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adcf063722773ff92</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/6dec8976-f415-4356-961a-ee2a630ad783/tasks/adcf063722773ff92.output</output-file>
+<status>completed</status>
+<summary>Agent "Research OpenHands' event/trajectory logging" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>One file per event (not JSONL append), indexed by position and UUID, with an explicit lockfile for concurrent writes — and an important caveat: they document that this locking scheme doesn't work reliably on NFS/network filesystems. That's the last piece I need. Reporting now.
+
+---
+
+**Task**: Research OpenHands' native Event/Action/Observation model, sub-agent delegation, loop detection, persistence, and compaction — as a structurally different vantage point (an agent framework's own live event stream, not a post-hoc parsed transcript).
+
+**Scope correction found immediately**: `OpenHands/OpenHands` (the repo the directive named) is now *only* the React/TypeScript frontend — confirmed via its own `AGENTS.md`, which documents a 5-repo split. The actual agent loop lives in `OpenHands/software-agent-sdk` (Python). All findings below are from that repo. Also noticed but out of scope: sibling repos `OpenHands/agent-analysis`, `OpenHands/trajectory-visualizer`, `OpenHands/rubric`, `OpenHands/critic-rubrics`, `OpenHands/ToM-SWE` — names suggest direct relevance to both Lumen (trajectory analysis) and Prism (grading/rubrics), worth a dedicated look later.
+
+**1. Event/Action/Observation hierarchy** (`openhands-sdk/openhands/sdk/event/base.py`): all events derive from one `Event` base with `id`, `timestamp`, `source`, and critically a `parent_id` — events form an explicit **tree**, not a flat list ("events sharing a parent_id are sibling branches"). This is structurally richer than a linear `CanonicalTranscript`. `LLMConvertibleEvent` subtypes reconstruct multi-tool-call LLM turns by grouping `ActionEvent`s sharing one `llm_response_id`.
+
+**2. Sub-agent delegation** (`openhands-tools/.../delegate/impl.py`): agents are spawned with user-chosen string IDs, not auto-generated, capped by `max_children` (default 5). Delegated tasks run in parallel via real threads, blocking until done. Sub-agent metrics are **replaced, not merged**, per `agent_id` on each delegation — an explicit anti-double-counting measure. Nesting is structural (any sub-agent can itself delegate) via the same `parent_id` tree, not a hardcoded one-level pair — directly contradicts Lumen's `CircuitBreakerAccumulator` model of a single `parent-&gt;{agent_type}` string key, which cannot represent multi-level or multiple-distinct-child spawns at all.
+
+**3. Loop/stuck detection** (`openhands-sdk/.../conversation/stuck_detector.py`): NOT graph-cycle-based — five independent pattern checks over a *windowed* (last 20 events, since last user message) scan: (a) identical action+observation repeated N times, (b) same action erroring N+1 times in a row (with a one-shot corrective "nudge" injected into the conversation, deduped so it doesn't refire on a frozen streak), (c) agent monologue — N consecutive agent messages with no user interruption, (d) alternating period-2 A-B-A-B pattern specifically (does not generalize to longer cycles), (e) context-window-error loop — explicitly `# TODO: blocked by` a tracked issue, i.e. a known, documented, unsolved gap even in this project. Equality checks explicitly ignore IDs/metrics, comparing only semantic content. Net: Lumen's Tarjan-SCC is more general (catches arbitrary-length cycles) than OpenHands' fixed-period pattern-matching — a second independent point in Lumen's favor — but OpenHands covers monologue and error-streak-with-live-intervention, two categories Lumen has nothing for.
+
+**4. Persistence** (`conversation/event_store.py`): one file per event under an `EVENTS_DIR`, indexed by both position and UUID, protected by a `.eventlog.lock` file — documented as unreliable on NFS/network filesystems. No live/persisted divergence: the store IS the reconstituted state (rebuilt by scan on load), not a separate export format.
+
+**5. Compaction** (`event/condenser.py`): a first-class `Condensation` event carries `forgotten_event_ids` (exact set removed) and an optional `summary`/`summary_offset` for where to splice a summary back in — more precise than a boolean flag; models exactly what was removed, not just that compaction happened.
+
+**Bonus, directly closes a flagged Lumen gap**: `event/hook_execution.py` defines a canonical `HookExecutionEvent` with `hook_event_type: Literal["PreToolUse","PostToolUse","UserPromptSubmit","SessionStart","SessionEnd","Stop"]`, `blocked`, `exit_code`, `action_id`/`message_id` correlation fields. This is a second, independent, structurally different confirmation (native event model, not OTel) that hook telemetry is its own first-class event type — not embedded in transcript text — matching the VS Code/Copilot OTel finding already on record.</result>
+<usage><subagent_tokens>167874</subagent_tokens><tool_uses>11</tool_uses><duration_ms>120826</duration_ms></usage>
+</task-notification>
+
+---
+
+Gemini might have a lot of flux because it's now moved to antigravity vs the old gemini-cli. look into that. For pricing we should keep the raw data in the accumulator right? And compute cost based on a DB of token, model, cost info that has a timestamp
+
+---
+
+Ok, how do we take all our learnings and apply to our specs and plans?
+
+---
+
+All done/
+
+---
+
+Let's commit and push
+
+---
+
+I'll reset context so we can get started on implementation. Give me the prompt to get a new session the full context to start implementation, focusing on a release to support prism.
