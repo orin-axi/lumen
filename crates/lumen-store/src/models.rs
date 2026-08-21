@@ -102,6 +102,22 @@ pub struct ToolCallReadModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandEventFactRecord {
+    pub command_base: String,
+    pub sanitized_args: Option<String>,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandEventReadModel {
+    pub id: i64,
+    pub session_id: i64,
+    pub command_base: String,
+    pub sanitized_args: Option<String>,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollupFactRecord {
     pub period_start: DateTime<Utc>,
     pub period_type: String,

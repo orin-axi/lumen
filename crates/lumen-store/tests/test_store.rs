@@ -517,3 +517,124 @@ fn test_rollup_repository_list_rollups_filters_orders_and_limits() {
     assert_eq!(weekly_rollups[0].period_start, weekly_1);
     assert_eq!(weekly_rollups[0].session_count, 100);
 }
+
+fn make_test_session_record(provider_session_id: &str) -> SessionFactRecord {
+    SessionFactRecord {
+        provider: "claude".to_string(),
+        provider_session_id: provider_session_id.to_string(),
+        model_family: "claude-3-5-sonnet-20241022".to_string(),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        started_at: Utc::now(),
+        ended_at: Utc::now(),
+        wall_duration_ms: 1000,
+        turn_count: 3,
+        economics: TokenEconomics {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            ephemeral_5m_tokens: 0,
+            ephemeral_1h_tokens: 0,
+            cache_hit_ratio: 0.0,
+            total_cost_usd: 0.01,
+            provided_cost_usd: None,
+            baseline_cost_no_cache_usd: 0.02,
+            net_savings_usd: 0.01,
+            efficiency_multiplier: 2.0,
+            per_model: std::collections::HashMap::new(),
+            reasoning_output_tokens: 0,
+        },
+        has_anomalies: false,
+    }
+}
+
+#[test]
+fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_insert_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-cmd-1")).unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    // Empty slice must insert zero rows without error.
+    cmd_repo.insert_command_events("sess-cmd-1", &[]).expect("empty slice insert failed");
+    let count_after_empty: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM command_events ce JOIN sessions s ON ce.session_id = s.id WHERE s.provider_session_id = ?1",
+            ["sess-cmd-1"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count_after_empty, 0);
+
+    let events = vec![
+        CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: Some("commit -m <REDACTED>".to_string()), is_error: false },
+        CommandEventFactRecord { command_base: "rm".to_string(), sanitized_args: None, is_error: true },
+    ];
+
+    cmd_repo.insert_command_events("sess-cmd-1", &events).expect("insert_command_events failed");
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM command_events ce JOIN sessions s ON ce.session_id = s.id WHERE s.provider_session_id = ?1",
+            ["sess-cmd-1"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2, "one row per record must be inserted (CRIT-LUMEN-123)");
+}
+
+#[test]
+fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_list_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-cmd-2")).unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    let events = vec![
+        CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: Some("push <REDACTED>".to_string()), is_error: false },
+        CommandEventFactRecord { command_base: "ls".to_string(), sanitized_args: None, is_error: false },
+    ];
+    cmd_repo.insert_command_events("sess-cmd-2", &events).expect("insert_command_events failed");
+
+    let listed = cmd_repo.list_by_session("sess-cmd-2").expect("list_by_session failed");
+    assert_eq!(listed.len(), 2);
+
+    assert_eq!(listed[0].command_base, "git");
+    assert_eq!(listed[0].sanitized_args, Some("push <REDACTED>".to_string()));
+    assert!(!listed[0].is_error);
+
+    assert_eq!(listed[1].command_base, "ls");
+    assert_eq!(listed[1].sanitized_args, None, "sanitized_args must round-trip the None case correctly");
+    assert!(!listed[1].is_error);
+}
+
+#[test]
+fn test_command_event_repository_nonexistent_session_returns_error() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_missing_session_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    let events =
+        vec![CommandEventFactRecord { command_base: "git".to_string(), sanitized_args: None, is_error: false }];
+
+    let insert_result = cmd_repo.insert_command_events("no-such-session", &events);
+    assert!(insert_result.is_err(), "insert_command_events against a nonexistent session must error, not silently corrupt data");
+    assert!(matches!(insert_result.unwrap_err(), StoreError::NotFound(_)));
+
+    let list_result = cmd_repo.list_by_session("no-such-session");
+    assert!(list_result.is_err(), "list_by_session against a nonexistent session must error");
+    assert!(matches!(list_result.unwrap_err(), StoreError::NotFound(_)));
+}
