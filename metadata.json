@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.3-nightly.202608200613.91a7fd7fc",
+  "checkpoint_id": "01M0HA950JZBYZHTQYSDBN1B1R",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-fixtures/Cargo.toml",
+    "crates/lumen-fixtures/src/corpus/antigravity.rs",
+    "crates/lumen-fixtures/src/corpus/corrupted.rs",
+    "crates/lumen-fixtures/src/corpus/mod.rs",
+    "crates/lumen-fixtures/src/corpus/opencode.rs",
+    "crates/lumen-fixtures/src/db.rs",
+    "crates/lumen-fixtures/src/lib.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 122734,
+    "cache_read_tokens": 1318302,
+    "output_tokens": 9433,
+    "api_call_count": 14
+  }
+}
