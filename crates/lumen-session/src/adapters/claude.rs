@@ -40,10 +40,12 @@ impl SessionAdapter for ClaudeCodeAdapter {
         let mut ended_at = Utc::now();
         let mut has_start = false;
 
-        let mut total_input: u64 = 0;
-        let mut total_output: u64 = 0;
-        let mut total_cache_creation: u64 = 0;
-        let mut total_cache_read: u64 = 0;
+        // One TurnPricingInput per real assistant turn with usage, priced independently at its
+        // own timestamp -- CRIT finding: this previously accumulated into scalar totals and
+        // priced the whole session as a single synthetic turn at the final timestamp, which both
+        // reported `turns: 1` regardless of the real turn count and priced any session spanning
+        // a rate-table change entirely at the last turn's rate.
+        let mut pricing_inputs: Vec<TurnPricingInput> = Vec::new();
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
         let mut otel_conversation_id: Option<CompactString> = None;
 
@@ -227,18 +229,36 @@ impl SessionAdapter for ClaudeCodeAdapter {
                         let cache_write = u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                         let cache_read = u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
 
-                        total_input += in_tok;
-                        total_output += out_tok;
-                        total_cache_creation += cache_write;
-                        total_cache_read += cache_read;
+                        // Real usage.cache_creation carries the 5m/1h split as a nested object
+                        // whose two fields sum to the flat cache_creation_input_tokens read
+                        // above; when absent (older cache-less turns), the whole write is 5m.
+                        let cache_write_1h = u
+                            .get("cache_creation")
+                            .and_then(|c| c.as_object())
+                            .and_then(|c| c.get("ephemeral_1h_input_tokens"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
 
-                        turn_usage = Some(TurnTokenUsage {
+                        // Real usage.output_tokens_details.thinking_tokens carries extended
+                        // thinking's reasoning token count for this turn.
+                        let reasoning = u
+                            .get("output_tokens_details")
+                            .and_then(|d| d.as_object())
+                            .and_then(|d| d.get("thinking_tokens"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        let usage = TurnTokenUsage {
                             input_tokens: in_tok,
                             output_tokens: out_tok,
                             cache_creation_tokens: cache_write,
+                            cache_creation_1h_tokens: cache_write_1h,
                             cache_read_tokens: cache_read,
-                            reasoning_tokens: 0,
-                        });
+                            reasoning_tokens: reasoning,
+                        };
+
+                        pricing_inputs.push(TurnPricingInput { usage, timestamp: ended_at, tier: None });
+                        turn_usage = Some(usage);
                     }
 
                     // Extract tool calls and text
@@ -353,22 +373,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
         let wall_duration_ms = (ended_at - started_at).num_milliseconds().max(0) as u64;
 
-        let economics = TokenEconomics::calculate(
-            &[TurnPricingInput {
-                usage: TurnTokenUsage {
-                    input_tokens: total_input,
-                    output_tokens: total_output,
-                    cache_creation_tokens: total_cache_creation,
-                    cache_read_tokens: total_cache_read,
-                    reasoning_tokens: 0,
-                },
-                timestamp: ended_at,
-                tier: None,
-            }],
-            &model_family,
-            &pricing::SEEDED,
-            last_cost_usd,
-        );
+        let economics = TokenEconomics::calculate(&pricing_inputs, &model_family, &pricing::SEEDED, last_cost_usd);
 
         Ok(CanonicalTranscript {
             session_id,

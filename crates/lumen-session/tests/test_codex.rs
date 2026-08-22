@@ -118,15 +118,16 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
     assert_eq!(transcript.economics.input_tokens, 1500);
     assert_eq!(transcript.economics.output_tokens, 110);
 
-    // model_family is now "gpt-5.6-terra" (Bug 4 fix), extracted from the fixture's real
-    // thread_settings.model field. It has no seeded pricing row, so PricingTable::rate_for
-    // falls back to claude-3-5-sonnet's rates (CRIT-LUMEN-008): $3.00/M input, $3.75/M
-    // cache-write, $0.30/M cache-read, $15.00/M output, $15.00/M reasoning.
-    let expected_cost = 1500.0 * 3.00 / 1_000_000.0
-        + 25.0 * 3.75 / 1_000_000.0
-        + 900.0 * 0.30 / 1_000_000.0
-        + 110.0 * 15.00 / 1_000_000.0
-        + 55.0 * 15.00 / 1_000_000.0;
+    // model_family is "gpt-5.6-terra" (Bug 4 fix), extracted from the fixture's real
+    // thread_settings.model field, and is now a real seeded model (official OpenAI pricing,
+    // developers.openai.com/api/docs/pricing, fetched 2026-08-21): $2.00/M input, $2.00/M
+    // cache-write (OpenAI has no separate cache-write charge), $0.20/M cache-read, $12.00/M
+    // output, $12.00/M reasoning (same judgment-call convention as every other seeded model).
+    let expected_cost = 1500.0 * 2.00 / 1_000_000.0
+        + 25.0 * 2.00 / 1_000_000.0
+        + 900.0 * 0.20 / 1_000_000.0
+        + 110.0 * 12.00 / 1_000_000.0
+        + 55.0 * 12.00 / 1_000_000.0;
     assert!(
         transcript.economics.total_cost_usd > 0.0,
         "a Codex session with a real service_tier must not silently price at $0.00"
@@ -136,6 +137,7 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
         "expected total_cost_usd {expected_cost}, got {}",
         transcript.economics.total_cost_usd
     );
+    assert!(transcript.economics.is_fully_priced, "gpt-5.6-terra is a real seeded model, not an unpriced fallback");
 }
 
 #[test]
@@ -152,13 +154,13 @@ fn test_codex_adapter_reasoning_tokens_flow_into_pricing_math() {
 
     assert_eq!(transcript.economics.reasoning_output_tokens, 55);
 
-    // model_family "gpt-5.6-terra" has no seeded pricing row and falls back to
-    // claude-3-5-sonnet's rates (see test_codex_adapter_prices_tiered_session_nonzero).
-    let cost_without_reasoning = 1500.0 * 3.00 / 1_000_000.0
-        + 25.0 * 3.75 / 1_000_000.0
-        + 900.0 * 0.30 / 1_000_000.0
-        + 110.0 * 15.00 / 1_000_000.0;
-    let reasoning_contribution = 55.0 * 15.00 / 1_000_000.0;
+    // model_family "gpt-5.6-terra" is a real seeded model (see
+    // test_codex_adapter_prices_tiered_session_nonzero for the sourced rates).
+    let cost_without_reasoning = 1500.0 * 2.00 / 1_000_000.0
+        + 25.0 * 2.00 / 1_000_000.0
+        + 900.0 * 0.20 / 1_000_000.0
+        + 110.0 * 12.00 / 1_000_000.0;
+    let reasoning_contribution = 55.0 * 12.00 / 1_000_000.0;
 
     assert!(
         (transcript.economics.total_cost_usd - (cost_without_reasoning + reasoning_contribution)).abs() < 1e-9,
