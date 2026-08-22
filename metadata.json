@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.10.3-nightly.202608210613.680d64782",
+  "checkpoint_id": "01M0KXBK0JPWWYMH2F5BZ2D4T8",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 15,
+  "files_touched": [
+    "crates/lumen-analysis/tests/test_analysis_pipeline.rs",
+    "crates/lumen-fixtures/Cargo.toml",
+    "crates/lumen-fixtures/src/corpus/opencode.rs",
+    "crates/lumen-fixtures/src/lib.rs",
+    "crates/lumen-session/Cargo.toml",
+    "crates/lumen-session/benches/fingerprint_bench.rs",
+    "crates/lumen-session/src/adapter.rs",
+    "crates/lumen-session/src/adapters/opencode.rs",
+    "crates/lumen-session/src/fingerprint.rs",
+    "crates/lumen-session/tests/test_fixtures_snapshots.rs",
+    "crates/lumen-session/tests/test_opencode.rs",
+    "crates/lumen-session/tests/test_stream_fuzzing.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1160,
+    "cache_creation_tokens": 3981826,
+    "cache_read_tokens": 272536082,
+    "output_tokens": 590551,
+    "api_call_count": 580
+  }
+}
