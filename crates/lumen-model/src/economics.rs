@@ -33,6 +33,12 @@ pub struct TokenEconomics {
     pub efficiency_multiplier: f32,
     pub per_model: HashMap<CompactString, ModelTokenSummary>,
     pub reasoning_output_tokens: u64,
+    /// `false` when `model_name` matched no seeded [`PricingTable`] row (see
+    /// [`PricingTable::is_recognized`]) -- callers must render cost as an explicit "unknown",
+    /// not `$0.00`, in that case. `total_cost_usd`/`net_savings_usd` are still `0.0` for an
+    /// unpriced model (every rate lookup returns 0.0), so this flag is the only signal
+    /// distinguishing a genuinely free session from an unpriced one.
+    pub is_fully_priced: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +50,8 @@ pub struct ModelTokenSummary {
     pub reasoning_tokens: u64,
     pub cost_usd: f64,
     pub turns: u64,
+    /// See [`TokenEconomics::is_fully_priced`].
+    pub is_fully_priced: bool,
 }
 
 impl TokenEconomics {
@@ -59,9 +67,12 @@ impl TokenEconomics {
         pricing: &PricingTable,
         provided_cost_usd: Option<f64>,
     ) -> Self {
+        let is_fully_priced = pricing.is_recognized(model_name);
+
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
         let mut cache_creation_tokens = 0u64;
+        let mut cache_creation_1h_tokens = 0u64;
         let mut cache_read_tokens = 0u64;
         let mut reasoning_tokens_total = 0u64;
         let mut total_cost_usd = 0.0f64;
@@ -72,13 +83,17 @@ impl TokenEconomics {
             let tier = turn.tier.as_deref();
 
             let input_rate = pricing.rate_for(model_name, tier, TokenRateKind::Input, turn.timestamp);
-            let cache_write_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite, turn.timestamp);
+            let cache_write_5m_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite, turn.timestamp);
+            let cache_write_1h_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite1h, turn.timestamp);
             let cache_read_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheRead, turn.timestamp);
             let output_rate = pricing.rate_for(model_name, tier, TokenRateKind::Output, turn.timestamp);
             let reasoning_rate = pricing.rate_for(model_name, tier, TokenRateKind::Reasoning, turn.timestamp);
 
+            let cache_write_5m_tokens = usage.cache_creation_tokens.saturating_sub(usage.cache_creation_1h_tokens);
+
             let turn_cost = (usage.input_tokens as f64 / 1_000_000.0) * input_rate
-                + (usage.cache_creation_tokens as f64 / 1_000_000.0) * cache_write_rate
+                + (cache_write_5m_tokens as f64 / 1_000_000.0) * cache_write_5m_rate
+                + (usage.cache_creation_1h_tokens as f64 / 1_000_000.0) * cache_write_1h_rate
                 + (usage.cache_read_tokens as f64 / 1_000_000.0) * cache_read_rate
                 + (usage.output_tokens as f64 / 1_000_000.0) * output_rate
                 + (usage.reasoning_tokens as f64 / 1_000_000.0) * reasoning_rate;
@@ -93,6 +108,7 @@ impl TokenEconomics {
             input_tokens += usage.input_tokens;
             output_tokens += usage.output_tokens;
             cache_creation_tokens += usage.cache_creation_tokens;
+            cache_creation_1h_tokens += usage.cache_creation_1h_tokens;
             cache_read_tokens += usage.cache_read_tokens;
             reasoning_tokens_total += usage.reasoning_tokens;
             total_cost_usd += turn_cost;
@@ -120,6 +136,7 @@ impl TokenEconomics {
                     reasoning_tokens: reasoning_tokens_total,
                     cost_usd: total_cost_usd,
                     turns: turns.len() as u64,
+                    is_fully_priced,
                 },
             );
         }
@@ -129,8 +146,8 @@ impl TokenEconomics {
             output_tokens,
             cache_creation_tokens,
             cache_read_tokens,
-            ephemeral_5m_tokens: cache_creation_tokens,
-            ephemeral_1h_tokens: 0,
+            ephemeral_5m_tokens: cache_creation_tokens.saturating_sub(cache_creation_1h_tokens),
+            ephemeral_1h_tokens: cache_creation_1h_tokens,
             cache_hit_ratio,
             total_cost_usd,
             provided_cost_usd,
@@ -139,6 +156,7 @@ impl TokenEconomics {
             efficiency_multiplier,
             per_model,
             reasoning_output_tokens: reasoning_tokens_total,
+            is_fully_priced,
         }
     }
 }

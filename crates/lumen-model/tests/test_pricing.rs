@@ -23,11 +23,15 @@ fn test_core_pricing_rates_and_unrecognized_model_fallback() {
     assert!((table.rate_for("qwen-2.5-coder", None, TokenRateKind::CacheRead, as_of) - 0.05).abs() < 1e-9);
     assert!((table.rate_for("qwen-2.5-coder", None, TokenRateKind::Output, as_of) - 0.60).abs() < 1e-9);
 
-    // CRIT-LUMEN-008: genuinely unrecognized model falls back to Claude 3.5 Sonnet's rates
+    // CRIT-LUMEN-008 (revised): a genuinely unrecognized model returns 0.0 for every kind --
+    // never another model's rate. Confirmed against real local session data that the earlier
+    // silent-fallback-to-Sonnet behavior mispriced every current real model (none of which are
+    // seeded under their old names), so callers must treat an unrecognized model as explicitly
+    // unpriced (see PricingTable::is_recognized) rather than receive a plausible-looking number.
+    assert!(!table.is_recognized("totally-unrecognized-model-xyz"));
     for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
         let unrecognized = table.rate_for("totally-unrecognized-model-xyz", None, kind, as_of);
-        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
-        assert!((unrecognized - sonnet).abs() < 1e-9, "fallback rate for {kind:?} should equal Sonnet's rate");
+        assert_eq!(unrecognized, 0.0, "unrecognized model must price at 0.0 for {kind:?}, never a substituted rate");
     }
 }
 
@@ -45,6 +49,7 @@ fn test_claude_sonnet_pricing_calculation() {
         cache_creation_tokens: 1_000_000, // $3.75 (1.25x)
         cache_read_tokens: 1_000_000,     // $0.30 (0.10x - 90% savings)
         reasoning_tokens: 0,
+        cache_creation_1h_tokens: 0,
     };
 
     let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
@@ -98,11 +103,12 @@ fn test_all_model_pricing_rates_and_fallbacks() {
     assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of), 0.025);
     assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of), 0.40);
 
-    // CRIT-LUMEN-008: Unrecognized model string defaults to Claude 3.5 Sonnet's rates
+    // CRIT-LUMEN-008 (revised): unrecognized model string prices at 0.0, never a substituted
+    // rate -- see test_core_pricing_rates_and_unrecognized_model_fallback for the full rationale.
+    assert!(!table.is_recognized("some-obscure-custom-llm-v1"));
     for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
         let unrecognized = table.rate_for("some-obscure-custom-llm-v1", None, kind, as_of);
-        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
-        assert_eq!(unrecognized, sonnet);
+        assert_eq!(unrecognized, 0.0);
     }
 }
 
@@ -127,6 +133,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_read_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -143,6 +150,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_read_tokens: 0,
             output_tokens: 500_000,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -159,6 +167,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
         cache_read_tokens: 300,
         output_tokens: 400,
         reasoning_tokens: 0,
+        cache_creation_1h_tokens: 0,
     };
     assert_eq!(usage.prompt_tokens(), 600);
 
@@ -171,6 +180,7 @@ fn test_token_economics_zero_division_clamping_and_scale() {
             cache_read_tokens: 50_000,
             output_tokens: 10_000,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -506,6 +516,7 @@ fn test_provided_cost_usd_twin_field() {
             cache_read_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
         timestamp: as_of,
         tier: None,
@@ -549,6 +560,7 @@ fn test_reasoning_tokens_priced_into_total_cost() {
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
         reasoning_tokens: 500_000,
+        cache_creation_1h_tokens: 0,
     };
 
     let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
@@ -625,15 +637,12 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
         "raw -exp-suffixed Gemini Flash model string must also normalize to gemini-2.0-flash"
     );
 
-    // CRIT-LUMEN-008 must still hold: a genuinely unrecognized model (normalizes to no seeded
-    // key at all) still falls back to claude-3-5-sonnet's rates.
+    // CRIT-LUMEN-008 (revised) must still hold: a genuinely unrecognized model (normalizes to no
+    // seeded key at all) prices at 0.0 for every kind, never a substituted rate.
+    assert!(!table.is_recognized("totally-fake-model-xyz-99999999"));
     for kind in [TokenRateKind::Input, TokenRateKind::CacheWrite, TokenRateKind::CacheRead, TokenRateKind::Output] {
         let unrecognized = table.rate_for("totally-fake-model-xyz-99999999", None, kind, as_of);
-        let sonnet = table.rate_for("claude-3-5-sonnet", None, kind, as_of);
-        assert!(
-            (unrecognized - sonnet).abs() < 1e-9,
-            "genuinely unrecognized model must still fall back to Sonnet's rate for {kind:?}"
-        );
+        assert_eq!(unrecognized, 0.0, "genuinely unrecognized model must price at 0.0 for {kind:?}");
     }
 
     // CRIT-LUMEN-161 must still hold: qwen-2.5-coder's missing CacheWrite row still returns
@@ -665,7 +674,6 @@ fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
     let as_of = Utc.with_ymd_and_hms(2024, 11, 1, 0, 0, 0).unwrap();
 
     let mini_rate = table.rate_for("gpt-4o-mini", None, TokenRateKind::Input, as_of);
-    let sonnet_rate = table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of);
     let gpt4o_rate = table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of);
 
     assert!((gpt4o_rate - 2.50).abs() < 1e-9, "sanity: gpt-4o's own seeded Input rate must still be $2.50/M");
@@ -674,11 +682,12 @@ fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
         "gpt-4o-mini must NOT be billed at gpt-4o's $2.50/M rate -- it is a distinct, much \
          cheaper real model"
     );
-    assert!(
-        (mini_rate - sonnet_rate).abs() < 1e-9,
+    assert!(!table.is_recognized("gpt-4o-mini"));
+    assert_eq!(
+        mini_rate, 0.0,
         "gpt-4o-mini is unrecognized after normalization (no seeded key matches once \"mini\" is \
-         correctly rejected as strippable), so it must fall back to Sonnet's $3.00/M rate per \
-         CRIT-LUMEN-008, got {mini_rate}"
+         correctly rejected as strippable), so it must price at 0.0 (explicitly unpriced), not a \
+         substituted rate, got {mini_rate}"
     );
 }
 
@@ -693,7 +702,6 @@ fn test_gemini_flash_lite_does_not_normalize_to_gemini_flash() {
 
     let lite_rate = table.rate_for("gemini-2.0-flash-lite", None, TokenRateKind::Input, as_of);
     let flash_rate = table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of);
-    let sonnet_rate = table.rate_for("claude-3-5-sonnet", None, TokenRateKind::Input, as_of);
 
     assert!((flash_rate - 0.10).abs() < 1e-9, "sanity: gemini-2.0-flash's own seeded Input rate must still be $0.10/M");
     assert!(
@@ -701,10 +709,11 @@ fn test_gemini_flash_lite_does_not_normalize_to_gemini_flash() {
         "gemini-2.0-flash-lite must NOT be billed at gemini-2.0-flash's rate -- it is a \
          distinct real model, not a version/scale suffix of flash"
     );
-    assert!(
-        (lite_rate - sonnet_rate).abs() < 1e-9,
-        "gemini-2.0-flash-lite is unrecognized after normalization, so it must fall back to \
-         Sonnet's rate per CRIT-LUMEN-008, got {lite_rate}"
+    assert!(!table.is_recognized("gemini-2.0-flash-lite"));
+    assert_eq!(
+        lite_rate, 0.0,
+        "gemini-2.0-flash-lite is unrecognized after normalization, so it must price at 0.0 \
+         (explicitly unpriced), not a substituted rate, got {lite_rate}"
     );
 }
 
@@ -762,7 +771,7 @@ fn test_seeded_static_matches_fresh_seed_table() {
         ("gpt-4o", None, TokenRateKind::Reasoning),
         ("deepseek-r1", None, TokenRateKind::CacheWrite),
         ("qwen-2.5-coder-32b-instruct", None, TokenRateKind::CacheWrite), // exercises the 0.0 no-substitution path
-        ("totally-unrecognized-model-xyz", None, TokenRateKind::Input),   // exercises the sonnet fallback path
+        ("totally-unrecognized-model-xyz", None, TokenRateKind::Input),   // exercises the unrecognized-model 0.0 path
     ];
 
     for (model, tier, kind) in cases {
@@ -773,4 +782,125 @@ fn test_seeded_static_matches_fresh_seed_table() {
             "pricing::SEEDED must match a fresh PricingTable::seed() for ({model}, {tier:?}, {kind:?})"
         );
     }
+}
+
+/// Current-generation models actually seen in real local session data this session (Claude
+/// Code's `message.model`, Codex's `payload.thread_settings.model`, AGY's protobuf model field),
+/// seeded from official first-party pricing pages (platform.claude.com, developers.openai.com,
+/// ai.google.dev) fetched 2026-08-21 -- see PricingTable::seed's doc comments for the exact
+/// source per model. Before this test existed, every one of these real model strings collapsed
+/// onto claude-3-5-sonnet's stale fallback rate; this locks in that they're now genuinely priced.
+#[test]
+fn test_current_generation_real_models_are_seeded_and_recognized() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap();
+
+    let cases: &[(&str, f64, f64, f64)] = &[
+        // (model, Input, Output, CacheRead) per MTok
+        ("claude-fable-5", 10.00, 50.00, 1.00),
+        ("claude-opus-5", 5.00, 25.00, 0.50),
+        ("claude-sonnet-5", 2.00, 10.00, 0.20),
+        ("claude-haiku-4-5", 1.00, 5.00, 0.10),
+        ("gpt-5.6-terra", 2.00, 12.00, 0.20),
+        ("gemini-3.7-flash", 0.75, 3.75, 0.075),
+    ];
+
+    for (model, input_rate, output_rate, cache_read_rate) in cases {
+        assert!(table.is_recognized(model), "{model} must be recognized after seeding");
+        assert!((table.rate_for(model, None, TokenRateKind::Input, as_of) - input_rate).abs() < 1e-9);
+        assert!((table.rate_for(model, None, TokenRateKind::Output, as_of) - output_rate).abs() < 1e-9);
+        assert!((table.rate_for(model, None, TokenRateKind::CacheRead, as_of) - cache_read_rate).abs() < 1e-9);
+    }
+
+    // Real request-time speed/effort suffixes observed in real OpenCode/AGY data must normalize
+    // to their base seeded row, not fall through to unrecognized.
+    assert!(table.is_recognized("gpt-5.6-terra-fast"));
+    assert_eq!(
+        table.rate_for("gpt-5.6-terra-fast", None, TokenRateKind::Input, as_of),
+        table.rate_for("gpt-5.6-terra", None, TokenRateKind::Input, as_of),
+    );
+    assert!(table.is_recognized("gemini-3.7-flash-high"));
+    assert_eq!(
+        table.rate_for("gemini-3.7-flash-high", None, TokenRateKind::Input, as_of),
+        table.rate_for("gemini-3.7-flash", None, TokenRateKind::Input, as_of),
+    );
+}
+
+/// Anthropic's real published 5m/1h cache-write multipliers (1.25x/2x input) confirmed via
+/// platform.claude.com/docs/en/about-claude/pricing -- each seeded Claude model must carry both
+/// rates distinctly, not collapse the 1h tier onto the 5m rate.
+#[test]
+fn test_claude_1h_cache_write_rate_is_distinct_from_5m() {
+    let table = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap();
+
+    let cases: &[(&str, f64, f64)] = &[
+        // (model, 5m CacheWrite, 1h CacheWrite1h)
+        ("claude-sonnet-5", 2.50, 4.00),
+        ("claude-opus-5", 6.25, 10.00),
+        ("claude-haiku-4-5", 1.25, 2.00),
+        ("claude-fable-5", 12.50, 20.00),
+    ];
+
+    for (model, rate_5m, rate_1h) in cases {
+        assert!((table.rate_for(model, None, TokenRateKind::CacheWrite, as_of) - rate_5m).abs() < 1e-9);
+        assert!((table.rate_for(model, None, TokenRateKind::CacheWrite1h, as_of) - rate_1h).abs() < 1e-9);
+    }
+}
+
+/// A turn whose cache_creation_tokens splits across both the 5m and 1h tiers must price each
+/// portion at its own distinct rate, not the whole amount at either rate -- the real bug this
+/// covers: Claude Code's real `usage.cache_creation.{ephemeral_5m_input_tokens,
+/// ephemeral_1h_input_tokens}` was read into the flat sum only, discarding which portion was 1h.
+#[test]
+fn test_mixed_5m_and_1h_cache_write_priced_at_distinct_rates() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap();
+
+    let usage = TurnTokenUsage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 1_000_000, // total write: 600k @ 5m rate + 400k @ 1h rate
+        cache_creation_1h_tokens: 400_000,
+        cache_read_tokens: 0,
+        reasoning_tokens: 0,
+    };
+
+    let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
+    let econ = TokenEconomics::calculate(&[turn], "claude-sonnet-5", &pricing, None);
+
+    // 600k @ $2.50/M (5m) + 400k @ $4.00/M (1h)
+    let expected = 0.600 * 2.50 + 0.400 * 4.00;
+    assert!((econ.total_cost_usd - expected).abs() < 1e-6);
+    assert_eq!(econ.ephemeral_5m_tokens, 600_000);
+    assert_eq!(econ.ephemeral_1h_tokens, 400_000);
+}
+
+/// The core honesty fix this pass makes: an unrecognized model must surface as explicitly
+/// unpriced via `is_fully_priced`, not report a cost that looks like a verified zero.
+#[test]
+fn test_unrecognized_model_sets_is_fully_priced_false() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap();
+
+    let usage = TurnTokenUsage {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_creation_tokens: 0,
+        cache_creation_1h_tokens: 0,
+        cache_read_tokens: 0,
+        reasoning_tokens: 0,
+    };
+    let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
+
+    let unrecognized =
+        TokenEconomics::calculate(std::slice::from_ref(&turn), "some-brand-new-model-nobody-seeded", &pricing, None);
+    assert!(!unrecognized.is_fully_priced);
+    assert_eq!(unrecognized.total_cost_usd, 0.0);
+    assert!(!unrecognized.per_model["some-brand-new-model-nobody-seeded"].is_fully_priced);
+
+    let recognized = TokenEconomics::calculate(&[turn], "claude-sonnet-5", &pricing, None);
+    assert!(recognized.is_fully_priced);
+    assert!(recognized.total_cost_usd > 0.0);
+    assert!(recognized.per_model["claude-sonnet-5"].is_fully_priced);
 }

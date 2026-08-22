@@ -40,6 +40,7 @@ fn test_concurrent_multithreaded_readers_and_writers() {
                                 cache_creation_tokens: 0,
                                 cache_read_tokens: 200,
                                 reasoning_tokens: 0,
+                                cache_creation_1h_tokens: 0,
                             },
                             timestamp: Utc::now(),
                             tier: None,

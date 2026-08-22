@@ -173,6 +173,9 @@ impl<'a> SessionRepository<'a> {
                             efficiency_multiplier: efficiency,
                             per_model: std::collections::HashMap::new(),
                             reasoning_output_tokens: 0,
+                            // Not yet a persisted column -- same pre-existing read-back gap as
+                            // reasoning_tokens above.
+                            is_fully_priced: true,
                         },
                         tool_counts: BTreeMap::new(),
                         error_counts: BTreeMap::new(),

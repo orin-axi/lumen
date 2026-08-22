@@ -190,6 +190,7 @@ fn test_context_growth_and_autonomy_accumulators() {
             cache_read_tokens: 500,
             output_tokens: 50,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
     cg.update(&t1);
@@ -218,6 +219,7 @@ fn test_context_growth_and_autonomy_accumulators() {
             cache_read_tokens: 500,
             output_tokens: 80,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
     cg.update(&t2);
@@ -271,6 +273,7 @@ fn test_context_growth_skips_missing_usage_and_zero_growth_floor() {
             cache_read_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
 
@@ -368,6 +371,7 @@ fn test_context_growth_real_zero_prompt_tokens_not_confused_with_unset_previous(
             cache_read_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
 
@@ -843,6 +847,7 @@ fn test_subagent_and_plugin_skill_attribution() {
             cache_read_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
 
@@ -956,6 +961,7 @@ fn test_by_subagent_keyed_by_subagent_role_when_session_ids_collide() {
             cache_read_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
     };
 

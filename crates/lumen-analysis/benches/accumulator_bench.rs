@@ -30,6 +30,7 @@ fn synthetic_transcript(turn_count: usize) -> CanonicalTranscript {
                 cache_creation_tokens: 0,
                 cache_read_tokens: 900,
                 reasoning_tokens: 0,
+                cache_creation_1h_tokens: 0,
             }),
         })
         .collect();

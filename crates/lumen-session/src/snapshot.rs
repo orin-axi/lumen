@@ -31,6 +31,7 @@ pub fn merge_precompact_snapshots(
                 cache_creation_tokens: max_cache_creation,
                 cache_read_tokens: max_cache_read,
                 reasoning_tokens: 0,
+                cache_creation_1h_tokens: 0,
             },
             timestamp: merged.timing.ended_at,
             tier: None,
@@ -74,6 +75,7 @@ mod tests {
                         cache_creation_tokens: 500,
                         cache_read_tokens: 2000,
                         reasoning_tokens: 0,
+                        cache_creation_1h_tokens: 0,
                     },
                     timestamp: Utc::now(),
                     tier: None,
@@ -98,6 +100,7 @@ mod tests {
                 cache_creation_tokens: 1000,
                 cache_read_tokens: 5000,
                 reasoning_tokens: 0,
+                cache_creation_1h_tokens: 0,
             },
             TurnTokenUsage {
                 input_tokens: 200,
@@ -105,6 +108,7 @@ mod tests {
                 cache_creation_tokens: 800,
                 cache_read_tokens: 4000,
                 reasoning_tokens: 0,
+                cache_creation_1h_tokens: 0,
             },
         ];
 

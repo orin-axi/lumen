@@ -51,6 +51,9 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                     reasoning_tokens: 0,
                     cost_usd: 0.0,
                     turns: 0,
+                    // Placeholder -- this raw accumulation pass hasn't priced anything yet;
+                    // `finalize` below replaces every entry with a freshly priced one.
+                    is_fully_priced: true,
                 });
 
                 entry.input_tokens += in_tok;
@@ -75,6 +78,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
         let mut total_reasoning = 0u64;
         let mut total_cost = 0.0f64;
         let mut total_baseline = 0.0f64;
+        let mut all_fully_priced = true;
 
         for (model_name, summary) in &self.per_model {
             let priced = TokenEconomics::calculate(
@@ -83,6 +87,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                         input_tokens: summary.input_tokens,
                         output_tokens: summary.output_tokens,
                         cache_creation_tokens: summary.cache_creation_tokens,
+                        cache_creation_1h_tokens: 0,
                         cache_read_tokens: summary.cache_read_tokens,
                         reasoning_tokens: summary.reasoning_tokens,
                     },
@@ -101,6 +106,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
             total_reasoning += summary.reasoning_tokens;
             total_cost += priced.total_cost_usd;
             total_baseline += priced.baseline_cost_no_cache_usd;
+            all_fully_priced &= priced.is_fully_priced;
 
             merged_per_model.insert(
                 model_name.clone(),
@@ -112,6 +118,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
                     reasoning_tokens: summary.reasoning_tokens,
                     cost_usd: priced.total_cost_usd,
                     turns: summary.turns,
+                    is_fully_priced: priced.is_fully_priced,
                 },
             );
         }
@@ -137,6 +144,7 @@ impl RawMessageAccumulator for TokenUsageAccumulator {
             efficiency_multiplier,
             per_model: merged_per_model,
             reasoning_output_tokens: total_reasoning,
+            is_fully_priced: all_fully_priced,
         }
     }
 }

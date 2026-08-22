@@ -105,9 +105,13 @@ impl<'a> TokenUsageRepository<'a> {
                         output_tokens: output_tokens as u64,
                         cache_creation_tokens: cache_creation_tokens as u64,
                         cache_read_tokens: cache_read_tokens as u64,
+                        // reasoning_tokens and is_fully_priced are not yet persisted columns --
+                        // pre-existing read-back gap, tracked alongside the other economics
+                        // fields already known to be lost on store round-trip.
                         reasoning_tokens: 0,
                         cost_usd,
                         turns: turns as u64,
+                        is_fully_priced: true,
                     },
                 ))
             })

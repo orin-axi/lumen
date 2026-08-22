@@ -107,6 +107,7 @@ fn test_session_repository_idempotent_upsert_and_list() {
             efficiency_multiplier: 2.58,
             per_model: std::collections::HashMap::new(),
             reasoning_output_tokens: 0,
+            is_fully_priced: true,
         },
         has_anomalies: false,
     };
@@ -200,6 +201,7 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
             efficiency_multiplier: 2.0,
             per_model: std::collections::HashMap::new(),
             reasoning_output_tokens: 0,
+            is_fully_priced: true,
         },
         has_anomalies: false,
     };
@@ -290,6 +292,7 @@ fn test_tool_call_repository_counts_by_session() {
             efficiency_multiplier: 2.0,
             per_model: std::collections::HashMap::new(),
             reasoning_output_tokens: 0,
+            is_fully_priced: true,
         },
         has_anomalies: false,
     };
@@ -380,6 +383,7 @@ fn test_session_repository_get_session_populates_tool_counts_from_internal_id() 
             efficiency_multiplier: 2.0,
             per_model: std::collections::HashMap::new(),
             reasoning_output_tokens: 0,
+            is_fully_priced: true,
         },
         has_anomalies: false,
     };
@@ -565,6 +569,7 @@ fn make_test_session_record(provider_session_id: &str) -> SessionFactRecord {
             efficiency_multiplier: 2.0,
             per_model: std::collections::HashMap::new(),
             reasoning_output_tokens: 0,
+            is_fully_priced: true,
         },
         has_anomalies: false,
     }
@@ -586,6 +591,7 @@ fn empty_token_economics() -> TokenEconomics {
         efficiency_multiplier: 1.0,
         per_model: std::collections::HashMap::new(),
         reasoning_output_tokens: 0,
+        is_fully_priced: true,
     }
 }
 
@@ -794,6 +800,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
             reasoning_tokens: 0,
             cost_usd: 1.25,
             turns: 3,
+            is_fully_priced: true,
         },
     );
     per_model.insert(
@@ -806,6 +813,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
             reasoning_tokens: 0,
             cost_usd: 2.50,
             turns: 5,
+            is_fully_priced: true,
         },
     );
 
@@ -824,6 +832,7 @@ fn test_token_usage_repository_insert_one_row_per_model_with_direct_field_mappin
         efficiency_multiplier: 1.0,
         per_model,
         reasoning_output_tokens: 0,
+        is_fully_priced: true,
     };
 
     let token_repo = TokenUsageRepository::new(&conn);
@@ -919,6 +928,7 @@ fn multi_model_economics(sonnet_turns: u64, opus_turns: u64) -> TokenEconomics {
             reasoning_tokens: 0,
             cost_usd: 1.25,
             turns: sonnet_turns,
+            is_fully_priced: true,
         },
     );
     per_model.insert(
@@ -931,6 +941,7 @@ fn multi_model_economics(sonnet_turns: u64, opus_turns: u64) -> TokenEconomics {
             reasoning_tokens: 0,
             cost_usd: 2.50,
             turns: opus_turns,
+            is_fully_priced: true,
         },
     );
 
@@ -949,6 +960,7 @@ fn multi_model_economics(sonnet_turns: u64, opus_turns: u64) -> TokenEconomics {
         efficiency_multiplier: 1.0,
         per_model,
         reasoning_output_tokens: 0,
+        is_fully_priced: true,
     }
 }
 
@@ -1009,6 +1021,7 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
             reasoning_tokens: 0,
             cost_usd: 0.10,
             turns: 2,
+            is_fully_priced: true,
         },
     );
     record.economics = TokenEconomics {
@@ -1026,6 +1039,7 @@ fn test_upsert_session_reupsert_replaces_token_usage_without_duplicating_rows() 
         efficiency_multiplier: 1.0,
         per_model: second_per_model.clone(),
         reasoning_output_tokens: 0,
+        is_fully_priced: true,
     };
     session_repo.upsert_session(&record).expect("second upsert_session failed");
 

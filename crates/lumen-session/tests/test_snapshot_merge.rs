@@ -30,6 +30,7 @@ fn test_merge_precompact_snapshots_max_invariant() {
                     cache_creation_tokens: 2000,
                     cache_read_tokens: 15000,
                     reasoning_tokens: 0,
+                    cache_creation_1h_tokens: 0,
                 },
                 timestamp: fixed_ts,
                 tier: None,
@@ -54,6 +55,7 @@ fn test_merge_precompact_snapshots_max_invariant() {
             cache_creation_tokens: 1000,
             cache_read_tokens: 40000, // Higher peak cache read
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
         TurnTokenUsage {
             input_tokens: 25000,
@@ -61,6 +63,7 @@ fn test_merge_precompact_snapshots_max_invariant() {
             cache_creation_tokens: 2000,
             cache_read_tokens: 35000,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         },
     ];
 

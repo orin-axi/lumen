@@ -69,7 +69,15 @@ pub struct CanonicalToolResult {
 pub struct TurnTokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Total cache-write tokens across both the 5-minute and 1-hour ephemeral tiers. Always
+    /// `>= cache_creation_1h_tokens`, the 1h-tier subset priced separately at the long-lived
+    /// cache-write rate; the remainder (`cache_creation_tokens - cache_creation_1h_tokens`) is
+    /// priced at the default 5-minute rate.
     pub cache_creation_tokens: u64,
+    /// The subset of `cache_creation_tokens` written to the 1-hour ephemeral tier specifically
+    /// (real Claude Code data publishes this split via `usage.cache_creation.ephemeral_1h_input_tokens`,
+    /// alongside `ephemeral_5m_input_tokens` -- the two sum to `cache_creation_tokens`).
+    pub cache_creation_1h_tokens: u64,
     pub cache_read_tokens: u64,
     pub reasoning_tokens: u64,
 }

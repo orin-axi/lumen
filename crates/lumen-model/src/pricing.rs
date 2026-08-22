@@ -5,7 +5,12 @@ use compact_str::CompactString;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenRateKind {
     Input,
+    /// Default/short-lived cache write (Anthropic's 5-minute ephemeral tier; the only cache
+    /// write tier for providers that don't publish a separate long-lived rate).
     CacheWrite,
+    /// Long-lived cache write (Anthropic's 1-hour ephemeral tier). Only seeded for providers
+    /// that publish a distinct rate for it -- see CacheWrite's doc comment.
+    CacheWrite1h,
     CacheRead,
     Output,
     Reasoning,
@@ -116,6 +121,56 @@ impl PricingTable {
         push("gemini-2.0-pro", TokenRateKind::CacheRead, 0.30);
         push("gemini-2.0-pro", TokenRateKind::Output, 5.00);
 
+        // Current-generation models, seeded from official first-party pricing pages fetched
+        // 2026-08-21 (not third-party aggregator sites -- see the pricing-audit finding this
+        // table's earlier rows had silently gone stale against every model actually seen in
+        // real local session data). Re-verify against the source page before trusting these
+        // past any provider-announced price change.
+
+        // Anthropic, platform.claude.com/docs/en/about-claude/pricing -- Input / 5m Cache Write
+        // (1.25x input) / 1h Cache Write (2x input) / Cache Read (0.1x input) / Output, uniform
+        // multiplier pattern confirmed across the whole table on that page.
+        push("claude-fable-5", TokenRateKind::Input, 10.00);
+        push("claude-fable-5", TokenRateKind::CacheWrite, 12.50);
+        push("claude-fable-5", TokenRateKind::CacheWrite1h, 20.00);
+        push("claude-fable-5", TokenRateKind::CacheRead, 1.00);
+        push("claude-fable-5", TokenRateKind::Output, 50.00);
+
+        push("claude-opus-5", TokenRateKind::Input, 5.00);
+        push("claude-opus-5", TokenRateKind::CacheWrite, 6.25);
+        push("claude-opus-5", TokenRateKind::CacheWrite1h, 10.00);
+        push("claude-opus-5", TokenRateKind::CacheRead, 0.50);
+        push("claude-opus-5", TokenRateKind::Output, 25.00);
+
+        push("claude-sonnet-5", TokenRateKind::Input, 2.00);
+        push("claude-sonnet-5", TokenRateKind::CacheWrite, 2.50);
+        push("claude-sonnet-5", TokenRateKind::CacheWrite1h, 4.00);
+        push("claude-sonnet-5", TokenRateKind::CacheRead, 0.20);
+        push("claude-sonnet-5", TokenRateKind::Output, 10.00);
+
+        push("claude-haiku-4-5", TokenRateKind::Input, 1.00);
+        push("claude-haiku-4-5", TokenRateKind::CacheWrite, 1.25);
+        push("claude-haiku-4-5", TokenRateKind::CacheWrite1h, 2.00);
+        push("claude-haiku-4-5", TokenRateKind::CacheRead, 0.10);
+        push("claude-haiku-4-5", TokenRateKind::Output, 5.00);
+
+        // OpenAI, developers.openai.com/api/docs/pricing -- short-context tier (OpenAI has no
+        // separate cache-write charge; writing to cache costs the standard input rate, only a
+        // cache read/hit is discounted, mirroring the existing gpt-4o row's convention below).
+        push("gpt-5.6-terra", TokenRateKind::Input, 2.00);
+        push("gpt-5.6-terra", TokenRateKind::CacheWrite, 2.00);
+        push("gpt-5.6-terra", TokenRateKind::CacheRead, 0.20);
+        push("gpt-5.6-terra", TokenRateKind::Output, 12.00);
+
+        // Google, ai.google.dev/gemini-api/docs/pricing -- introductory rate valid through
+        // 2026-12-31 (doubles 2027-01-01; not seeded here, add a second dated row with
+        // effective_from = 2027-01-01 when that boundary is reached). No separate cache-write
+        // charge published, same convention as the gpt-5.6-terra/gemini-2.0-flash rows.
+        push("gemini-3.7-flash", TokenRateKind::Input, 0.75);
+        push("gemini-3.7-flash", TokenRateKind::CacheWrite, 0.75);
+        push("gemini-3.7-flash", TokenRateKind::CacheRead, 0.075);
+        push("gemini-3.7-flash", TokenRateKind::Output, 3.75);
+
         // Adversarial finding (high severity): reasoning tokens were tracked
         // (TurnTokenUsage/TokenEconomics::reasoning_output_tokens) but had no rate row at all,
         // so no adapter could ever price them. OpenAI's reasoning-capable models (the o-series
@@ -142,6 +197,12 @@ impl PricingTable {
             ("glm-4-plus", 1.40),
             ("gemini-2.0-flash", 0.40),
             ("gemini-2.0-pro", 5.00),
+            ("claude-fable-5", 50.00),
+            ("claude-opus-5", 25.00),
+            ("claude-sonnet-5", 10.00),
+            ("claude-haiku-4-5", 5.00),
+            ("gpt-5.6-terra", 12.00),
+            ("gemini-3.7-flash", 3.75),
         ] {
             push(model, TokenRateKind::Reasoning, output_rate);
         }
@@ -210,7 +271,16 @@ impl PricingTable {
             }
         }
 
-        matches!(segment, "exp" | "latest" | "preview" | "instruct" | "chat")
+        // "fast"/"high" cover real observed request-time speed/effort variant suffixes
+        // (gpt-5.6-terra-fast, gemini-3.7-flash-high) that carry no separately published price
+        // for their provider. This is a deliberate, narrower judgment call than the rest of this
+        // allowlist: Anthropic's "fast mode" IS a genuinely different, separately published
+        // 2x-priced product (confirmed on platform.claude.com/docs/en/about-claude/pricing) --
+        // but it is applied via a request parameter (`speed: "fast"`), never observed embedded
+        // in a real `message.model` string this session. If a provider ever starts encoding
+        // "-fast"/"-high" as part of the model name string for a genuinely different-priced
+        // tier, this allowlist entry would silently mis-price it -- revisit if that's observed.
+        matches!(segment, "exp" | "latest" | "preview" | "instruct" | "chat" | "fast" | "high")
     }
 
     /// Byte length of the '-'-joined prefix consisting of the first `count` elements of
@@ -221,12 +291,27 @@ impl PricingTable {
         joined_len + count.saturating_sub(1)
     }
 
+    /// Whether `model` -- after normalizing away any provider-versioning suffix -- matches at
+    /// least one seeded row. Callers use this to distinguish "priced at 0.0 because this model
+    /// genuinely has no cost for this token kind" from "priced at 0.0 because this model has no
+    /// seeded pricing at all" (an unrecognized model), the latter of which must be surfaced to
+    /// the user as an explicit unknown cost, not a silent (and previously wrong) dollar figure.
+    pub fn is_recognized(&self, model: &str) -> bool {
+        self.normalize_model_key(model).is_some()
+    }
+
     /// Looks up the rate for (model, tier, kind) whose effective window contains `as_of`.
-    /// Falls back to `claude-3-5-sonnet`'s rate for the requested kind when the model
-    /// string -- after normalizing away any provider-versioning suffix -- matches no row at
-    /// all (CRIT-LUMEN-008). When the model IS recognized (matches at least one row, possibly
-    /// only after normalization) but has no row for this specific (tier, kind, as_of), returns
-    /// 0.0 directly rather than substituting another model's rate (CRIT-LUMEN-161).
+    /// Returns 0.0, never a substituted rate from a different model, when the model string --
+    /// after normalizing away any provider-versioning suffix -- matches no row at all: an
+    /// earlier version of this function fell back to `claude-3-5-sonnet`'s rate for any
+    /// unrecognized model, which silently mispriced every real session using a model outside
+    /// the seeded set (confirmed against real local session data: every current Claude, GPT, and
+    /// Gemini model in use collapsed onto Sonnet's rate). Callers that need to distinguish this
+    /// case from a genuinely free/zero-rate row must call [`is_recognized`] separately -- this
+    /// function's 0.0 return alone is ambiguous between the two. When the model IS recognized
+    /// but has no row for this specific (tier, kind, as_of), also returns 0.0 (CRIT-LUMEN-161).
+    ///
+    /// [`is_recognized`]: Self::is_recognized
     ///
     /// When a specific `tier` is requested but `lookup_model` has no row matching that exact
     /// tier for this (kind, as_of), falls back to `lookup_model`'s own `tier: None` row for the
@@ -235,8 +320,7 @@ impl PricingTable {
     /// CodexAdapter's captured `service_tier`) matched zero rows and silently priced at 0.0. A
     /// row that matches the exact requested tier still always wins over this fallback.
     pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
-        let normalized = self.normalize_model_key(model);
-        let lookup_model = normalized.unwrap_or("claude-3-5-sonnet");
+        let lookup_model = self.normalize_model_key(model).unwrap_or(model);
 
         let matching = |wanted_tier: Option<&str>| {
             self.rates
