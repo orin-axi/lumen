@@ -6154,3 +6154,7 @@ No standards body documents a specific "unknown model" fallback convention — g
 Lumen's flat `CanonicalTurn` list is workably close to prior art but loses tree structure others keep. Don't rewrite to a full span tree now — not worth the churn for the current need — but the adapter-contract fix should mirror Weaver's shape: a small schema/golden-test asserting each adapter's real output (model-family fallback behavior, required fields) against a shared contract, checked in CI, not just a doc comment. No existing Rust crate does the ingestion-normalization half of this (all three tools are ingest-your-own-instrumented-app, not parse-someone-else's-log-format) — that part stays bespoke.</result>
 <usage><subagent_tokens>804417</subagent_tokens><tool_uses>5</tool_uses><duration_ms>58002</duration_ms></usage>
 </task-notification>
+
+---
+
+How should we adjust our plan and specs? Any new specs we should write? We're close to our context window max so we need a plan to save what we need to do the next set of work please
