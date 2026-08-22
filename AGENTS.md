@@ -23,12 +23,17 @@ Lumen is a multi-orchestrator telemetry, session intelligence, and token economi
 │ Layer 2: lumen-analysis           │ FSL-1.1-MIT                        │
 │          lumen-pattern            │ 22 Accumulators, Trajectory DAG    │
 ├───────────────────────────────────┼────────────────────────────────────┤
+│ Layer 2.5: lumen-store            │ FSL-1.1-MIT                        │
+│            lumen-fixtures         │ SQLite Persistence & Test Doubles  │
+├───────────────────────────────────┼────────────────────────────────────┤
 │ Layer 4: lumen-cli                │ FSL-1.1-MIT                        │
 │                                   │ Standalone CLI & Telemetry Tools   │
 └───────────────────────────────────┴────────────────────────────────────┘
 ```
 
-> **CRITICAL RULE (Layer Licensing Boundaries)**: Layer 1 (`lumen-model`) and Layer 1.5 (`lumen-session`) MUST NOT depend on Layer 2 or Layer 4 crates (`lumen-analysis`, `lumen-pattern`, `lumen-cli`). Layer 1/1.5 crates must remain permissive (`MIT OR Apache-2.0`) and standalone.
+> **CRITICAL RULE (Layer Licensing Boundaries)**: Layer 1 (`lumen-model`) and Layer 1.5 (`lumen-session`) MUST NOT depend, as a runtime `[dependencies]` entry, on Layer 2/2.5/4 crates (`lumen-analysis`, `lumen-pattern`, `lumen-store`, `lumen-fixtures`, `lumen-cli`). Layer 1/1.5 crates must remain permissive (`MIT OR Apache-2.0`) at the package-license level.
+>
+> **Known gap, not yet resolved (audit finding, 2026-08-22):** `lumen-session`'s own `[dev-dependencies]` include `lumen-fixtures` (for adapter test fixtures), which itself depends on `lumen-store` (both FSL-1.1-MIT) — so `cargo test -p lumen-session` currently pulls FSL-licensed code into a crate documented as "standalone." `lumen-model` has no such dependency. This rule was written without an explicit dev-dependency carve-out; either add one here (dev/test-only FSL dependencies are permitted, since they never ship in the published crate) or move the fixtures that need `lumen-store` into a separate test-only crate so `lumen-session`'s full build graph — not just its published one — stays MIT/Apache-2.0. Not resolved as of 2026-08-22; pick one before treating this rule as satisfied again.
 
 ---
 

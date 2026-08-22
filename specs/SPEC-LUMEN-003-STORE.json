@@ -117,9 +117,10 @@
     },
     {
       "id": "CRIT-LUMEN-037",
-      "criterion": "WHEN command events are inserted, THE SYSTEM SHALL store command_base and redacted argument patterns, ensuring zero raw private arguments are persisted.",
+      "criterion": "WHEN command events are inserted, THE SYSTEM SHALL store command_base and redacted argument patterns, ensuring zero raw private arguments are persisted. IMPLEMENTATION CORRECTION NEEDED (2026-08-22, HIGH severity, adversarially verified, not yet fixed): the current redact_args (command_event.rs) tokenizes on plain whitespace and treats any token starting with a single '-' as an opaque, always-preserved flag -- reproduced with real inputs: '--api-key -sk-live-abc123SECRET' and 'mysql -pMySecretPassword123' both pass through with the secret-bearing token completely unredacted, because 'starts with -' is a CLI-parsing convention, not a security boundary. THE SYSTEM SHALL instead: (1) tokenize with a real shell-word-splitting algorithm (e.g. via the shlex or shell-words crate) so quoted multi-word arguments split correctly, and (2) determine what to redact by the SHAPE of the token's value (entropy-based secret detection, the model used by gitleaks/ripsecrets/trufflehog -- flag a token as a likely secret when its character-diversity makes random occurrence implausible, regardless of whether it starts with '-'), optionally backed by a small regex allowlist for known secret prefixes (sk-, ghp_, xox, etc.). Flag NAMES (not values) remain safe to preserve verbatim, consistent with Langfuse's documented masking approach (structure-preserving redaction, not whole-text scrubbing) -- only the signal for 'is this a value' changes.",
       "is_error_case": false,
-      "judgment_call": false
+      "judgment_call": false,
+      "reasoning": "Research (2026-08-22) confirmed real prior art for the fix: shlex/shell-words (both real, maintained, confirmed via docs.rs) solve the tokenization half; ripsecrets/gitleaks' entropy-based approach solves the detection half. Neither crate alone solves the whole problem -- tokenization and redaction-signal are two separate layers that need composing."
     },
     {
       "id": "CRIT-LUMEN-039",
@@ -180,6 +181,13 @@
       "criterion": "WHEN insert_token_usage is called with a TokenEconomics value, THE SYSTEM SHALL insert one token_usage row per entry in TokenEconomics.per_model, using that entry's ModelTokenSummary fields directly (no intermediate record type).",
       "is_error_case": false,
       "judgment_call": false
+    },
+    {
+      "id": "CRIT-LUMEN-174",
+      "criterion": "DECISION NEEDED, NOT YET RESOLVED (2026-08-22). CommandEventRepository, FindingsRepository, QueueRepository, RollupRepository, SnapshotRepository, and ToolCallRepository (6 of lumen-store's 7 repositories, 23 public methods, ~555 lines) are fully implemented and exported but have zero call sites in lumen-cli, the only current production consumer -- only SessionRepository is used. THE SYSTEM SHALL either (a) wire these repositories into real lumen-cli commands (e.g. `lumen findings`, `lumen tool-calls`) that the schema already supports, or (b) explicitly document them as deliberately CLI-independent (e.g. reserved for a future lumen-daemon consumer per SPEC-LUMEN-004-DAEMON.json) so the gap reads as a decision, not incomplete work.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Audit finding (2026-08-22, adversarially verified): unlike lumen-analysis's RawMessageAccumulators, which carry a documented rationale for their exclusion from AnalyticsEngine, nothing explains why these six repositories exist unconsumed. This is also structurally why the CRIT-LUMEN-037 redaction bug went untested against real inputs -- CommandEventRepository has no real caller anywhere, only its own test suite. Left as a decision for the next session rather than resolved unilaterally here, since option (a) is real feature work and option (b) is a documentation-only fix with very different cost."
     }
   ],
   "linked_requirement": "REQ-LUMEN-003",

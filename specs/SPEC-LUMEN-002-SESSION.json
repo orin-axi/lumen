@@ -218,6 +218,20 @@
       "is_error_case": false,
       "judgment_call": true,
       "reasoning": "New orchestrator support: ccusage's real Qwen adapter confirms Qwen Code is a real, distinct, actively-used format whose usage fields are named identically to Google's Gemini API response schema (confirming Qwen Code's CLI lineage is Gemini-CLI-derived) -- previously entirely unrepresented; OrchestratorKind (crates/lumen-model/src/transcript.rs:27-34) needs a new Qwen variant added alongside the existing ClaudeCode/Antigravity/Codex/OpenCode/Kimi/GenericOtel set."
+    },
+    {
+      "id": "CRIT-LUMEN-172",
+      "criterion": "PARTIALLY IMPLEMENTED, NEEDS A FIX + A SHARED CONTRACT (2026-08-22). WHEN any SessionAdapter cannot determine a real model identity for a session (the source data never carries a recognizable model field, or the adapter defaults before any is found), THE SYSTEM SHALL set model_family to an honest, provider-specific placeholder string that PricingTable::is_recognized returns false for (e.g. \"<provider>-unknown-model\", the convention AgyAdapter/CodexAdapter/OpenCodeAdapter already follow) -- NEVER a real, currently-seeded model name. THE SYSTEM SHALL enforce this as a documented contract on the SessionAdapter trait itself (a doc comment establishing it as required behavior for every implementation), not merely as a convention restated ad hoc in some adapters' inline comments.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "reasoning": "Audit finding (2026-08-22, HIGH severity, adversarially verified): ClaudeCodeAdapter (crates/lumen-session/src/adapters/claude.rs:37) still defaults model_family to the literal \"claude-3-5-sonnet-20241022\" -- a real, currently-seeded PricingTable row -- the exact bug class already fixed in CodexAdapter (commit db0c4b1, \"gpt-4o\" -> \"codex-unknown-model\") and already avoided in AgyAdapter/OpenCodeAdapter. An assistant turn carrying real usage but no model key silently prices at real Sonnet rates with is_fully_priced=true instead of surfacing as unpriced. Root cause identified by the same audit: the convention was never a formal contract, only inconsistently-restated comments in 2 of 4 adapter files with zero mention in SessionAdapter's own trait definition (adapter.rs) or in AGENTS.md/ARCHITECTURE.md -- a new adapter author had no discoverable source of truth to follow. Research (2026-08-22) into how OpenTelemetry's Weaver enforces instrumentation-library consistency suggests the real fix is a machine-checked contract test per adapter (each adapter's real fallback behavior asserted against a shared golden expectation in CI), not just a doc comment -- stronger than the doc-comment-only fix originally proposed, tracked here as the target shape."
+    },
+    {
+      "id": "CRIT-LUMEN-173",
+      "criterion": "PLANNED, NOT YET IMPLEMENTED (2026-08-22). WHEN parsing a JSONL-format session (ClaudeCodeAdapter, CodexAdapter, AgyAdapter), THE SYSTEM SHALL share one implementation of the line-reading/byte-offset-tracking/parse-failure-recording boilerplate across all three adapters, rather than each adapter maintaining its own near-identical copy that must be kept in sync by hand.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "reasoning": "Audit finding (2026-08-22, low severity but real): claude.rs, codex.rs, and agy.rs all implement byte-offset tracking, the io::Error-as-ParseFailureRecord branch, and the serde_json-error-as-ParseFailureRecord branch nearly verbatim, self-acknowledged in comments (codex.rs/agy.rs both say 'same...rationale as claude.rs'). A shared jsonl_lines() iterator/helper in adapter.rs, consumed by all three, would keep the subtle byte_offset-non-advancement semantics in one place instead of three."
     }
   ],
   "non_goals": [
