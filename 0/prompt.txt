@@ -5838,3 +5838,7 @@ event: 575 rows
 - None of `crates/lumen-session/src/adapters/opencode.rs`'s current field expectations (`action`, `source`, `args`, `thought`, `observation`, `metrics`/`usage.accumulated_cost`) exist anywhere in this real schema — the entire parsing strategy (JSONL line-by-line) is wrong; it needs to become a SQLite-reading adapter against `message`+`part` (and likely `session` for the top-level model/title/directory), and `fingerprint.rs`'s OpenCode detection branch (lines 29-35, keyed on JSONL string markers) will also need to change to detect a SQLite file (e.g. by path/extension or SQLite header magic bytes `SQLite format 3\0`) rather than a byte-sample JSON string scan.</result>
 <usage><subagent_tokens>52738</subagent_tokens><tool_uses>17</tool_uses><duration_ms>149500</duration_ms></usage>
 </task-notification>
+
+---
+
+Let’s do it
