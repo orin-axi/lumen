@@ -34,7 +34,13 @@ impl SessionAdapter for CodexAdapter {
 
     fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("codex-session");
-        let mut model_family = CompactString::new("gpt-4o");
+        // Honest placeholder, not a real model name: "gpt-4o" was used here before, which was
+        // harmless while every unrecognized model fell back to Sonnet's rate regardless. Now
+        // that "gpt-4o" is itself a real seeded PricingTable row, defaulting to it would let a
+        // session that never emits thread_settings_applied (unconfirmed against real data
+        // whether this happens, but the failure mode is real) silently price as GPT-4o instead
+        // of surfacing as unpriced. Same convention as AgyAdapter's "antigravity-unknown-model".
+        let mut model_family = CompactString::new("codex-unknown-model");
         let mut started_at = Utc::now();
         let mut ended_at = started_at;
         let mut has_start = false;

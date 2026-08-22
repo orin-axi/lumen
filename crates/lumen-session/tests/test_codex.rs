@@ -54,6 +54,34 @@ fn test_codex_adapter_parses_real_event_msg_envelope() {
 }
 
 #[test]
+fn test_codex_adapter_missing_thread_settings_does_not_default_to_a_real_priced_model() {
+    // Real risk found in a follow-up audit: model_family previously defaulted to the literal
+    // string "gpt-4o", which used to be harmless because an unrecognized model fell back to
+    // Sonnet's rate regardless. Now that "gpt-4o" is itself a real seeded PricingTable row, a
+    // session that never emits a thread_settings_applied event (only one real local Codex file
+    // exists on this machine and it does carry the event, so this can't be empirically confirmed
+    // against real data -- but the failure mode is real and worth closing defensively) would
+    // silently price as GPT-4o instead of surfacing as honestly unpriced.
+    let sample = r#"{"timestamp":"2026-08-20T10:00:00Z","ordinal":1,"type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-no-settings","item":{"type":"UserMessage","id":"item-1","content":[{"type":"text","text":"hello"}]}}}
+{"timestamp":"2026-08-20T10:00:05Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","thread_id":"thread-no-settings","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":110}}}}
+"#;
+
+    let adapter = CodexAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Codex session");
+
+    assert_ne!(
+        transcript.model_family.as_str(),
+        "gpt-4o",
+        "a session with no thread_settings_applied event must not default to a real seeded model"
+    );
+    assert!(
+        !PricingTable::seed().is_recognized(&transcript.model_family),
+        "the default model_family must be honestly unrecognized, not a real priced model"
+    );
+    assert!(!transcript.economics.is_fully_priced);
+}
+
+#[test]
 fn test_codex_adapter_non_utf8_line_is_skipped_not_fatal() {
     // CRIT-LUMEN-025: a non-UTF8 line surfaces as an io::Error from BufRead::lines(), not a
     // serde_json parse error -- the read-error branch must skip+record like the parse-error
