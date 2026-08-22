@@ -16,6 +16,8 @@ lumen-model = { workspace = true }
 lumen-session = { workspace = true }
 lumen-analysis = { workspace = true }
 lumen-pattern = { workspace = true }
+lumen-store = { workspace = true }
+camino = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true }
 comfy-table = { workspace = true }
