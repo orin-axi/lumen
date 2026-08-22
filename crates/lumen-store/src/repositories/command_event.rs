@@ -12,6 +12,34 @@ impl<'a> CommandEventRepository<'a> {
         Self { conn }
     }
 
+    /// Redacts a raw (or already partially-redacted) argument string into a stable pattern:
+    /// flag names are preserved (they're part of the command's fixed vocabulary, not private
+    /// data -- e.g. `-m`, `--verbose`), but every value is replaced with a fixed placeholder --
+    /// bare positional tokens outright, and the value half of `--flag=value` pairs. This is the
+    /// store's own redaction pass (CRIT-LUMEN-037): `insert_command_events` never trusts a
+    /// caller-supplied string to already be safe, since this repository is the last boundary
+    /// before the argument string is written to disk. A simple whitespace tokenizer, not a real
+    /// shell parser -- sufficient to guarantee no raw token survives, which is the actual
+    /// "zero raw private arguments persisted" contract; it does not attempt to preserve exact
+    /// shell quoting/escaping semantics.
+    fn redact_args(raw: &str) -> String {
+        raw.split_whitespace()
+            .map(|token| {
+                if let Some(long_flag) = token.strip_prefix("--") {
+                    match long_flag.split_once('=') {
+                        Some((name, _value)) => format!("--{name}=<redacted>"),
+                        None => token.to_string(),
+                    }
+                } else if token.starts_with('-') {
+                    token.to_string()
+                } else {
+                    "<redacted>".to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn resolve_session_id(&self, provider: &str, session_id: &str) -> Result<i64, StoreError> {
         self.conn
             .query_row(
@@ -44,7 +72,8 @@ impl<'a> CommandEventRepository<'a> {
             .map_err(StoreError::Sqlite)?;
 
         for e in events {
-            stmt.execute(params![internal_id, e.command_base, e.sanitized_args, if e.is_error { 1 } else { 0 },])
+            let redacted = e.sanitized_args.as_deref().map(Self::redact_args);
+            stmt.execute(params![internal_id, e.command_base, redacted, if e.is_error { 1 } else { 0 },])
                 .map_err(StoreError::Sqlite)?;
         }
 

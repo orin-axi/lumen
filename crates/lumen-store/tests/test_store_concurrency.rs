@@ -118,13 +118,16 @@ fn test_queue_dead_letter_exact_thresholds() {
 
     // 3rd failure: retry_count = 3, status = 'dead_letter' (CRIT-LUMEN-034)
     repo.mark_failed(id, "err3").unwrap();
-    let status3: (String, u32) = conn
-        .query_row("SELECT status, retry_count FROM ingestion_queue WHERE id = ?1", [id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
+    let status3: (String, u32, String) = conn
+        .query_row("SELECT status, retry_count, last_error FROM ingestion_queue WHERE id = ?1", [id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })
         .unwrap();
     assert_eq!(status3.0, "dead_letter");
     assert_eq!(status3.1, 3);
+    // CRIT-LUMEN-034's full text requires the last error string to be recorded, not just the
+    // status transition -- a prior version of this test never checked last_error at all.
+    assert_eq!(status3.2, "err3", "the dead-letter transition must record the triggering error string");
 
     // Dead letter item is excluded from fetch_pending
     let pending_after = repo.fetch_pending(10).unwrap();

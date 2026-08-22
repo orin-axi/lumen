@@ -5,7 +5,7 @@ use lumen_store::*;
 use tempfile::tempdir;
 
 #[test]
-fn test_sqlite_store_open_and_migrations_v1_to_v5() {
+fn test_sqlite_store_open_and_migrations_v1_to_v7() {
     let dir = tempdir().unwrap();
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("lumen_test.db")).unwrap();
 
@@ -24,6 +24,148 @@ fn test_sqlite_store_open_and_migrations_v1_to_v5() {
     let journal_mode: String =
         conn.query_row("PRAGMA journal_mode", [], |row| row.get(0)).expect("Failed to query journal_mode");
     assert_eq!(journal_mode.to_lowercase(), "wal");
+
+    // CRIT-LUMEN-030: foreign_keys must actually be ON, not just journal_mode -- a prior version
+    // of this test only checked journal_mode, so deleting the foreign_keys pragma from
+    // SqliteStore::open left the whole suite green.
+    let foreign_keys: i64 =
+        conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).expect("Failed to query foreign_keys");
+    assert_eq!(foreign_keys, 1, "PRAGMA foreign_keys must be ON");
+
+    // Enforcement, not just the pragma value: an FK-violating insert must actually fail.
+    let fk_violation = conn.execute(
+        "INSERT INTO tool_calls (session_id, turn_index, tool_name, call_id, intent_kind, is_error, latency_ms) \
+         VALUES (999999, 0, 'test', 'call-1', 'other', 0, 0)",
+        [],
+    );
+    assert!(
+        fk_violation.is_err(),
+        "an insert referencing a nonexistent session id must be rejected by the FK constraint"
+    );
+
+    // CRIT-LUMEN-039: busy_timeout must actually be configured, not assumed from the SQL string.
+    let busy_timeout: i64 =
+        conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0)).expect("Failed to query busy_timeout");
+    assert_eq!(busy_timeout, 5000);
+
+    // CRIT-LUMEN-032: every table the criterion names must actually exist, not just a migration
+    // count -- a prior version of this test only checked schema_migrations' row count, so
+    // deleting any single CREATE TABLE from a migration body left the suite green.
+    for table in [
+        "ingestion_queue",
+        "session_snapshots",
+        "pipeline_runs",
+        "sessions",
+        "tool_calls",
+        "command_events",
+        "token_usage",
+        "session_category_scores",
+        "findings",
+        "rollups",
+        "discovered_categories",
+    ] {
+        let exists: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(exists, 1, "table '{table}' must exist after migrations");
+    }
+}
+
+#[test]
+fn test_sqlite_store_open_read_only_rejects_writes() {
+    // CRIT-LUMEN-031: query_only must actually be ON and a direct write must actually be
+    // rejected by SQLite -- not just that a Rust-level `if self.is_read_only` guard on
+    // run_migrations() returns Err, which is what the existing test_read_only_mode_disallows_writes
+    // test below actually exercises.
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("read_only_pragma_test.db")).unwrap();
+    SqliteStore::open(&db_path).unwrap(); // create + migrate first
+
+    let ro_store = SqliteStore::open_read_only(&db_path).expect("open_read_only failed");
+    let conn = ro_store.connection().unwrap();
+
+    let query_only: i64 =
+        conn.query_row("PRAGMA query_only", [], |row| row.get(0)).expect("Failed to query query_only");
+    assert_eq!(query_only, 1, "PRAGMA query_only must be ON for a read-only connection");
+
+    let write_result = conn.execute(
+        "INSERT INTO rollups (period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms) \
+         VALUES ('2026-01-01', 'daily', 0, 0.0, 0.0, 0)",
+        [],
+    );
+    assert!(write_result.is_err(), "a direct INSERT on a read-only connection must be rejected by SQLite itself");
+}
+
+/// CRIT-LUMEN-035: a failing migration must roll back with zero side effects, not partially
+/// apply. Forces a real SQL failure (a duplicate index name colliding with one V2 creates) and
+/// verifies the database ends up with none of V2's schema, not just that open() returns Err.
+#[test]
+fn test_migration_failure_rolls_back_with_zero_side_effects() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("migration_rollback_test.db")).unwrap();
+
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        // Every real migration uses CREATE ... IF NOT EXISTS, which only suppresses the error
+        // when an object of the SAME kind already has that name -- a cross-type name collision
+        // still fails even with IF NOT EXISTS. Pre-create an INDEX literally named "sessions" on
+        // an unrelated table, so V2's `CREATE TABLE IF NOT EXISTS sessions` fails with SQLite's
+        // real "there is already an index named sessions" error.
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE unrelated (id INTEGER PRIMARY KEY);
+             CREATE INDEX sessions ON unrelated(id);",
+        )
+        .unwrap();
+    }
+
+    let result = SqliteStore::open(&db_path);
+    assert!(result.is_err(), "SqliteStore::open must fail when a migration's SQL fails");
+
+    // Zero side effects: no migration past the pre-existing state was recorded.
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let migration_count: i64 = conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0)).unwrap();
+    assert_eq!(migration_count, 0, "a failed migration must not record itself as applied");
+
+    // None of V1's real tables (which come after the failing V2 migration in a fresh-db run --
+    // actually V1 runs first and succeeds; V2 is where the seeded index collides) leak through
+    // in an unexpected half-applied state: token_usage is created by V2 itself, alongside the
+    // colliding index, so it must not exist if V2's transaction rolled back.
+    let token_usage_exists: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'token_usage'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(token_usage_exists, 0, "V2's token_usage table must not exist if V2's transaction rolled back");
+}
+
+/// CRIT-LUMEN-036: list_recent(limit=50) must complete in under 2ms. Seeds a modest number of
+/// sessions and measures wall time directly rather than trusting that the query plan is fast.
+#[test]
+fn test_list_recent_completes_under_2ms_budget() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("list_recent_perf_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    for i in 0..200 {
+        session_repo.upsert_session(&make_test_session_record(&format!("perf-sess-{i}"))).unwrap();
+    }
+
+    let filter = SessionFilter { provider: None, limit: 50 };
+    // Warm up the connection/query plan once before timing, matching how this path is actually
+    // used in practice (a long-lived pooled connection, not a cold-start measurement).
+    session_repo.list_recent(&filter).unwrap();
+
+    let start = std::time::Instant::now();
+    let results = session_repo.list_recent(&filter).unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(results.len(), 50);
+    assert!(elapsed.as_millis() < 2, "list_recent(50) took {elapsed:?}, budget is 2ms");
 }
 
 #[test]
@@ -640,7 +782,7 @@ fn test_command_event_repository_insert_counts_rows_and_empty_slice_is_noop() {
 }
 
 #[test]
-fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
+fn test_command_event_repository_list_by_session_round_trips_redacted_shape() {
     let dir = tempdir().unwrap();
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_list_test.db")).unwrap();
     let store = SqliteStore::open(&db_path).unwrap();
@@ -654,7 +796,7 @@ fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
     let events = vec![
         CommandEventFactRecord {
             command_base: "git".to_string(),
-            sanitized_args: Some("push <REDACTED>".to_string()),
+            sanitized_args: Some("push origin".to_string()),
             is_error: false,
         },
         CommandEventFactRecord { command_base: "ls".to_string(), sanitized_args: None, is_error: false },
@@ -665,12 +807,63 @@ fn test_command_event_repository_list_by_session_round_trips_sanitized_args() {
     assert_eq!(listed.len(), 2);
 
     assert_eq!(listed[0].command_base, "git");
-    assert_eq!(listed[0].sanitized_args, Some("push <REDACTED>".to_string()));
+    // "push origin" -- both bare positional tokens -- must round-trip as the redacted pattern,
+    // not the raw value ("origin" here stands in for anything that could be a real, private
+    // argument -- a branch name, a file path, a hostname, a secret).
+    assert_eq!(listed[0].sanitized_args, Some("<redacted> <redacted>".to_string()));
     assert!(!listed[0].is_error);
 
     assert_eq!(listed[1].command_base, "ls");
     assert_eq!(listed[1].sanitized_args, None, "sanitized_args must round-trip the None case correctly");
     assert!(!listed[1].is_error);
+}
+
+/// CRIT-LUMEN-037/123: the store is the last boundary before persistence and must never trust a
+/// caller's claim that an argument string is already safe -- it re-derives a redacted pattern
+/// itself. Feeds a raw, unredacted string shaped like real private data (an email-looking commit
+/// author flag value and a bare secret-looking positional token) and asserts neither survives.
+#[test]
+fn test_command_event_repository_redacts_raw_private_arguments_never_persisted_verbatim() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_redact_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-cmd-redact")).unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    let raw_secret_token = "sk-live-4f8a9c2b1e7d6f5a3c9b8e7d6f5a4c3b";
+    let raw_email = "gabe@example.com";
+    let events = vec![CommandEventFactRecord {
+        command_base: "curl".to_string(),
+        sanitized_args: Some(format!("-H Authorization:Bearer_{raw_secret_token} --user={raw_email}")),
+        is_error: false,
+    }];
+    cmd_repo.insert_command_events("claude", "sess-cmd-redact", &events).expect("insert_command_events failed");
+
+    // Query the raw persisted column directly -- not through the read model -- so this test
+    // proves what's actually on disk, not just what the read path happens to return.
+    let persisted: String = conn
+        .query_row(
+            "SELECT ce.sanitized_args FROM command_events ce JOIN sessions s ON ce.session_id = s.id \
+             WHERE s.provider_session_id = 'sess-cmd-redact'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert!(
+        !persisted.contains(raw_secret_token),
+        "raw secret token must never be persisted verbatim, got: {persisted}"
+    );
+    assert!(!persisted.contains(raw_email), "raw email must never be persisted verbatim, got: {persisted}");
+    assert!(persisted.contains("-H"), "flag names are not private arguments and should be preserved for analysis");
+    assert!(
+        persisted.contains("--user=<redacted>"),
+        "flag=value pairs must keep the flag name but redact the value, got: {persisted}"
+    );
 }
 
 #[test]

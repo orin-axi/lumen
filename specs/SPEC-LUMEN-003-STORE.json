@@ -93,7 +93,7 @@
     },
     {
       "id": "CRIT-LUMEN-032",
-      "criterion": "WHEN migrations are executed on a fresh database, THE SYSTEM SHALL apply all migrations from V1 to V5 and create ingestion_queue, session_snapshots, pipeline_runs, sessions, tool_calls, command_events, token_usage, session_category_scores, findings, rollups, and discovered_categories tables.",
+      "criterion": "WHEN migrations are executed on a fresh database, THE SYSTEM SHALL apply all migrations from V1 to V7 and create ingestion_queue, session_snapshots, pipeline_runs, sessions, tool_calls, command_events, token_usage, session_category_scores, findings, rollups, and discovered_categories tables (V6 additionally creates the ux_rollups_period unique index per CRIT-LUMEN-120, and V7 adds token_usage.turns).",
       "is_error_case": false,
       "judgment_call": false
     },
