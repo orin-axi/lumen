@@ -5960,3 +5960,7 @@ Keep implementing our specs
 ---
 
 Migrations and versions? We have not released anything yet so why do we need migrations and versions????
+
+---
+
+Yes, and I need you to think more critically about this kind of stuff. You’re often versioning things that are ongoing in dev mode. wtf. How do we stop that??
