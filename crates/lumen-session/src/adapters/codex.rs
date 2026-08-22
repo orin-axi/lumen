@@ -235,6 +235,7 @@ impl SessionAdapter for CodexAdapter {
                 cache_creation_tokens,
                 cache_read_tokens,
                 reasoning_tokens: reasoning_output_tokens,
+                cache_creation_1h_tokens: 0,
             },
             timestamp: ended_at,
             tier: service_tier.clone(),

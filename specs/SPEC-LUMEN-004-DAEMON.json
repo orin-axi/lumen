@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "spec@1",
   "id": "SPEC-LUMEN-004-DAEMON",
-  "purpose": "Defines the single-writer background daemon service, fast sub-10ms hook handlers, worker pipeline loop, and macOS LaunchAgent lifecycle management for Lumen.",
+  "purpose": "Defines the single-writer background daemon service, fast sub-10ms hook handlers, worker pipeline loop, and macOS LaunchAgent lifecycle management for Lumen. STATUS (2026-08-21): unimplemented -- lumen-daemon does not exist as a crate in this workspace. SPEC-LUMEN-008-CLI's rescoped current CLI (trace/audit/ingest/sessions/session) reads and writes lumen-store directly and does not depend on this daemon; the daemon architecture remains this spec's legitimate target but is not currently being built toward. Do not assume any acceptance criterion below is satisfied without checking crates/ for a lumen-daemon package first.",
   "scope": "Covers crates/lumen-daemon: DaemonServer, HookHandler, WorkerPipeline, LaunchAgentManager, and DaemonConfig.",
   "non_goals": [
     "Terminal TUI presentation or user command line interfaces (handled by lumen-cli).",

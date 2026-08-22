@@ -199,13 +199,24 @@ lumen trace ~/.claude/projects/-Users-gabe-Projects-agent-plugins/ef175eb8-0825-
 
 ---
 
-### 3. Parallel Directory Scan (`lumen scan`)
+### 3. Ingest and Query the SQLite Store (`lumen ingest` / `lumen sessions` / `lumen session`)
 
-Scan all JSONL session logs in a directory in parallel:
+`trace` and `audit` inspect one file at a time without touching disk. `ingest` parses every real
+session found at a path (a single file, or every file in a directory; an OpenCode SQLite database
+persists every real session it contains) and persists it to a local SQLite store, so it can be
+queried back later without re-parsing:
 
 ```bash
-lumen scan ~/.claude/projects/-Users-gabe-Projects-agent-plugins/
+lumen ingest ~/.claude/projects/-Users-gabe-Projects-agent-plugins/
+lumen ingest ~/.local/share/opencode/opencode.db
+
+lumen sessions --provider claude-code
+lumen session claude-code ef175eb8-0825-4122-934b-326fb85c2492
 ```
+
+The store defaults to `~/.lumen/lumen.db`; override it with `--db <path>`. A session whose model
+has no seeded pricing row reports its cost as an explicit `unknown`, never a fabricated dollar
+figure.
 
 ---
 
