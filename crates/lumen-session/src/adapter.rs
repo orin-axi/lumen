@@ -8,6 +8,10 @@ pub enum IngestionError {
     Io(#[from] std::io::Error),
     #[error("Unrecognized log format")]
     UnrecognizedFormat,
+    /// OpenCode's real store is a SQLite database, not a JSONL line stream -- errors opening or
+    /// querying it (via `OpenCodeAdapter::parse_database`) surface here rather than as `Io`.
+    #[error("SQLite error reading session database: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

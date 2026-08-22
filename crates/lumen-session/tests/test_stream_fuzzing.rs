@@ -21,9 +21,22 @@ proptest! {
         let agy_res = agy.parse_stream(Box::new(Cursor::new(&bytes)));
         prop_assert!(agy_res.is_ok(), "AgyAdapter must never return Err on arbitrary bytes");
 
-        let opencode = OpenCodeAdapter;
-        let opencode_res = opencode.parse_stream(Box::new(Cursor::new(&bytes)));
-        prop_assert!(opencode_res.is_ok(), "OpenCodeAdapter must never return Err on arbitrary bytes");
+        // OpenCodeAdapter reads a SQLite file by path, not a byte stream -- arbitrary bytes are
+        // not valid SQLite, so an Err (SQLite failing to open/query it) is the correct, expected
+        // outcome here, unlike the three byte-stream adapters above. The only guarantee that
+        // still applies is: never panic. See prop_fuzz_opencode_database_path_does_not_panic.
+    }
+
+    #[test]
+    fn prop_fuzz_opencode_database_path_does_not_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fuzz.db");
+        std::fs::write(&path, &bytes).unwrap();
+
+        // Must never panic on arbitrary file content. Err is an acceptable, expected outcome
+        // for non-SQLite garbage -- only a panic would be a real bug.
+        let _parse_result = OpenCodeAdapter.parse_database(&path);
+        let _matches_result = OpenCodeAdapter::matches_database(&path);
     }
 
     #[test]

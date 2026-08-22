@@ -8,7 +8,10 @@ use std::io::Cursor;
 #[case(real_claude_session_dump(), Some(OrchestratorKind::ClaudeCode))]
 #[case(claude_session_with_errors_and_rate_limits(), Some(OrchestratorKind::ClaudeCode))]
 #[case(real_antigravity_session_dump(), Some(OrchestratorKind::Antigravity))]
-#[case(real_opencode_session_dump(), Some(OrchestratorKind::OpenCode))]
+// OpenCode's real fingerprint is a binary SQLite magic prefix, not a JSON string, so it doesn't
+// fit this string-keyed table -- covered separately by
+// test_opencode_detect_orchestrator_matches_sqlite_magic_prefix (test_opencode.rs) and
+// test_fictional_opencode_jsonl_shape_no_longer_matches_anything (fingerprint.rs).
 #[case("random unformatted log line without agent markers", None)]
 fn test_table_driven_fingerprint_detection(#[case] input: &str, #[case] expected: Option<OrchestratorKind>) {
     assert_eq!(detect_orchestrator(input.as_bytes()), expected);
@@ -59,13 +62,13 @@ fn test_antigravity_fixture_end_to_end_parsing() {
 
 #[test]
 fn test_opencode_fixture_end_to_end_parsing() {
+    let db = real_opencode_session_db();
     let adapter = OpenCodeAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(real_opencode_session_dump())))
-        .expect("Failed to parse real OpenCode fixture");
+    let transcripts = adapter.parse_database(db.path.as_std_path()).expect("Failed to parse real OpenCode fixture");
 
-    assert_eq!(transcript.orchestrator, OrchestratorKind::OpenCode);
-    assert_eq!(transcript.turns.len(), 7);
+    assert_eq!(transcripts.len(), 1);
+    assert_eq!(transcripts[0].orchestrator, OrchestratorKind::OpenCode);
+    assert_eq!(transcripts[0].turns.len(), 2);
 }
 
 #[test]

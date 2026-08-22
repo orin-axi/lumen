@@ -1,251 +1,153 @@
-use chrono::{DateTime, Utc};
+use chrono::{TimeZone, Utc};
 use compact_str::CompactString;
 use lumen_model::*;
+use rusqlite::{Connection, OpenFlags};
 use smallvec::SmallVec;
-use std::io::BufRead;
+use std::path::Path;
 
-use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
-use crate::fingerprint::detect_orchestrator;
+use crate::adapter::IngestionError;
 
+/// (tool calls, tool results, joined text) extracted from one message's real `part` rows.
+type MessageParts = (SmallVec<[CanonicalToolCall; 2]>, SmallVec<[CanonicalToolResult; 2]>, Option<String>);
+
+/// OpenCode's real on-disk store is a SQLite database
+/// (`~/.local/share/opencode/opencode.db`), not a JSONL line stream -- confirmed against a real
+/// local database this session (`session`/`message`/`part` tables, JSON blobs in a `data`
+/// column). This is structurally incompatible with `SessionAdapter::parse_stream`'s
+/// `Box<dyn BufRead>` contract (there is no meaningful way to stream a SQLite file line by
+/// line), so `OpenCodeAdapter` does not implement that trait -- it exposes `parse_database`
+/// instead, taking a file path and returning one `CanonicalTranscript` per real session found in
+/// the database (a single `.db` file commonly holds many real sessions, unlike the other three
+/// adapters' 1-file-to-1-session JSONL logs).
 pub struct OpenCodeAdapter;
 
-impl SessionAdapter for OpenCodeAdapter {
-    fn name(&self) -> &'static str {
+impl OpenCodeAdapter {
+    pub fn name(&self) -> &'static str {
         "opencode"
     }
 
-    fn matches_fingerprint(&self, sample: &str) -> bool {
-        // Delegates to detect_orchestrator (single source of truth for orchestrator precedence)
-        // instead of an independently-coded condition that can drift.
-        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::OpenCode)
+    /// Whether `path` is (probably) a real OpenCode SQLite database: readable as SQLite and
+    /// carrying the real `session`/`message`/`part` tables this adapter depends on. A positive
+    /// schema check, not just a `.db` extension guess, so an arbitrary unrelated SQLite file
+    /// isn't misidentified as an OpenCode database.
+    pub fn matches_database(path: &Path) -> bool {
+        let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+            return false;
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('session', 'message', 'part')",
+        ) else {
+            return false;
+        };
+        matches!(stmt.query_row([], |row| row.get::<_, i64>(0)), Ok(3))
     }
 
-    fn capabilities(&self) -> AdapterCapabilities {
-        AdapterCapabilities {
-            has_token_usage: true,
-            has_tool_results: true,
-            has_shell_commands: true,
-            has_file_events: true,
-            has_lifecycle_hooks: false,
-            supports_incremental_offsets: false,
-            supports_cost_estimation: true,
-        }
+    /// Parses every real session found in the database at `path` into one `CanonicalTranscript`
+    /// each, ordered by `session.time_created`.
+    pub fn parse_database(&self, path: &Path) -> Result<Vec<CanonicalTranscript>, IngestionError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+
+        let session_ids: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM session ORDER BY time_created")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+
+        session_ids.iter().map(|session_id| self.parse_one_session(&conn, session_id)).collect()
     }
 
-    fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
-        let session_id = CompactString::new("opencode-session");
-        let model_family = CompactString::new("claude-3-5-sonnet-20241022");
+    fn parse_one_session(&self, conn: &Connection, session_id: &str) -> Result<CanonicalTranscript, IngestionError> {
+        let session_cost: f64 =
+            conn.query_row("SELECT cost FROM session WHERE id = ?1", [session_id], |row| row.get(0)).unwrap_or(0.0);
+
+        let mut model_family = CompactString::new("opencode-unknown-model");
         let mut turns = Vec::new();
+        let mut pricing_inputs: Vec<TurnPricingInput> = Vec::new();
         let mut started_at = Utc::now();
         let mut ended_at = Utc::now();
         let mut has_start = false;
 
-        let mut current_input_tokens = 0u64;
-        let mut current_output_tokens = 0u64;
-        let mut current_cache_write = 0u64;
-        let mut current_cache_read = 0u64;
+        let mut msg_stmt =
+            conn.prepare("SELECT id, time_created, data FROM message WHERE session_id = ?1 ORDER BY time_created, id")?;
+        let messages: Vec<(String, i64, serde_json::Value)> = msg_stmt
+            .query_map([session_id], |row| {
+                let id: String = row.get(0)?;
+                let time_created: i64 = row.get(1)?;
+                let data: String = row.get(2)?;
+                Ok((id, time_created, data))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|(id, time_created, raw)| serde_json::from_str(&raw).ok().map(|v| (id, time_created, v)))
+            .collect();
+        drop(msg_stmt);
 
-        // accumulated_cost is a per-line cumulative running total (per its name), not a
-        // per-turn delta -- treated last-write-wins, same as Codex's cumulative token_count
-        // events, never summed across lines.
-        let mut last_accumulated_cost: Option<f64> = None;
+        let mut part_stmt = conn.prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created, id")?;
 
-        let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
-        let mut byte_offset: usize = 0;
-
-        for (idx, line_res) in reader.lines().enumerate() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(e) => {
-                    // CRIT-LUMEN-025: a non-UTF8 (or otherwise unreadable) line surfaces as an
-                    // io::Error from BufRead::lines(), not a serde_json parse error -- treated
-                    // the same as a corrupted-JSON line: skip + record, keep parsing. Same
-                    // interpretation and byte_offset-non-advancement rationale as claude.rs.
-                    parse_failures.push(ParseFailureRecord {
-                        session_id: session_id.clone(),
-                        line_number: idx + 1,
-                        byte_offset,
-                        error: CompactString::new(e.to_string()),
-                    });
-                    continue;
-                }
-            };
-
-            // Offset at the START of the line currently being processed. `reader.lines()`
-            // strips newlines and discards byte-position info, so we track it manually: this
-            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
-            // line for CRLF-terminated input -- an acceptable known limitation for a
-            // diagnostic field, not a byte-exact file-seek requirement. Same pattern as
-            // claude.rs, codex.rs, agy.rs.
-            let line_start_offset = byte_offset;
-            byte_offset += line.len() + 1;
-
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
+        for (message_id, time_created_ms, data) in &messages {
+            let timestamp = Utc.timestamp_millis_opt(*time_created_ms).single().unwrap_or_else(Utc::now);
+            if !has_start {
+                started_at = timestamp;
+                has_start = true;
             }
+            ended_at = timestamp;
 
-            let val: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(e) => {
-                    parse_failures.push(ParseFailureRecord {
-                        session_id: session_id.clone(),
-                        line_number: idx + 1,
-                        byte_offset: line_start_offset,
-                        error: CompactString::new(e.to_string()),
-                    });
-                    continue;
-                }
-            };
+            let role_str = data.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let role = if role_str == "assistant" { TurnRole::Assistant } else { TurnRole::User };
 
-            if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
-                if let Ok(ts) = DateTime::parse_from_rfc3339(ts_str) {
-                    let utc_ts = ts.with_timezone(&Utc);
-                    if !has_start {
-                        started_at = utc_ts;
-                        has_start = true;
-                    }
-                    ended_at = utc_ts;
+            if role == TurnRole::Assistant {
+                if let Some(model_id) = data.get("modelID").and_then(|v| v.as_str()) {
+                    model_family = CompactString::new(model_id);
                 }
             }
 
-            // Extract usage if present
-            let mut turn_usage = None;
-            if let Some(usage_obj) = val.get("metrics").or_else(|| val.get("usage")) {
-                if let Some(cost) = usage_obj.get("accumulated_cost").and_then(|v| v.as_f64()) {
-                    last_accumulated_cost = Some(cost);
-                }
+            // Real per-message usage: data.tokens.{input,output,reasoning,cache.{write,read}}.
+            // OpenCode publishes no separate 5m/1h cache-write split (unlike Claude Code), so
+            // cache_creation_1h_tokens stays 0 -- the whole write goes on the default rate.
+            let usage = data.get("tokens").map(|t| TurnTokenUsage {
+                input_tokens: t.get("input").and_then(|v| v.as_u64()).unwrap_or(0),
+                output_tokens: t.get("output").and_then(|v| v.as_u64()).unwrap_or(0),
+                cache_creation_tokens: t
+                    .get("cache")
+                    .and_then(|c| c.get("write"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                cache_creation_1h_tokens: 0,
+                cache_read_tokens: t.get("cache").and_then(|c| c.get("read")).and_then(|v| v.as_u64()).unwrap_or(0),
+                reasoning_tokens: t.get("reasoning").and_then(|v| v.as_u64()).unwrap_or(0),
+            });
 
-                let in_tok = usage_obj.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let out_tok = usage_obj.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let c_write = usage_obj.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let c_read = usage_obj.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-
-                if in_tok > 0 || out_tok > 0 || c_write > 0 || c_read > 0 {
-                    turn_usage = Some(TurnTokenUsage {
-                        input_tokens: in_tok,
-                        cache_creation_tokens: c_write,
-                        cache_read_tokens: c_read,
-                        output_tokens: out_tok,
-                        reasoning_tokens: 0,
-                    });
-                    current_input_tokens += in_tok;
-                    current_output_tokens += out_tok;
-                    current_cache_write += c_write;
-                    current_cache_read += c_read;
-                }
+            if let Some(usage) = usage {
+                pricing_inputs.push(TurnPricingInput { usage, timestamp, tier: None });
             }
 
-            let action = val.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            let source = val.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let (tool_calls, tool_results, text) = self.parts_for_message(&mut part_stmt, message_id)?;
 
-            if action == "message" {
-                turns.push(CanonicalTurn {
-                    attribution: None,
-                    turn_index: turns.len(),
-                    role: if source == "assistant" { TurnRole::Assistant } else { TurnRole::User },
-                    timestamp: ended_at,
-                    latency_ms: 0,
-                    text: val.get("args").and_then(|a| a.get("content")).and_then(|c| c.as_str()).map(Into::into),
-                    tool_calls: SmallVec::new(),
-                    tool_results: SmallVec::new(),
-                    usage: None,
-                });
-            } else if action == "run" || action == "read" || action == "edit" || action == "think" {
-                let mut tool_calls = SmallVec::new();
-                let args = val.get("args").cloned().unwrap_or(serde_json::Value::Null);
-
-                let intent = match action {
-                    "run" => {
-                        let cmd = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                        if cmd.starts_with("git") {
-                            ToolIntent::VersionControl { action: CompactString::new(cmd) }
-                        } else if cmd.contains("test") {
-                            ToolIntent::TestExecution { runner: CompactString::new("shell"), target_suite: None }
-                        } else {
-                            ToolIntent::Other { raw_name: CompactString::new("run") }
-                        }
-                    }
-                    "read" => {
-                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                        ToolIntent::FileRead { path: CompactString::new(path), line_range: None }
-                    }
-                    "edit" => {
-                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                        ToolIntent::FileEdit { path: CompactString::new(path), lines_added: 0, lines_removed: 0 }
-                    }
-                    _ => ToolIntent::Other { raw_name: CompactString::new(action) },
-                };
-
-                tool_calls.push(CanonicalToolCall {
-                    call_id: CompactString::new(format!("opencode_call_{}", turns.len())),
-                    tool_name: CompactString::new(action),
-                    intent,
-                    raw_arguments: args,
-                });
-
-                turns.push(CanonicalTurn {
-                    attribution: None,
-                    turn_index: turns.len(),
-                    role: TurnRole::Assistant,
-                    timestamp: ended_at,
-                    latency_ms: 0,
-                    text: val.get("thought").and_then(|t| t.as_str()).map(Into::into),
-                    tool_calls,
-                    tool_results: SmallVec::new(),
-                    usage: turn_usage,
-                });
-            } else if let Some(obs) = val.get("observation").and_then(|v| v.as_str()) {
-                // Observation result
-                let mut tool_results = SmallVec::new();
-                let is_error = val.get("error").and_then(|e| e.as_bool()).unwrap_or(false);
-                let content = val.get("content").and_then(|c| c.as_str()).unwrap_or("");
-
-                tool_results.push(CanonicalToolResult {
-                    call_id: CompactString::new(format!("opencode_call_{}", turns.len().saturating_sub(1))),
-                    output_bytes: content.len(),
-                    line_count: content.lines().count(),
-                    is_error,
-                    error_class: if is_error { Some(CompactString::new("ObservationError")) } else { None },
-                    truncated_output: None,
-                    otel_span_id: None,
-                });
-
-                turns.push(CanonicalTurn {
-                    attribution: None,
-                    turn_index: turns.len(),
-                    role: TurnRole::ToolResult,
-                    timestamp: ended_at,
-                    latency_ms: 0,
-                    text: Some(format!("Observation ({obs})")),
-                    tool_calls: SmallVec::new(),
-                    tool_results,
-                    usage: None,
-                });
-            }
+            turns.push(CanonicalTurn {
+                attribution: None,
+                turn_index: turns.len(),
+                role,
+                timestamp,
+                latency_ms: 0,
+                text,
+                tool_calls,
+                tool_results,
+                usage,
+            });
         }
+        drop(part_stmt);
 
         let economics = TokenEconomics::calculate(
-            &[TurnPricingInput {
-                usage: TurnTokenUsage {
-                    input_tokens: current_input_tokens,
-                    output_tokens: current_output_tokens,
-                    cache_creation_tokens: current_cache_write,
-                    cache_read_tokens: current_cache_read,
-                    reasoning_tokens: 0,
-                },
-                timestamp: ended_at,
-                tier: None,
-            }],
+            &pricing_inputs,
             &model_family,
             &pricing::SEEDED,
-            last_accumulated_cost,
+            if session_cost > 0.0 { Some(session_cost) } else { None },
         );
 
         let wall_duration = (ended_at - started_at).num_milliseconds().max(0) as u64;
 
         Ok(CanonicalTranscript {
-            session_id,
+            session_id: CompactString::new(session_id),
             parent_session_id: None,
             subagent_role: None,
             orchestrator: OrchestratorKind::OpenCode,
@@ -262,10 +164,124 @@ impl SessionAdapter for OpenCodeAdapter {
             turns,
             otel_conversation_id: None,
             service_tier: None,
-            parse_failures,
+            parse_failures: SmallVec::new(),
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
         })
+    }
+
+    /// Real `part` rows for one message: `type: "text"` supplies the turn's readable text
+    /// (joined across multiple parts, real for both user and assistant messages); `type: "tool"`
+    /// supplies one call+result pair per row (real data carries call input/output/status
+    /// together in a single row via `state`, unlike Claude Code's separate tool_use/tool_result
+    /// entries, so correlation by call_id is always exact -- never inferred).
+    fn parts_for_message(
+        &self,
+        stmt: &mut rusqlite::Statement,
+        message_id: &str,
+    ) -> Result<MessageParts, IngestionError> {
+        let parts: Vec<serde_json::Value> = stmt
+            .query_map([message_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|raw| serde_json::from_str(&raw).ok())
+            .collect();
+
+        let mut tool_calls = SmallVec::new();
+        let mut tool_results = SmallVec::new();
+        let mut text_segments = Vec::new();
+
+        for part in &parts {
+            match part.get("type").and_then(|v| v.as_str()) {
+                Some("text") => {
+                    if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                        text_segments.push(t.to_string());
+                    }
+                }
+                Some("tool") => {
+                    let tool_name = part.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                    let call_id = part.get("callID").and_then(|v| v.as_str()).unwrap_or("");
+                    let state = part.get("state");
+                    let input = state.and_then(|s| s.get("input")).cloned().unwrap_or(serde_json::Value::Null);
+                    let status = state.and_then(|s| s.get("status")).and_then(|v| v.as_str()).unwrap_or("");
+                    // Real data confirmed "completed" as the success status; no real error
+                    // example was observed, so "error" is the defensible opposite (a common
+                    // state-machine convention), not a confirmed exact string -- revisit if a
+                    // real error-state row is observed with a different value.
+                    let is_error = status == "error";
+                    let output_str = state
+                        .and_then(|s| s.get("output"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_default();
+
+                    let intent = classify_tool_intent(tool_name, &input);
+
+                    tool_calls.push(CanonicalToolCall {
+                        call_id: CompactString::new(call_id),
+                        tool_name: CompactString::new(tool_name),
+                        intent,
+                        raw_arguments: input,
+                    });
+                    tool_results.push(CanonicalToolResult {
+                        call_id: CompactString::new(call_id),
+                        output_bytes: output_str.len(),
+                        line_count: output_str.lines().count(),
+                        is_error,
+                        error_class: if is_error { Some(CompactString::new("ToolError")) } else { None },
+                        truncated_output: None,
+                        otel_span_id: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let text = if text_segments.is_empty() { None } else { Some(text_segments.join("\n")) };
+        Ok((tool_calls, tool_results, text))
+    }
+}
+
+/// Maps a real OpenCode tool name (confirmed against real data: `read`, `glob`, `task`, `grep`,
+/// `bash`; others inferred by the same naming convention) to a `ToolIntent`.
+fn classify_tool_intent(tool_name: &str, input: &serde_json::Value) -> ToolIntent {
+    match tool_name {
+        "read" => {
+            let path = input.get("filePath").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::FileRead { path: CompactString::new(path), line_range: None }
+        }
+        "write" => {
+            let path = input.get("filePath").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::FileCreate { path: CompactString::new(path) }
+        }
+        "edit" => {
+            let path = input.get("filePath").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::FileEdit { path: CompactString::new(path), lines_added: 0, lines_removed: 0 }
+        }
+        "grep" => {
+            let query = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::CodeSearch { tool: CompactString::new("grep"), query: CompactString::new(query), is_ast: false }
+        }
+        "glob" => {
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::FileDiscovery { tool: CompactString::new("glob"), pattern: CompactString::new(pattern) }
+        }
+        "bash" => {
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd.trim_start().starts_with("git") {
+                ToolIntent::VersionControl { action: CompactString::new(cmd) }
+            } else {
+                ToolIntent::Other { raw_name: CompactString::new("bash") }
+            }
+        }
+        "task" => {
+            let description = input.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            ToolIntent::SubagentSpawn {
+                agent_type: CompactString::new("task"),
+                description: CompactString::new(description),
+            }
+        }
+        other => ToolIntent::Other { raw_name: CompactString::new(other) },
     }
 }

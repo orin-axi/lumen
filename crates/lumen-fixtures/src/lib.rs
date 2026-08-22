@@ -15,7 +15,8 @@ mod tests {
     fn test_corpus_samples_are_valid() {
         assert!(real_claude_session_dump().contains("claude-3-5-sonnet"));
         assert!(real_antigravity_session_dump().contains("PLANNER_RESPONSE"));
-        assert!(real_opencode_session_dump().contains("Cargo.toml"));
+        let opencode_db = real_opencode_session_db();
+        assert!(opencode_db.path.exists());
         assert!(corrupted_mixed_lines_sample().contains("\u{FEFF}"));
     }
 

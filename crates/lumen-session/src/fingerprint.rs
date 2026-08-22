@@ -1,7 +1,21 @@
 use lumen_model::OrchestratorKind;
 
-/// Detects the orchestrator from a byte sample of the log file header (first 2048 bytes).
+/// Detects the orchestrator from a byte sample of the log file header (first 2048 bytes). For
+/// OpenCode this is a fast, cheap pre-filter only (the SQLite file-format magic prefix, present
+/// on any SQLite database): it identifies "this is a SQLite file", not specifically "this is an
+/// OpenCode database" -- callers routing a match to `OpenCodeAdapter::parse_database` should
+/// still expect it to reflect the real schema (or use `OpenCodeAdapter::matches_database` for an
+/// authoritative, schema-verified check, which needs file access this byte-sample function
+/// doesn't have).
 pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
+    // SQLite's on-disk format always starts with this exact 16-byte magic string -- real
+    // OpenCode data lives in `~/.local/share/opencode/opencode.db`, not a JSONL stream (see
+    // OpenCodeAdapter's doc comment). Checked first since it's a binary prefix match, not a
+    // string search, and can never collide with the JSONL-based checks below.
+    if sample_bytes.starts_with(b"SQLite format 3\0") {
+        return Some(OrchestratorKind::OpenCode);
+    }
+
     let sample_str = match std::str::from_utf8(sample_bytes) {
         Ok(s) => s,
         Err(e) => std::str::from_utf8(&sample_bytes[..e.valid_up_to()]).unwrap_or(""),
@@ -24,14 +38,6 @@ pub fn detect_orchestrator(sample_bytes: &[u8]) -> Option<OrchestratorKind> {
         || sample_str.contains("\"type\":\"session_meta\"")
     {
         return Some(OrchestratorKind::Codex);
-    }
-
-    if sample_str.contains("\"action\":\"run\"")
-        || sample_str.contains("\"action\": \"run\"")
-        || sample_str.contains("\"observation\":")
-        || sample_str.contains("\"action\":\"message\"")
-    {
-        return Some(OrchestratorKind::OpenCode);
     }
 
     None
@@ -60,11 +66,23 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_opencode_spaced_action_run() {
-        // CRIT-LUMEN-108: detect_orchestrator must agree with OpenCodeAdapter::matches_fingerprint,
-        // which already accepts the spaced JSON variant.
+    fn test_detect_opencode_sqlite_magic_prefix() {
+        // Real OpenCode data is a SQLite database (~/.local/share/opencode/opencode.db), not a
+        // JSONL stream -- confirmed against a real local database this session. SQLite's
+        // on-disk format always starts with this exact 16-byte magic string.
+        let mut sample = b"SQLite format 3\0".to_vec();
+        sample.extend_from_slice(&[0u8; 32]); // trailing header bytes, irrelevant to detection
+        assert_eq!(detect_orchestrator(&sample), Some(OrchestratorKind::OpenCode));
+    }
+
+    #[test]
+    fn test_fictional_opencode_jsonl_shape_no_longer_matches_anything() {
+        // The action/observation JSONL shape this crate previously assumed for OpenCode was
+        // confirmed this session to have zero basis in real OpenCode output (real data is
+        // SQLite). A sample in that shape must now fall through to None, not silently match a
+        // format that never existed.
         let sample = b"{\"action\": \"run\", \"args\":{\"command\":\"cargo test\"}}";
-        assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::OpenCode));
+        assert_eq!(detect_orchestrator(sample), None);
     }
 
     #[test]
@@ -88,14 +106,5 @@ mod tests {
         // "session_meta" itself, a real Codex file can go entirely unrecognized.
         let sample = b"{\"timestamp\":\"2026-08-20T19:00:39.735Z\",\"ordinal\":0,\"type\":\"session_meta\",\"payload\":{\"session_id\":\"01a0208b-b21e-7c62-bc9b-7f386a299206\",\"cli_version\":\"0.148.0\"";
         assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::Codex));
-    }
-
-    #[test]
-    fn test_detect_opencode_action_message() {
-        // CRIT-LUMEN-108: "action":"message" is a real, meaningfully-parsed OpenCode event
-        // (OpenCodeAdapter::parse_stream builds a CanonicalTurn from it) that detect_orchestrator
-        // must also recognize so the two independently-coded paths cannot drift apart.
-        let sample = b"{\"action\":\"message\",\"source\":\"assistant\",\"args\":{\"content\":\"done\"}}";
-        assert_eq!(detect_orchestrator(sample), Some(OrchestratorKind::OpenCode));
     }
 }

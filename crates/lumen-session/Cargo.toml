@@ -17,6 +17,7 @@ chrono = { workspace = true }
 simd-json = { workspace = true }
 thiserror = { workspace = true }
 memmap2 = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -13,6 +13,7 @@ lumen-store = { workspace = true }
 camino = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { workspace = true }
 
 [lints]
 workspace = true

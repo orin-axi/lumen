@@ -64,18 +64,21 @@ fn test_analysis_pipeline_on_antigravity_session() {
 
 #[test]
 fn test_analysis_pipeline_on_opencode_session() {
+    // Real OpenCode data is a SQLite database (session/message/part tables), not a JSONL
+    // stream -- see OpenCodeAdapter's doc comment. lumen_fixtures::real_opencode_session_db()
+    // builds a real-schema fixture db with a user message and an assistant message that reads
+    // Cargo.toml and runs `cargo check`.
+    let db = real_opencode_session_db();
     let adapter = OpenCodeAdapter;
-    let transcript = adapter
-        .parse_stream(Box::new(Cursor::new(real_opencode_session_dump())))
-        .expect("Failed to parse OpenCode fixture");
+    let transcripts = adapter.parse_database(db.path.as_std_path()).expect("Failed to parse OpenCode fixture");
+    let transcript = &transcripts[0];
 
     let engine = AnalyticsEngine::new();
-    let report = engine.process_transcript(&transcript);
+    let report = engine.process_transcript(transcript);
 
-    assert_eq!(report.stats.total_turns, 7);
+    assert_eq!(report.stats.total_turns, 2);
     assert_eq!(report.artifacts.total_unique_files, 1);
     assert!(report.artifacts.files_read.contains("Cargo.toml"));
-    assert!(report.artifacts.files_edited.contains("Cargo.toml"));
 }
 
 /// Builds a transcript that exercises every one of the 19 EntryAccumulator-based
@@ -221,6 +224,7 @@ fn build_full_coverage_transcript() -> CanonicalTranscript {
             cache_creation_tokens: 0,
             cache_read_tokens: 20,
             reasoning_tokens: 0,
+            cache_creation_1h_tokens: 0,
         }),
         attribution: Some(AttributionSource::Plugin { name: "proof".into() }),
     };
