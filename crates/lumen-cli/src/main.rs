@@ -5,7 +5,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
 use lumen_model::*;
 use lumen_session::*;
-use lumen_store::{SessionFactRecord, SessionFilter, SessionRepository, SqliteStore};
+use lumen_store::{ReadContractEnvelope, SessionFactRecord, SessionFilter, SessionRepository, SqliteStore};
 use miette::{miette, IntoDiagnostic, Result};
 use std::fs::File;
 use std::io::BufReader;
@@ -352,7 +352,8 @@ fn cmd_sessions(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, j
     let sessions = repo.list_recent(&SessionFilter { provider, limit }).into_diagnostic()?;
 
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(&sessions).into_diagnostic()?);
+        let envelope = ReadContractEnvelope::new(sessions);
+        println!("{}", serde_json::to_string_pretty(&envelope).into_diagnostic()?);
         return Ok(());
     }
 
@@ -391,7 +392,8 @@ fn cmd_session(db_path: &Utf8PathBuf, provider: &str, id: &str, json_mode: bool)
         .ok_or_else(|| miette!("no session found for provider={provider} id={id} in {db_path}"))?;
 
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(&detail).into_diagnostic()?);
+        let envelope = ReadContractEnvelope::new(detail);
+        println!("{}", serde_json::to_string_pretty(&envelope).into_diagnostic()?);
         return Ok(());
     }
 

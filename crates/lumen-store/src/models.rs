@@ -4,6 +4,24 @@ use lumen_model::{OrchestratorKind, TokenEconomics};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Versioned wire wrapper applied at the CLI/API boundary to every read model
+/// (SPEC-LUMEN-003-STORE, CRIT-LUMEN-038). `schemas/read-contracts/v1.schema.json` is this
+/// contract's source of truth -- any external consumer (including a future Mac app) validates
+/// against that file, not the reverse.
+pub const READ_CONTRACT_VERSION: &str = "v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadContractEnvelope<T> {
+    pub contract_version: &'static str,
+    pub data: T,
+}
+
+impl<T> ReadContractEnvelope<T> {
+    pub fn new(data: T) -> Self {
+        Self { contract_version: READ_CONTRACT_VERSION, data }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedSessionRow {
     pub id: i64,
