@@ -5,7 +5,7 @@ use lumen_store::*;
 use tempfile::tempdir;
 
 #[test]
-fn test_sqlite_store_open_and_migrations_v1_to_v7() {
+fn test_sqlite_store_open_applies_schema() {
     let dir = tempdir().unwrap();
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("lumen_test.db")).unwrap();
 
@@ -13,12 +13,6 @@ fn test_sqlite_store_open_and_migrations_v1_to_v7() {
     assert!(!store.is_read_only());
 
     let conn = store.connection().expect("Failed to acquire connection");
-
-    // Verify all 7 migrations were recorded
-    let count: usize = conn
-        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
-        .expect("Failed to query schema_migrations");
-    assert_eq!(count, 7);
 
     // Verify WAL journal mode
     let journal_mode: String =
@@ -108,37 +102,30 @@ fn test_migration_failure_rolls_back_with_zero_side_effects() {
 
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        // Every real migration uses CREATE ... IF NOT EXISTS, which only suppresses the error
-        // when an object of the SAME kind already has that name -- a cross-type name collision
-        // still fails even with IF NOT EXISTS. Pre-create an INDEX literally named "sessions" on
-        // an unrelated table, so V2's `CREATE TABLE IF NOT EXISTS sessions` fails with SQLite's
-        // real "there is already an index named sessions" error.
-        conn.execute_batch(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
-             CREATE TABLE unrelated (id INTEGER PRIMARY KEY);
-             CREATE INDEX sessions ON unrelated(id);",
-        )
-        .unwrap();
+        // The schema script's CREATE ... IF NOT EXISTS statements only suppress the error when
+        // an object of the SAME kind already has that name -- a cross-type name collision still
+        // fails even with IF NOT EXISTS. Pre-create an INDEX literally named "sessions" on an
+        // unrelated table, so the script's `CREATE TABLE IF NOT EXISTS sessions` fails with
+        // SQLite's real "there is already an index named sessions" error.
+        conn.execute_batch("CREATE TABLE unrelated (id INTEGER PRIMARY KEY); CREATE INDEX sessions ON unrelated(id);")
+            .unwrap();
     }
 
     let result = SqliteStore::open(&db_path);
-    assert!(result.is_err(), "SqliteStore::open must fail when a migration's SQL fails");
+    assert!(result.is_err(), "SqliteStore::open must fail when the schema script fails");
 
-    // Zero side effects: no migration past the pre-existing state was recorded.
+    // Zero side effects: the whole schema script is one transaction, so a failure partway
+    // through must leave NONE of it applied -- including tables that appear earlier in the
+    // script than the collision point.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    let migration_count: i64 = conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0)).unwrap();
-    assert_eq!(migration_count, 0, "a failed migration must not record itself as applied");
-
-    // None of V1's real tables (which come after the failing V2 migration in a fresh-db run --
-    // actually V1 runs first and succeeds; V2 is where the seeded index collides) leak through
-    // in an unexpected half-applied state: token_usage is created by V2 itself, alongside the
-    // colliding index, so it must not exist if V2's transaction rolled back.
-    let token_usage_exists: i64 = conn
-        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'token_usage'", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(token_usage_exists, 0, "V2's token_usage table must not exist if V2's transaction rolled back");
+    for table in ["ingestion_queue", "sessions", "token_usage"] {
+        let exists: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(exists, 0, "table '{table}' must not exist -- the whole schema transaction must have rolled back");
+    }
 }
 
 /// CRIT-LUMEN-036: list_recent(limit=50) must complete in under 2ms. Seeds a modest number of

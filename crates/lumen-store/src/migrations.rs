@@ -2,17 +2,16 @@ use rusqlite::Connection;
 
 use crate::error::StoreError;
 
+/// Applies Lumen's current SQLite schema. Pre-release, there is no installed base or existing
+/// data to preserve across a schema change -- so instead of a versioned migration chain, this is
+/// one idempotent script (every statement is CREATE ... IF NOT EXISTS) reflecting the schema's
+/// current, single state. Changing a column or table means editing the relevant CREATE statement
+/// directly; a local dev database that predates the change is safe to delete and let this
+/// recreate, since nothing here needs to preserve real user data yet.
 pub struct MigrationManager;
 
 impl MigrationManager {
-    pub const MIGRATIONS: &'static [&'static str] = &[
-        // V1: Ingestion queue, session snapshots, pipeline runs
-        r#"
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
+    pub const SCHEMA: &'static str = r#"
         CREATE TABLE IF NOT EXISTS ingestion_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider TEXT NOT NULL,
@@ -43,9 +42,7 @@ impl MigrationManager {
             started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             ended_at TIMESTAMP
         );
-        "#,
-        // V2: Sessions and Token Usage
-        r#"
+
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider TEXT NOT NULL,
@@ -76,12 +73,11 @@ impl MigrationManager {
             cache_write_tokens INTEGER NOT NULL,
             cache_read_tokens INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL,
-            cost_usd REAL NOT NULL
+            cost_usd REAL NOT NULL,
+            turns INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
-        "#,
-        // V3: Tool calls and Command Events
-        r#"
+
         CREATE TABLE IF NOT EXISTS tool_calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -101,9 +97,7 @@ impl MigrationManager {
             sanitized_args TEXT,
             is_error INTEGER NOT NULL DEFAULT 0
         );
-        "#,
-        // V4: Findings and Category Scores
-        r#"
+
         CREATE TABLE IF NOT EXISTS findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
@@ -123,9 +117,7 @@ impl MigrationManager {
             category TEXT NOT NULL,
             score REAL NOT NULL
         );
-        "#,
-        // V5: Rollups and Discovered Categories
-        r#"
+
         CREATE TABLE IF NOT EXISTS rollups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             period_start TIMESTAMP NOT NULL,
@@ -135,6 +127,7 @@ impl MigrationManager {
             total_savings_usd REAL NOT NULL,
             total_duration_ms INTEGER NOT NULL
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type);
 
         CREATE TABLE IF NOT EXISTS discovered_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,53 +136,15 @@ impl MigrationManager {
             confidence REAL NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        "#,
-        // V6: Unique index on rollups(period_start, period_type) to support idempotent upsert
-        r#"
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type);
-        "#,
-        // V7: turns column on token_usage so per-model turn counts round-trip honestly
-        r#"
-        ALTER TABLE token_usage ADD COLUMN turns INTEGER NOT NULL DEFAULT 0;
-        "#,
-    ];
+    "#;
 
-    pub fn apply_migrations(conn: &mut Connection) -> Result<usize, StoreError> {
+    /// Applies the current schema inside one transaction. Every statement is idempotent, so this
+    /// is safe to call on every `SqliteStore::open` regardless of whether the database is fresh
+    /// or already up to date.
+    pub fn apply_migrations(conn: &mut Connection) -> Result<(), StoreError> {
         let tx = conn.transaction().map_err(StoreError::Sqlite)?;
-
-        // Ensure migrations table exists
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );",
-            [],
-        )
-        .map_err(StoreError::Sqlite)?;
-
-        let mut applied_count = 0;
-
-        for (idx, migration_sql) in Self::MIGRATIONS.iter().enumerate() {
-            let version = idx + 1;
-
-            let exists: bool = tx
-                .query_row("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)", [version], |row| {
-                    row.get(0)
-                })
-                .unwrap_or(false);
-
-            if !exists {
-                tx.execute_batch(migration_sql)
-                    .map_err(|e| StoreError::MigrationFailed { version, reason: e.to_string() })?;
-
-                tx.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [version])
-                    .map_err(StoreError::Sqlite)?;
-
-                applied_count += 1;
-            }
-        }
-
+        tx.execute_batch(Self::SCHEMA).map_err(|e| StoreError::MigrationFailed { reason: e.to_string() })?;
         tx.commit().map_err(StoreError::Sqlite)?;
-        Ok(applied_count)
+        Ok(())
     }
 }

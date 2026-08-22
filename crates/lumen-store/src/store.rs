@@ -60,9 +60,9 @@ impl SqliteStore {
         Ok(Self { pool, is_read_only: true })
     }
 
-    /// Runs all pending schema migrations (currently V1 to V7 -- see MigrationManager::MIGRATIONS
-    /// for the authoritative, up-to-date count).
-    pub fn run_migrations(&self) -> Result<usize, StoreError> {
+    /// Applies the current schema (see MigrationManager::SCHEMA) -- idempotent, safe to call
+    /// every time the store opens.
+    pub fn run_migrations(&self) -> Result<(), StoreError> {
         if self.is_read_only {
             return Err(StoreError::ReadOnlyViolation);
         }

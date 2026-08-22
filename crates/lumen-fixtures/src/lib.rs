@@ -22,9 +22,17 @@ mod tests {
 
     #[test]
     fn test_database_double_initialization() {
+        // The schema is one idempotent script (no version-tracking table) -- applying it twice
+        // must be a safe no-op, and the real tables must exist afterward.
         let db = create_migrated_test_db();
+        db.store.run_migrations().expect("re-applying the schema must be a safe no-op");
+
         let conn = db.store.connection().unwrap();
-        let count: usize = conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0)).unwrap();
-        assert_eq!(count, 7);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1, "the sessions table must exist after schema setup");
     }
 }

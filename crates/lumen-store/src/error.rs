@@ -8,8 +8,8 @@ pub enum StoreError {
     #[error("SQLite database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("Database migration failed at version {version}: {reason}")]
-    MigrationFailed { version: usize, reason: String },
+    #[error("Database schema setup failed: {reason}")]
+    MigrationFailed { reason: String },
 
     #[error("Write operation attempted on read-only database store")]
     ReadOnlyViolation,

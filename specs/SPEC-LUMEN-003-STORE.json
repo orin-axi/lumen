@@ -2,22 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "spec@1",
   "id": "SPEC-LUMEN-003-STORE",
-  "purpose": "Defines the local-first SQLite persistence layer, WAL concurrency mode, database migrations, connection pooling, repository APIs, and typed read models for Lumen session intelligence.",
-  "scope": "Covers crates/lumen-store: SqliteStore, MigrationManager, QueueRepository, SessionRepository, ToolCallRepository, CommandEventRepository, FindingsRepository, RollupRepository, SnapshotRepository, TokenUsageRepository, ReadContractEnvelope, and typed read models.",
+  "purpose": "Defines the local-first SQLite persistence layer, WAL concurrency mode, idempotent schema setup, connection pooling, repository APIs, and typed read models for Lumen session intelligence.",
+  "scope": "Covers crates/lumen-store: SqliteStore, MigrationManager, QueueRepository, SessionRepository, ToolCallRepository, CommandEventRepository, FindingsRepository, RollupRepository, SnapshotRepository, TokenUsageRepository, and typed read models.",
   "non_goals": [
     "Hook process interception or daemon async scheduling (handled by lumen-daemon).",
     "Log file parsing or stream transformation (handled by lumen-session).",
     "Direct network I/O or remote cloud sync.",
-    "Ownership of the Mac app's read-model schema: any Swift/Mac client, if/when built, is a consumer of schemas/read-contracts/v1.schema.json, not its source of truth.",
+    "Versioned schema migration chains or a versioned wire read-contract (ReadContractEnvelope/contract_version/JSON schema): pre-release, there is no installed base or external consumer to preserve compatibility for. MigrationManager applies one idempotent current-schema script instead of a versioned chain; revisit a versioned migration/wire-contract approach only once a real release or external consumer exists.",
     "Category-score computation and discovered-category clustering (handled by lumen-insights, not yet integrated into any daemon transaction)."
   ],
   "api_surface": [
     {
       "name": "SqliteStore",
-      "signature": "pub struct SqliteStore { pool: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, is_read_only: bool }; impl SqliteStore { pub fn open(path: &Utf8Path) -> Result<Self, StoreError>; pub fn open_read_only(path: &Utf8Path) -> Result<Self, StoreError>; pub fn run_migrations(&self) -> Result<usize, StoreError>; pub fn connection(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, StoreError>; }",
-      "description": "Connection pool manager configuring SQLite in WAL mode with PRAGMA foreign_keys = ON and query_only flags for concurrent multi-reader access.",
+      "signature": "pub struct SqliteStore { pool: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, is_read_only: bool }; impl SqliteStore { pub fn open(path: &Utf8Path) -> Result<Self, StoreError>; pub fn open_read_only(path: &Utf8Path) -> Result<Self, StoreError>; pub fn run_migrations(&self) -> Result<(), StoreError>; pub fn connection(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, StoreError>; }",
+      "description": "Connection pool manager configuring SQLite in WAL mode with PRAGMA foreign_keys = ON and query_only flags for concurrent multi-reader access. run_migrations applies MigrationManager's single idempotent current-schema script (safe to call on every open, not a versioned chain -- see non_goals).",
       "error_conditions": [
-        "StoreError::MigrationFailed if forward schema migration encounters SQL error",
+        "StoreError::MigrationFailed if the schema setup script encounters a SQL error",
         "StoreError::ReadOnlyViolation if write query is attempted on read-only pool"
       ]
     },
@@ -48,7 +48,7 @@
     {
       "name": "RollupRepository",
       "signature": "pub struct RollupRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> RollupRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn upsert_rollup(&self, record: &RollupFactRecord) -> Result<(), StoreError>; pub fn get_rollup(&self, period_start: chrono::DateTime<chrono::Utc>, period_type: &str) -> Result<Option<RollupReadModel>, StoreError>; pub fn list_rollups(&self, period_type: &str, limit: usize) -> Result<Vec<RollupReadModel>, StoreError>; }",
-      "description": "Repository for the rollups table (id, period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms). upsert_rollup's idempotent ON CONFLICT requires a UNIQUE(period_start, period_type) index, which does not exist on the rollups table created by migration V5 (SQLite has no ALTER TABLE ADD CONSTRAINT) — this SHALL be added via a new, separate migration (V6: CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type)), never by editing the already-applied V5 migration in place.",
+      "description": "Repository for the rollups table (id, period_start, period_type, session_count, total_cost_usd, total_savings_usd, total_duration_ms). upsert_rollup's idempotent ON CONFLICT requires the CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type) statement in MigrationManager::SCHEMA.",
       "error_conditions": []
     },
     {
@@ -60,7 +60,7 @@
     {
       "name": "SnapshotRepository",
       "signature": "pub struct SnapshotRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> SnapshotRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn save_snapshot(&self, provider: &str, session_id: &str, data: &[u8]) -> Result<i64, StoreError>; pub fn get_latest_snapshot(&self, provider: &str, session_id: &str) -> Result<Option<Vec<u8>>, StoreError>; }",
-      "description": "Repository for the session_snapshots table (created by migration V1 per CRIT-LUMEN-032 but previously unimplemented). Used by lumen-daemon's PreCompact hook handler to persist pre-compaction transcript BLOBs.",
+      "description": "Repository for the session_snapshots table (created by MigrationManager::SCHEMA per CRIT-LUMEN-032 but previously unimplemented). Used by lumen-daemon's PreCompact hook handler to persist pre-compaction transcript BLOBs.",
       "error_conditions": [
         "StoreError::WriteFailed if the BLOB insert fails or exceeds configured size limits"
       ]
@@ -68,13 +68,7 @@
     {
       "name": "TokenUsageRepository",
       "signature": "pub struct TokenUsageRepository<'a> { conn: &'a rusqlite::Connection }; impl<'a> TokenUsageRepository<'a> { pub fn new(conn: &'a rusqlite::Connection) -> Self; pub fn insert_token_usage(&self, provider: &str, session_id: &str, economics: &lumen_model::TokenEconomics) -> Result<(), StoreError>; }",
-      "description": "Repository for the token_usage table (created by migration V1 per CRIT-LUMEN-032). insert_token_usage inserts one row per entry in TokenEconomics.per_model (keyed by model name, using ModelTokenSummary's input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/cost_usd/turns fields directly) rather than an invented intermediate record type. Requires a provider parameter because the sessions table's real uniqueness constraint is UNIQUE(provider, provider_session_id) -- a session is only truly identified by the pair, not by provider_session_id alone. A provider_session_id-only lookup can theoretically resolve the wrong row if two different providers happen to report an identical session id.",
-      "error_conditions": []
-    },
-    {
-      "name": "ReadContractEnvelope",
-      "signature": "pub struct ReadContractEnvelope<T: Serialize> { pub contract_version: &'static str, pub data: T }",
-      "description": "Serialization wrapper applied at the CLI/API boundary to SessionSummaryReadModel, SessionDetailReadModel, FindingReadModel, ToolCallReadModel, and RollupReadModel, carrying the versioned read-contract identifier consumed by any external client.",
+      "description": "Repository for the token_usage table (created by MigrationManager::SCHEMA per CRIT-LUMEN-032). insert_token_usage inserts one row per entry in TokenEconomics.per_model (keyed by model name, using ModelTokenSummary's input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/cost_usd/turns fields directly) rather than an invented intermediate record type. Requires a provider parameter because the sessions table's real uniqueness constraint is UNIQUE(provider, provider_session_id) -- a session is only truly identified by the pair, not by provider_session_id alone. A provider_session_id-only lookup can theoretically resolve the wrong row if two different providers happen to report an identical session id.",
       "error_conditions": []
     }
   ],
@@ -93,7 +87,7 @@
     },
     {
       "id": "CRIT-LUMEN-032",
-      "criterion": "WHEN migrations are executed on a fresh database, THE SYSTEM SHALL apply all migrations from V1 to V7 and create ingestion_queue, session_snapshots, pipeline_runs, sessions, tool_calls, command_events, token_usage, session_category_scores, findings, rollups, and discovered_categories tables (V6 additionally creates the ux_rollups_period unique index per CRIT-LUMEN-120, and V7 adds token_usage.turns).",
+      "criterion": "WHEN MigrationManager::SCHEMA is applied to a fresh database, THE SYSTEM SHALL create ingestion_queue, session_snapshots, pipeline_runs, sessions, tool_calls, command_events, token_usage (including its turns column), session_category_scores, findings, rollups (including the ux_rollups_period unique index per CRIT-LUMEN-120), and discovered_categories tables. This is one idempotent script, not a versioned migration chain -- see the spec's non_goals.",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -111,7 +105,7 @@
     },
     {
       "id": "CRIT-LUMEN-035",
-      "criterion": "IF a database migration script fails during execution, THE SYSTEM SHALL roll back the transaction and return StoreError::MigrationFailed without modifying database state.",
+      "criterion": "IF MigrationManager::SCHEMA fails to apply, THE SYSTEM SHALL roll back the transaction and return StoreError::MigrationFailed without modifying database state.",
       "is_error_case": true,
       "judgment_call": false
     },
@@ -124,12 +118,6 @@
     {
       "id": "CRIT-LUMEN-037",
       "criterion": "WHEN command events are inserted, THE SYSTEM SHALL store command_base and redacted argument patterns, ensuring zero raw private arguments are persisted.",
-      "is_error_case": false,
-      "judgment_call": false
-    },
-    {
-      "id": "CRIT-LUMEN-038",
-      "criterion": "WHEN read models (SessionSummaryReadModel, SessionDetailReadModel, FindingReadModel, ToolCallReadModel, RollupReadModel) are serialized via ReadContractEnvelope<T>, THE SYSTEM SHALL produce JSON validating against schemas/read-contracts/v1.schema.json (type, required fields, and additionalProperties: false only — JSON Schema has no key-ordering construct; key ordering is instead verified by a separate golden-file byte-for-byte comparison test), with contract_version supplied by the envelope. This in-repo schema is the read contract's source of truth; any external consumer (including a future Mac app) validates against it, not the reverse.",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -159,7 +147,7 @@
     },
     {
       "id": "CRIT-LUMEN-120",
-      "criterion": "WHEN upsert_rollup is called multiple times with a RollupFactRecord sharing identical (period_start, period_type), THE SYSTEM SHALL perform an idempotent update without creating duplicate rows, backed by a new migration (V6) that adds CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type) — never by modifying the already-applied V5 migration.",
+      "criterion": "WHEN upsert_rollup is called multiple times with a RollupFactRecord sharing identical (period_start, period_type), THE SYSTEM SHALL perform an idempotent update without creating duplicate rows, backed by CREATE UNIQUE INDEX IF NOT EXISTS ux_rollups_period ON rollups(period_start, period_type) in MigrationManager::SCHEMA.",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -197,5 +185,5 @@
   "linked_requirement": "REQ-LUMEN-003",
   "linked_research": "RES-LUMEN-001",
   "spec_file_path": "specs/SPEC-LUMEN-003-STORE.json",
-  "reasoning": "Establishes the durable, local-first SQLite WAL storage engine, migration manager, repository boundaries, and typed read models."
+  "reasoning": "Establishes the durable, local-first SQLite WAL storage engine, schema setup, repository boundaries, and typed read models. Revised 2026-08-22: the versioned migration chain (previously V1-V7, with per-version tracking in a schema_migrations table) was replaced with MigrationManager applying one idempotent current-schema script, and CRIT-LUMEN-038 (ReadContractEnvelope/contract_version/schemas/read-contracts/v1.schema.json) was removed entirely -- both were versioning/compatibility infrastructure built for a production installed base and an external consumer (a hypothetical future Mac app) that don't exist yet, on a project with zero releases. Pre-release, changing a column or table just means editing MigrationManager::SCHEMA directly; a local dev database that predates the change is safe to delete and let recreate, since there is no real user data anywhere that needs to survive a schema change. Revisit versioned migrations and a wire read-contract once a real release or a real external consumer exists -- see non_goals."
 }
