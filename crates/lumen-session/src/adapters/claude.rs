@@ -34,7 +34,7 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
     fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("unknown");
-        let mut model_family = CompactString::new("claude-3-5-sonnet-20241022");
+        let mut model_family = CompactString::new("claude-code-unknown-model");
         let mut turns = Vec::new();
         let mut started_at = Utc::now();
         let mut ended_at = Utc::now();

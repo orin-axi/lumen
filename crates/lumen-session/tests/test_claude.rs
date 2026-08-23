@@ -124,6 +124,22 @@ fn test_claude_code_adapter_empty_session() {
 }
 
 #[test]
+fn test_claude_code_adapter_missing_model_field_does_not_default_to_real_sonnet_pricing() {
+    // HIGH bug (2026-08-22, adversarially verified): model_family previously defaulted to
+    // "claude-3-5-sonnet-20241022" -- a real seeded pricing row -- so an assistant turn with
+    // real usage but no "model" key silently priced at real Sonnet rates with
+    // is_fully_priced: true. Same convention as AgyAdapter's "antigravity-unknown-model".
+    let sample = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n";
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("must parse successfully");
+
+    assert_ne!(transcript.model_family, "claude-3-5-sonnet-20241022");
+    assert_eq!(transcript.model_family, "claude-code-unknown-model");
+    assert!(!transcript.economics.is_fully_priced);
+}
+
+#[test]
 fn test_claude_code_adapter_excludes_sidechain_entries_from_main_turns() {
     // CRIT-LUMEN-026: isSidechain:true entries belong to a subagent branch, not the main chain.
     // Real Claude Code session field is camelCase "isSidechain" (verified against 31 real local
