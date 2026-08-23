@@ -1,0 +1,9 @@
+Specs updated — SPEC-LUMEN-001-MODEL.json had a real contradiction fixed (CRIT-LUMEN-008 still mandated the exact fallback behavior we removed as a bug this session) plus 2 new forward-looking criteria (vendor LiteLLM pricing data, a proper Pricing sum type). SPEC-LUMEN-002-SESSION.json gets 2 new criteria (formalize the adapter placeholder convention as a real contract, dedupe the JSONL boilerplate). SPEC-LUMEN-003-STORE.json’s redaction criterion now carries the actual fix design, plus a new criterion flagging the orphaned-repositories decision as genuinely unresolved. AGENTS.md’s layer diagram and licensing-rule gap are corrected.
+
+Memory — one new comprehensive status file (project_lumen_session_2026_08_22_status_and_backlog.md) that’s now first in the index, covering: everything built/verified this session, the two HIGH bugs to fix first, all 16 audit findings, all 5 research findings, and a concrete next-session order. It cross-links the older deep-research memory rather than duplicating it.
+
+Next session should: read that memory file first, then work directly from the 5 new spec criteria (CRIT-LUMEN-170 through 174) plus the two HIGH findings — everything needed to resume is now in the repo, not just this conversation.
+
+---
+
+Read the memory file and pickup the work
