@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
+shlex = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 camino = { workspace = true }

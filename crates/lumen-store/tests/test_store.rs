@@ -853,6 +853,85 @@ fn test_command_event_repository_redacts_raw_private_arguments_never_persisted_v
     );
 }
 
+/// CRIT-LUMEN-037 (HIGH, adversarially verified 2026-08-22): the prior "starts with a single
+/// '-'" heuristic treated *any* dash-prefixed token as an always-preserved flag, so a secret
+/// smashed into a dash-prefixed token (as real CLIs do -- `mysql -p<password>`, or a malformed
+/// `--api-key <value>` invocation split across two argv entries) passed through unredacted.
+/// Reproduces both real-world shapes named in the audit finding directly.
+#[test]
+fn test_command_event_repository_redacts_dash_prefixed_secret_values_not_just_flag_shape() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_dash_secret_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-cmd-dash-secret")).unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    let events = vec![
+        CommandEventFactRecord {
+            command_base: "curl".to_string(),
+            sanitized_args: Some("--api-key -sk-live-abc123SECRET".to_string()),
+            is_error: false,
+        },
+        CommandEventFactRecord {
+            command_base: "mysql".to_string(),
+            sanitized_args: Some("-pMySecretPassword123".to_string()),
+            is_error: false,
+        },
+    ];
+    cmd_repo.insert_command_events("claude", "sess-cmd-dash-secret", &events).expect("insert_command_events failed");
+
+    let listed = cmd_repo.list_by_session("claude", "sess-cmd-dash-secret").expect("list_by_session failed");
+    assert_eq!(listed.len(), 2);
+
+    let first = listed[0].sanitized_args.as_deref().unwrap();
+    assert!(!first.contains("sk-live-abc123SECRET"), "dash-prefixed secret token must not survive, got: {first}");
+    assert!(first.contains("--api-key"), "the real flag name must still be preserved, got: {first}");
+
+    let second = listed[1].sanitized_args.as_deref().unwrap();
+    assert!(!second.contains("MySecretPassword123"), "combined short-flag+password must not survive, got: {second}");
+}
+
+/// shlex (real shell-word splitting) fixes the tokenization half of CRIT-LUMEN-037: a naive
+/// whitespace split mis-splits a quoted multi-word argument into separate fake tokens and leaves
+/// literal quote characters in the persisted output.
+#[test]
+fn test_command_event_repository_redacts_quoted_multiword_argument_as_one_token() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("command_event_quoted_arg_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    session_repo.upsert_session(&make_test_session_record("sess-cmd-quoted")).unwrap();
+
+    let cmd_repo = CommandEventRepository::new(&conn);
+
+    let events = vec![CommandEventFactRecord {
+        command_base: "git".to_string(),
+        sanitized_args: Some(r#"commit -m "fix: real customer bug report text""#.to_string()),
+        is_error: false,
+    }];
+    cmd_repo.insert_command_events("claude", "sess-cmd-quoted", &events).expect("insert_command_events failed");
+
+    let listed = cmd_repo.list_by_session("claude", "sess-cmd-quoted").expect("list_by_session failed");
+    let persisted = listed[0].sanitized_args.as_deref().unwrap();
+
+    assert!(!persisted.contains("customer bug report"), "quoted value must be redacted, got: {persisted}");
+    assert!(!persisted.contains('"'), "no literal quote characters should survive tokenization, got: {persisted}");
+    assert!(persisted.contains("-m"), "the flag name must be preserved, got: {persisted}");
+    // A naive whitespace split would produce four tokens ("commit", "-m", "\"fix:", ...,
+    // "report", "text\"") instead of shlex's three ("commit", "-m", "fix: ... text").
+    assert_eq!(
+        persisted.split(' ').count(),
+        3,
+        "quoted multi-word argument must collapse to one token, got: {persisted}"
+    );
+}
+
 #[test]
 fn test_command_event_repository_nonexistent_session_returns_error() {
     let dir = tempdir().unwrap();

@@ -3,6 +3,58 @@ use rusqlite::{params, Connection};
 use crate::error::StoreError;
 use crate::models::{CommandEventFactRecord, CommandEventReadModel};
 
+/// Known secret-token prefixes (GitHub PATs, OpenAI/Anthropic-style `sk-`, AWS access keys,
+/// Slack `xox` tokens, GitLab PATs, npm tokens, Google OAuth/API keys, JWTs). Matched as a fast,
+/// unambiguous path before falling back to entropy -- real prior art from
+/// gitleaks/ripsecrets/trufflehog's rule sets.
+const SECRET_PREFIXES: &[&str] = &[
+    "sk-", "pk-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "xox", "AKIA", "ASIA", "AIza", "glpat-", "npm_", "ya29.",
+    "eyJ",
+];
+
+/// Below this length, entropy is too noisy a signal to trust (a 4-character flag like `-xyz` can
+/// trivially look "random") and real secrets are essentially never this short.
+const MIN_SECRET_CANDIDATE_LEN: usize = 8;
+
+/// Shannon entropy in bits/char above which a token's *shape* looks like a generated secret
+/// rather than a human-chosen identifier or flag name. Calibrated against gitleaks' default
+/// (~3.0-4.5 bits/char depending on charset); real flag/word tokens (`force-rebuild-all`,
+/// `api-key`) sit well below this, real secrets (`MySecretPassword123`, base64/hex blobs) sit at
+/// or above it.
+const SECRET_ENTROPY_THRESHOLD: f64 = 3.5;
+
+/// Shannon entropy of `s`, in bits per character. Higher entropy means less predictable -- the
+/// same signal gitleaks/ripsecrets/trufflehog use to flag likely secrets by character shape
+/// rather than position or a fixed prefix convention.
+fn shannon_entropy(s: &str) -> f64 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let len = s.chars().count() as f64;
+    let mut counts: std::collections::HashMap<char, u32> = std::collections::HashMap::new();
+    for c in s.chars() {
+        *counts.entry(c).or_insert(0) += 1;
+    }
+    counts.values().fold(0.0, |acc, &count| {
+        let p = f64::from(count) / len;
+        acc - p * p.log2()
+    })
+}
+
+/// Decides whether a token's *value* (a flag/dash prefix already stripped) looks like a secret
+/// by shape, not by position -- the fix for CRIT-LUMEN-037: `starts with '-'` is a CLI-parsing
+/// convention, not a security boundary, and let real secrets like `-sk-live-abc123SECRET` or
+/// `-pMySecretPassword123` through unredacted.
+fn looks_like_secret(candidate: &str) -> bool {
+    if candidate.chars().count() < MIN_SECRET_CANDIDATE_LEN {
+        return false;
+    }
+    if SECRET_PREFIXES.iter().any(|prefix| candidate.starts_with(prefix)) {
+        return true;
+    }
+    shannon_entropy(candidate) >= SECRET_ENTROPY_THRESHOLD
+}
+
 pub struct CommandEventRepository<'a> {
     conn: &'a Connection,
 }
@@ -13,25 +65,36 @@ impl<'a> CommandEventRepository<'a> {
     }
 
     /// Redacts a raw (or already partially-redacted) argument string into a stable pattern:
-    /// flag names are preserved (they're part of the command's fixed vocabulary, not private
-    /// data -- e.g. `-m`, `--verbose`), but every value is replaced with a fixed placeholder --
-    /// bare positional tokens outright, and the value half of `--flag=value` pairs. This is the
-    /// store's own redaction pass (CRIT-LUMEN-037): `insert_command_events` never trusts a
-    /// caller-supplied string to already be safe, since this repository is the last boundary
-    /// before the argument string is written to disk. A simple whitespace tokenizer, not a real
-    /// shell parser -- sufficient to guarantee no raw token survives, which is the actual
-    /// "zero raw private arguments persisted" contract; it does not attempt to preserve exact
-    /// shell quoting/escaping semantics.
+    /// flag *names* are preserved (they're part of the command's fixed vocabulary, not private
+    /// data -- e.g. `-m`, `--verbose`), but values are replaced with a fixed placeholder -- bare
+    /// positional tokens outright, the value half of `--flag=value` pairs unconditionally, and
+    /// any dash-prefixed token whose value shape looks like a secret (CRIT-LUMEN-037: entropy or
+    /// a known secret prefix, not merely "starts with a dash"). This is the store's own
+    /// redaction pass: `insert_command_events` never trusts a caller-supplied string to already
+    /// be safe, since this repository is the last boundary before the argument string is written
+    /// to disk. Tokenized with `shlex` (real shell-word splitting, so quoted multi-word
+    /// arguments split correctly) rather than a naive whitespace split; if the input isn't valid
+    /// shell syntax (e.g. an unbalanced quote), it falls back to a whitespace split so a
+    /// malformed string still gets fully redacted instead of erroring out unsanitized.
     fn redact_args(raw: &str) -> String {
-        raw.split_whitespace()
+        let tokens: Vec<String> =
+            shlex::split(raw).unwrap_or_else(|| raw.split_whitespace().map(str::to_string).collect());
+
+        tokens
+            .into_iter()
             .map(|token| {
                 if let Some(long_flag) = token.strip_prefix("--") {
                     match long_flag.split_once('=') {
                         Some((name, _value)) => format!("--{name}=<redacted>"),
-                        None => token.to_string(),
+                        None if looks_like_secret(long_flag) => "<redacted>".to_string(),
+                        None => token,
                     }
-                } else if token.starts_with('-') {
-                    token.to_string()
+                } else if let Some(short_flag) = token.strip_prefix('-') {
+                    if !short_flag.is_empty() && looks_like_secret(short_flag) {
+                        "<redacted>".to_string()
+                    } else {
+                        token
+                    }
                 } else {
                     "<redacted>".to_string()
                 }
