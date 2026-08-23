@@ -52,7 +52,7 @@ impl PricingTable {
     /// Seeds the table with two layers of rate rows, both sharing the same `effective_from`
     /// epoch (this table does not yet do real historical price-change versioning -- every row,
     /// old and new, is treated as effective from the same fixed point onward; see
-    /// [`seed_epoch`]):
+    /// `seed_epoch`):
     ///
     /// 1. A small hand-typed *legacy* layer (below) for models that were real, actively-used,
     ///    and individually verified against official pricing pages at some point, but have since
@@ -64,7 +64,7 @@ impl PricingTable {
     ///    names). Lumen prices historical sessions, so a model dropping out of LiteLLM's
     ///    *current* snapshot must not make real historical sessions using it go unpriced --
     ///    these rows are deliberately retained by hand rather than deleted.
-    /// 2. The bulk of the table, loaded from [`crate::pricing_source::load_vendored_rates`]: a
+    /// 2. The bulk of the table, loaded from `pricing_source::load_vendored_rates`: a
     ///    vendored copy of LiteLLM's community-maintained `model_prices_and_context_window.json`
     ///    (CRIT-LUMEN-170), refreshed via `just update-pricing`, not hand-typed. This replaces
     ///    what used to be a second hand-typed block for every "current-generation" model
