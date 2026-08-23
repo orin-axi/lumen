@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0QHPCYZBWY0184M4809955K",
+  "session_id": "9d0364b0-bc7c-449d-be79-2a398e10c9f8",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T14:51:49.407216Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-cli/src/main.rs",
+    "crates/lumen-model/src/economics.rs",
+    "crates/lumen-model/src/lib.rs",
+    "crates/lumen-model/tests/test_pricing.rs",
+    "crates/lumen-store/src/migrations.rs",
+    "crates/lumen-store/src/models.rs",
+    "crates/lumen-store/src/repositories/session.rs",
+    "crates/lumen-store/src/repositories/token_usage.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "specs/SPEC-LUMEN-001-MODEL.json",
+    "specs/SPEC-LUMEN-003-STORE.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "b76d544ffdb9",
+  "checkpoint_transcript_start": 1147,
+  "transcript_lines_at_start": 1147,
+  "compact_transcript_start": 177,
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 85404,
+    "cache_read_tokens": 29154517,
+    "output_tokens": 38900,
+    "api_call_count": 75
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T14:51:49.277405Z",
+    "agent_lines": 270,
+    "agent_removed": 46,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 270,
+    "total_lines_changed": 316,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0QHPCYZBWY0184M4809955K",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-cli/src/main.rs",
+    "crates/lumen-model/src/economics.rs",
+    "crates/lumen-model/src/lib.rs",
+    "crates/lumen-model/tests/test_pricing.rs",
+    "crates/lumen-store/src/migrations.rs",
+    "crates/lumen-store/src/models.rs",
+    "crates/lumen-store/src/repositories/session.rs",
+    "crates/lumen-store/src/repositories/token_usage.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "specs/SPEC-LUMEN-001-MODEL.json",
+    "specs/SPEC-LUMEN-003-STORE.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 85404,
+    "cache_read_tokens": 29154517,
+    "output_tokens": 38900,
+    "api_call_count": 75
+  }
+}
