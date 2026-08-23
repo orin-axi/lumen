@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0QJYF8MSMH7XBG8QHYWWZ2D",
+  "session_id": "9d0364b0-bc7c-449d-be79-2a398e10c9f8",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T15:13:42.515742Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-cli/src/main.rs",
+    "crates/lumen-store/src/models.rs",
+    "crates/lumen-store/src/repositories/session.rs",
+    "crates/lumen-store/src/repositories/tool_call.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "crates/lumen-store/tests/test_store_concurrency.rs",
+    "specs/SPEC-LUMEN-003-STORE.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "4327f8c909de",
+  "checkpoint_transcript_start": 1628,
+  "transcript_lines_at_start": 1628,
+  "compact_transcript_start": 255,
+  "token_usage": {
+    "input_tokens": 108,
+    "cache_creation_tokens": 52240,
+    "cache_read_tokens": 25120758,
+    "output_tokens": 29047,
+    "api_call_count": 54
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T15:13:42.380209Z",
+    "agent_lines": 161,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 161,
+    "total_lines_changed": 164,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
