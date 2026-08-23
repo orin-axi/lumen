@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0REK4YK1Q168V98J5CJEQNB",
+  "session_id": "9d0364b0-bc7c-449d-be79-2a398e10c9f8",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T23:16:51.86114Z",
+  "branch": "main",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "justfile",
+    "rust-toolchain.toml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "eb3cc36a3057",
+  "checkpoint_transcript_start": 1981,
+  "transcript_lines_at_start": 1981,
+  "compact_transcript_start": 313,
+  "token_usage": {
+    "input_tokens": 180,
+    "cache_creation_tokens": 1552072,
+    "cache_read_tokens": 56411457,
+    "output_tokens": 161321,
+    "api_call_count": 90
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uib4YnE5coq2aLM7Zxu6cU",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "artifact-design"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb3cc36a3057",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2053,
+        "end": 2054,
+        "entry_ids": [
+          "9abefd19-eb59-4a42-aaf3-ca413a331af7"
+        ],
+        "tool_use_id": "toolu_01Uib4YnE5coq2aLM7Zxu6cU"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uib4YnE5coq2aLM7Zxu6cU"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: artifact-design",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T23:16:51.636437Z",
+    "agent_lines": 48,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 53,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
