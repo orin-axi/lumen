@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0QD02P3P657Q0R2X57TDDYF",
+  "session_id": "9d0364b0-bc7c-449d-be79-2a398e10c9f8",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T13:29:42.39589Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "Cargo.toml",
+    "crates/lumen-store/Cargo.toml",
+    "crates/lumen-store/src/repositories/command_event.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "specs/SPEC-LUMEN-003-STORE.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "7fdd396e7f78",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 292871,
+    "cache_read_tokens": 5845034,
+    "output_tokens": 31130,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T13:29:42.365131Z",
+    "agent_lines": 159,
+    "agent_removed": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 159,
+    "total_lines_changed": 174,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

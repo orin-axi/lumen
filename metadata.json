@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0QD02P3P657Q0R2X57TDDYF",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "Cargo.toml",
+    "crates/lumen-store/Cargo.toml",
+    "crates/lumen-store/src/repositories/command_event.rs",
+    "crates/lumen-store/tests/test_store.rs",
+    "specs/SPEC-LUMEN-003-STORE.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 292871,
+    "cache_read_tokens": 5845034,
+    "output_tokens": 31130,
+    "api_call_count": 57
+  }
+}
