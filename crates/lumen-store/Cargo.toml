@@ -10,7 +10,6 @@ description = "Local-first SQLite WAL persistence layer and typed repositories f
 [dependencies]
 lumen-model = { workspace = true }
 compact_str = { workspace = true }
-smallvec = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -20,7 +19,6 @@ shlex = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 camino = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
