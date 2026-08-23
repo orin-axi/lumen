@@ -39,6 +39,17 @@ impl<'a> ToolCallRepository<'a> {
         Ok(())
     }
 
+    /// Deletes all `tool_calls` rows for the given internal session id. Used by
+    /// `SessionRepository::upsert_session` to make repeated upserts for the same
+    /// (provider, provider_session_id) idempotent -- the tool-call list is fully replaced
+    /// rather than accumulated across calls, same pattern as `TokenUsageRepository::delete_for_session`.
+    pub fn delete_for_session(&self, session_id: i64) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM tool_calls WHERE session_id = ?1", params![session_id])
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
     pub fn list_by_session(&self, session_id: i64) -> Result<Vec<ToolCallReadModel>, StoreError> {
         let mut stmt = self
             .conn

@@ -239,6 +239,7 @@ fn test_session_repository_idempotent_upsert_and_list() {
             is_fully_priced: true,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     };
 
     // First insert
@@ -318,6 +319,7 @@ fn test_session_repository_is_fully_priced_round_trips_through_store() {
             is_fully_priced: false,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     };
 
     repo.upsert_session(&record).expect("upsert failed");
@@ -427,6 +429,7 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
             is_fully_priced: true,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
 
@@ -483,6 +486,69 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
     assert!(listed[1].is_error);
 }
 
+/// CRIT-LUMEN-174: SessionFactRecord.tool_calls previously didn't exist -- upsert_session never
+/// touched the tool_calls table at all, so get_session's tool_counts/error_counts (already
+/// shipped, already serialized to JSON/CLI output) were silently empty for every real ingested
+/// session. Proves the real wiring end-to-end via upsert_session/get_session alone, with no
+/// separate manual ToolCallRepository call the way the other tool-call tests use to set up their
+/// fixture data -- and that a repeated upsert replaces the tool-call list rather than
+/// accumulating duplicates, matching token_usage's existing idempotency guarantee.
+#[test]
+fn test_session_repository_upsert_session_persists_and_replaces_tool_calls() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("upsert_tool_calls_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let session_repo = SessionRepository::new(&conn);
+    let mut record = make_test_session_record("sess-tool-upsert");
+    record.tool_calls = vec![
+        ToolCallFactRecord {
+            turn_index: 0,
+            tool_name: "Read".to_string(),
+            call_id: "c1".to_string(),
+            intent_kind: "file_read".to_string(),
+            is_error: false,
+            latency_ms: 5,
+        },
+        ToolCallFactRecord {
+            turn_index: 1,
+            tool_name: "Bash".to_string(),
+            call_id: "c2".to_string(),
+            intent_kind: "other".to_string(),
+            is_error: true,
+            latency_ms: 200,
+        },
+    ];
+
+    session_repo.upsert_session(&record).expect("first upsert failed");
+
+    let detail =
+        session_repo.get_session("claude", "sess-tool-upsert").expect("get_session failed").expect("not found");
+    assert_eq!(detail.tool_counts.get("Read").copied(), Some(1));
+    assert_eq!(detail.tool_counts.get("Bash").copied(), Some(1));
+    assert_eq!(detail.error_counts.get("Bash").copied(), Some(1));
+    assert_eq!(detail.error_counts.get("Read"), None);
+
+    // Re-upsert with a shorter, different tool_calls list -- must fully replace, not accumulate.
+    record.tool_calls = vec![ToolCallFactRecord {
+        turn_index: 0,
+        tool_name: "Write".to_string(),
+        call_id: "c3".to_string(),
+        intent_kind: "file_create".to_string(),
+        is_error: false,
+        latency_ms: 8,
+    }];
+    session_repo.upsert_session(&record).expect("second upsert failed");
+
+    let detail_after =
+        session_repo.get_session("claude", "sess-tool-upsert").expect("get_session failed").expect("not found");
+    assert_eq!(detail_after.tool_counts.len(), 1, "repeated upsert must replace, not accumulate, tool calls");
+    assert_eq!(detail_after.tool_counts.get("Write").copied(), Some(1));
+    assert_eq!(detail_after.tool_counts.get("Read"), None);
+    assert_eq!(detail_after.tool_counts.get("Bash"), None);
+}
+
 #[test]
 fn test_tool_call_repository_counts_by_session() {
     let dir = tempdir().unwrap();
@@ -518,6 +584,7 @@ fn test_tool_call_repository_counts_by_session() {
             is_fully_priced: true,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
     let internal_id: i64 = conn
@@ -609,6 +676,7 @@ fn test_session_repository_get_session_populates_tool_counts_from_internal_id() 
             is_fully_priced: true,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
     let internal_id: i64 = conn
@@ -795,6 +863,7 @@ fn make_test_session_record(provider_session_id: &str) -> SessionFactRecord {
             is_fully_priced: true,
         },
         has_anomalies: false,
+        tool_calls: Vec::new(),
     }
 }
 

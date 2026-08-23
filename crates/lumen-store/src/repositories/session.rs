@@ -74,6 +74,14 @@ impl<'a> SessionRepository<'a> {
         token_usage_repo.delete_for_session(internal_id)?;
         token_usage_repo.insert_token_usage(&record.provider, &record.provider_session_id, &record.economics)?;
 
+        // CRIT-LUMEN-174: previously SessionFactRecord carried no tool-call data at all, so
+        // get_session's tool_counts/error_counts (populated via ToolCallRepository) were always
+        // empty for every real ingested session -- a shipped, already-advertised field that
+        // silently never worked because nothing ever called insert_tool_calls.
+        let tool_call_repo = ToolCallRepository::new(self.conn);
+        tool_call_repo.delete_for_session(internal_id)?;
+        tool_call_repo.insert_tool_calls(internal_id, &record.tool_calls)?;
+
         Ok(())
     }
 

@@ -28,6 +28,11 @@ pub struct SessionFactRecord {
     pub turn_count: usize,
     pub economics: TokenEconomics,
     pub has_anomalies: bool,
+    /// Per-tool-call facts for this session (CRIT-LUMEN-174). Persisted internally by
+    /// `SessionRepository::upsert_session` via `ToolCallRepository`, same pattern as
+    /// `economics.per_model` being persisted via `TokenUsageRepository` -- an empty `Vec` is
+    /// valid (a session with no tool calls, or a caller that doesn't track them).
+    pub tool_calls: Vec<ToolCallFactRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

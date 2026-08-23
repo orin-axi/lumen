@@ -5,7 +5,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
 use lumen_model::*;
 use lumen_session::*;
-use lumen_store::{SessionFactRecord, SessionFilter, SessionRepository, SqliteStore};
+use lumen_store::{SessionFactRecord, SessionFilter, SessionRepository, SqliteStore, ToolCallFactRecord};
 use miette::{miette, IntoDiagnostic, Result};
 use std::fs::File;
 use std::io::BufReader;
@@ -262,6 +262,60 @@ fn print_economics_table(eco: &TokenEconomics) {
     println!("{table}");
 }
 
+/// Short, stable label for a `ToolIntent` variant, stored as `tool_calls.intent_kind`
+/// (CRIT-LUMEN-174). A Lumen-specific naming judgment call -- there is no external
+/// convention to follow here, unlike the adapter-facing field names elsewhere in this
+/// codebase, which are dictated by each provider's real wire format.
+fn intent_kind_str(intent: &ToolIntent) -> &'static str {
+    match intent {
+        ToolIntent::FileRead { .. } => "file_read",
+        ToolIntent::FileEdit { .. } => "file_edit",
+        ToolIntent::FileCreate { .. } => "file_create",
+        ToolIntent::CodeSearch { .. } => "code_search",
+        ToolIntent::FileDiscovery { .. } => "file_discovery",
+        ToolIntent::TestExecution { .. } => "test_execution",
+        ToolIntent::VersionControl { .. } => "version_control",
+        ToolIntent::SubagentSpawn { .. } => "subagent_spawn",
+        ToolIntent::McpCall { .. } => "mcp_call",
+        ToolIntent::Other { .. } => "other",
+    }
+}
+
+/// Builds one `ToolCallFactRecord` per real tool call across every turn (CRIT-LUMEN-174: the
+/// data was always present on `CanonicalTranscript` but nothing ever persisted it, so
+/// `SessionRepository::get_session`'s tool_counts/error_counts -- already shipped, already
+/// serialized -- were silently empty for every real ingested session).
+///
+/// `is_error` is resolved by matching `call_id` against `tool_results` across the WHOLE
+/// transcript, not just the call's own turn: some adapters (e.g. Claude Code) place a tool's
+/// result in a later turn than its call. A call with no matching result anywhere defaults to
+/// `false` (not known to have failed), since no result was ever observed for it.
+///
+/// `latency_ms` has no real per-call source in `CanonicalTurn` today (only a per-turn total) --
+/// using the owning turn's `latency_ms` for every call within it is a documented approximation,
+/// not real per-call timing; revisit if per-call latency is ever added to the canonical model.
+fn build_tool_call_records(turns: &[CanonicalTurn]) -> Vec<ToolCallFactRecord> {
+    let error_by_call_id: std::collections::HashMap<&str, bool> = turns
+        .iter()
+        .flat_map(|t| t.tool_results.iter())
+        .map(|result| (result.call_id.as_str(), result.is_error))
+        .collect();
+
+    turns
+        .iter()
+        .flat_map(|turn| {
+            turn.tool_calls.iter().map(|call| ToolCallFactRecord {
+                turn_index: turn.turn_index,
+                tool_name: call.tool_name.to_string(),
+                call_id: call.call_id.to_string(),
+                intent_kind: intent_kind_str(&call.intent).to_string(),
+                is_error: error_by_call_id.get(call.call_id.as_str()).copied().unwrap_or(false),
+                latency_ms: turn.latency_ms,
+            })
+        })
+        .collect()
+}
+
 fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()> {
     let store = SqliteStore::open(db_path).into_diagnostic()?;
     let conn = store.connection().into_diagnostic()?;
@@ -296,6 +350,7 @@ fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()>
                         turn_count: transcript.turns.len(),
                         economics: transcript.economics.clone(),
                         has_anomalies: !transcript.detected_anomalies.is_empty(),
+                        tool_calls: build_tool_call_records(&transcript.turns),
                     };
                     match repo.upsert_session(&record) {
                         Ok(()) => ingested.push(record),
@@ -463,5 +518,14 @@ mod tests {
             .expect("the ingested session must be found by (provider, session_id)");
         assert_eq!(detail.summary.provider, "claude-code");
         assert!(detail.summary.turn_count > 0);
+
+        // CRIT-LUMEN-174: tool_counts was always empty on this exact real-fixture path before --
+        // cmd_ingest never populated SessionFactRecord.tool_calls, so nothing was ever there for
+        // get_session to read back. The real fixture's first session carries two real tool calls
+        // (view_file, replace_file_content), neither erroring.
+        assert!(!detail.tool_counts.is_empty(), "tool_counts must be populated from a real ingest, not empty");
+        assert_eq!(detail.tool_counts.get("view_file").copied(), Some(1));
+        assert_eq!(detail.tool_counts.get("replace_file_content").copied(), Some(1));
+        assert!(detail.error_counts.is_empty(), "neither real tool call in this fixture errored");
     }
 }

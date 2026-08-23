@@ -50,6 +50,7 @@ fn test_concurrent_multithreaded_readers_and_writers() {
                         None,
                     ),
                     has_anomalies: false,
+                    tool_calls: Vec::new(),
                 };
                 repo.upsert_session(&record).unwrap();
             }
