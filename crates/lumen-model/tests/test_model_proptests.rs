@@ -90,14 +90,17 @@ fn test_all_commercial_model_pricing_matrix() {
         ("claude-3-5-sonnet", 3.00, 3.75, 0.30, 15.00),
         ("claude-3-5-haiku", 0.80, 1.00, 0.08, 4.00),
         ("claude-opus", 15.00, 18.75, 1.50, 75.00),
-        ("gpt-4o", 2.50, 2.50, 1.25, 10.00),
+        // gpt-4o and gemini-2.0-flash are now vendored (CRIT-LUMEN-170): LiteLLM publishes no
+        // cache-write rate for either, so CacheWrite is genuinely 0.0 per CRIT-LUMEN-161,
+        // replacing the prior hand-typed same-as-input approximation.
+        ("gpt-4o", 2.50, 0.0, 1.25, 10.00),
         ("deepseek-r1", 0.55, 0.55, 0.14, 2.19),
         // seed() has no CacheWrite row for Qwen (CRIT-LUMEN-004/161): a recognized model
         // missing a specific rate kind returns 0.0, it does not fall back to its input rate.
         ("qwen-2.5-coder", 0.20, 0.0, 0.05, 0.60),
         ("kimi-k1.5", 0.50, 0.50, 0.10, 2.00),
         ("glm-4-plus", 1.40, 1.40, 0.20, 1.40),
-        ("gemini-2.0-flash", 0.10, 0.10, 0.025, 0.40),
+        ("gemini-2.0-flash", 0.10, 0.0, 0.025, 0.40),
         ("gemini-2.0-pro", 1.25, 1.25, 0.30, 5.00),
     ];
 
@@ -105,10 +108,25 @@ fn test_all_commercial_model_pricing_matrix() {
     let now = Utc::now();
 
     for (model, in_rate, write_rate, read_rate, out_rate) in models {
-        assert_eq!(pricing.rate_for(model, None, TokenRateKind::Input, now), in_rate, "Mismatch for {model}");
-        assert_eq!(pricing.rate_for(model, None, TokenRateKind::CacheWrite, now), write_rate, "Mismatch for {model}");
-        assert_eq!(pricing.rate_for(model, None, TokenRateKind::CacheRead, now), read_rate, "Mismatch for {model}");
-        assert_eq!(pricing.rate_for(model, None, TokenRateKind::Output, now), out_rate, "Mismatch for {model}");
+        // gpt-4o/gemini-2.0-flash's rates come from vendored data (a dollars-per-token ->
+        // rate_per_m float conversion), which isn't always float-exact -- tolerance-based
+        // comparison like the rest of this file's float assertions, not assert_eq!.
+        assert!(
+            (pricing.rate_for(model, None, TokenRateKind::Input, now) - in_rate).abs() < 1e-9,
+            "Mismatch for {model}"
+        );
+        assert!(
+            (pricing.rate_for(model, None, TokenRateKind::CacheWrite, now) - write_rate).abs() < 1e-9,
+            "Mismatch for {model}"
+        );
+        assert!(
+            (pricing.rate_for(model, None, TokenRateKind::CacheRead, now) - read_rate).abs() < 1e-9,
+            "Mismatch for {model}"
+        );
+        assert!(
+            (pricing.rate_for(model, None, TokenRateKind::Output, now) - out_rate).abs() < 1e-9,
+            "Mismatch for {model}"
+        );
 
         // Compute sample cost
         let usage = TurnTokenUsage {

@@ -22,6 +22,15 @@ lint:
 deny:
     moon run :deny
 
+# ── Pricing Data (CRIT-LUMEN-170) ────────────────────────────────────────────
+# Refreshes the vendored LiteLLM pricing snapshot lumen-model's PricingTable::seed() loads at
+# compile time. Never fetched live -- Lumen prices historical sessions and needs point-in-time-
+# stable rates, so this is a periodic, explicit re-vendor step, not a per-request fetch. Review
+# the diff (especially any rate change for a currently-seeded model) before committing.
+update-pricing:
+    curl -sSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json \
+        -o crates/lumen-model/data/litellm_model_prices.json
+
 fmt:
     moon run :format
 

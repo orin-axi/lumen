@@ -49,7 +49,34 @@ fn seed_epoch() -> DateTime<Utc> {
 pub static SEEDED: std::sync::LazyLock<PricingTable> = std::sync::LazyLock::new(PricingTable::seed);
 
 impl PricingTable {
-    /// Seeds the table with the canonical rate rows for the models this pass covers.
+    /// Seeds the table with two layers of rate rows, both sharing the same `effective_from`
+    /// epoch (this table does not yet do real historical price-change versioning -- every row,
+    /// old and new, is treated as effective from the same fixed point onward; see
+    /// [`seed_epoch`]):
+    ///
+    /// 1. A small hand-typed *legacy* layer (below) for models that were real, actively-used,
+    ///    and individually verified against official pricing pages at some point, but have since
+    ///    rolled off LiteLLM's actively-maintained current snapshot entirely (superseded by
+    ///    newer model generations in the vendored source -- CRIT-LUMEN-170's research confirmed
+    ///    this directly: `claude-3-5-sonnet`, `claude-3-5-haiku`, `qwen-2.5-coder`, `claude-opus`
+    ///    (the v3 family), `deepseek-r1`, `kimi-k1.5`, `glm-4-plus`, and `gemini-2.0-pro` are
+    ///    genuinely absent from the current upstream file under any close variant of these
+    ///    names). Lumen prices historical sessions, so a model dropping out of LiteLLM's
+    ///    *current* snapshot must not make real historical sessions using it go unpriced --
+    ///    these rows are deliberately retained by hand rather than deleted.
+    /// 2. The bulk of the table, loaded from [`crate::pricing_source::load_vendored_rates`]: a
+    ///    vendored copy of LiteLLM's community-maintained `model_prices_and_context_window.json`
+    ///    (CRIT-LUMEN-170), refreshed via `just update-pricing`, not hand-typed. This replaces
+    ///    what used to be a second hand-typed block for every "current-generation" model
+    ///    (`claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`,
+    ///    `gpt-5.6-terra`, `gemini-3.7-flash`, plus the still-current `gpt-4o` and
+    ///    `gemini-2.0-flash`) -- cross-checked against real Opus 5 rates on 2026-08-22 and found
+    ///    to match Lumen's prior hand-typed values exactly for every field LiteLLM actually
+    ///    publishes. Two corrections fell out of that cross-check and are intentional, not
+    ///    regressions: `gpt-5.6-terra`'s cache-write rate is real ($2.50/M, not the same as its
+    ///    $2.00/M input rate as previously assumed), and `gpt-4o`/`gemini-2.0-flash` publish no
+    ///    cache-write rate at all (so `rate_for` now correctly returns 0.0 for that kind per
+    ///    CRIT-LUMEN-161, instead of the previous same-as-input approximation).
     pub fn seed() -> Self {
         let epoch = seed_epoch();
         let mut rates = Vec::new();
@@ -79,17 +106,11 @@ impl PricingTable {
         push("qwen-2.5-coder", TokenRateKind::CacheRead, 0.05);
         push("qwen-2.5-coder", TokenRateKind::Output, 0.60);
 
-        // CRIT-LUMEN-099: Claude Opus
+        // CRIT-LUMEN-099: Claude Opus (v3 family)
         push("claude-opus", TokenRateKind::Input, 15.00);
         push("claude-opus", TokenRateKind::CacheWrite, 18.75);
         push("claude-opus", TokenRateKind::CacheRead, 1.50);
         push("claude-opus", TokenRateKind::Output, 75.00);
-
-        // CRIT-LUMEN-100: GPT-4o
-        push("gpt-4o", TokenRateKind::Input, 2.50);
-        push("gpt-4o", TokenRateKind::CacheWrite, 2.50);
-        push("gpt-4o", TokenRateKind::CacheRead, 1.25);
-        push("gpt-4o", TokenRateKind::Output, 10.00);
 
         // CRIT-LUMEN-101: DeepSeek R1
         push("deepseek-r1", TokenRateKind::Input, 0.55);
@@ -109,80 +130,19 @@ impl PricingTable {
         push("glm-4-plus", TokenRateKind::CacheRead, 0.20);
         push("glm-4-plus", TokenRateKind::Output, 1.40);
 
-        // CRIT-LUMEN-104: Gemini 2.0 Flash
-        push("gemini-2.0-flash", TokenRateKind::Input, 0.10);
-        push("gemini-2.0-flash", TokenRateKind::CacheWrite, 0.10);
-        push("gemini-2.0-flash", TokenRateKind::CacheRead, 0.025);
-        push("gemini-2.0-flash", TokenRateKind::Output, 0.40);
-
         // CRIT-LUMEN-105: Gemini 2.0 Pro
         push("gemini-2.0-pro", TokenRateKind::Input, 1.25);
         push("gemini-2.0-pro", TokenRateKind::CacheWrite, 1.25);
         push("gemini-2.0-pro", TokenRateKind::CacheRead, 0.30);
         push("gemini-2.0-pro", TokenRateKind::Output, 5.00);
 
-        // Current-generation models, seeded from official first-party pricing pages fetched
-        // 2026-08-21 (not third-party aggregator sites -- see the pricing-audit finding this
-        // table's earlier rows had silently gone stale against every model actually seen in
-        // real local session data). Re-verify against the source page before trusting these
-        // past any provider-announced price change.
-
-        // Anthropic, platform.claude.com/docs/en/about-claude/pricing -- Input / 5m Cache Write
-        // (1.25x input) / 1h Cache Write (2x input) / Cache Read (0.1x input) / Output, uniform
-        // multiplier pattern confirmed across the whole table on that page.
-        push("claude-fable-5", TokenRateKind::Input, 10.00);
-        push("claude-fable-5", TokenRateKind::CacheWrite, 12.50);
-        push("claude-fable-5", TokenRateKind::CacheWrite1h, 20.00);
-        push("claude-fable-5", TokenRateKind::CacheRead, 1.00);
-        push("claude-fable-5", TokenRateKind::Output, 50.00);
-
-        push("claude-opus-5", TokenRateKind::Input, 5.00);
-        push("claude-opus-5", TokenRateKind::CacheWrite, 6.25);
-        push("claude-opus-5", TokenRateKind::CacheWrite1h, 10.00);
-        push("claude-opus-5", TokenRateKind::CacheRead, 0.50);
-        push("claude-opus-5", TokenRateKind::Output, 25.00);
-
-        push("claude-sonnet-5", TokenRateKind::Input, 2.00);
-        push("claude-sonnet-5", TokenRateKind::CacheWrite, 2.50);
-        push("claude-sonnet-5", TokenRateKind::CacheWrite1h, 4.00);
-        push("claude-sonnet-5", TokenRateKind::CacheRead, 0.20);
-        push("claude-sonnet-5", TokenRateKind::Output, 10.00);
-
-        push("claude-haiku-4-5", TokenRateKind::Input, 1.00);
-        push("claude-haiku-4-5", TokenRateKind::CacheWrite, 1.25);
-        push("claude-haiku-4-5", TokenRateKind::CacheWrite1h, 2.00);
-        push("claude-haiku-4-5", TokenRateKind::CacheRead, 0.10);
-        push("claude-haiku-4-5", TokenRateKind::Output, 5.00);
-
-        // OpenAI, developers.openai.com/api/docs/pricing -- short-context tier (OpenAI has no
-        // separate cache-write charge; writing to cache costs the standard input rate, only a
-        // cache read/hit is discounted, mirroring the existing gpt-4o row's convention below).
-        push("gpt-5.6-terra", TokenRateKind::Input, 2.00);
-        push("gpt-5.6-terra", TokenRateKind::CacheWrite, 2.00);
-        push("gpt-5.6-terra", TokenRateKind::CacheRead, 0.20);
-        push("gpt-5.6-terra", TokenRateKind::Output, 12.00);
-
-        // Google, ai.google.dev/gemini-api/docs/pricing -- introductory rate valid through
-        // 2026-12-31 (doubles 2027-01-01; not seeded here, add a second dated row with
-        // effective_from = 2027-01-01 when that boundary is reached). No separate cache-write
-        // charge published, same convention as the gpt-5.6-terra/gemini-2.0-flash rows.
-        push("gemini-3.7-flash", TokenRateKind::Input, 0.75);
-        push("gemini-3.7-flash", TokenRateKind::CacheWrite, 0.75);
-        push("gemini-3.7-flash", TokenRateKind::CacheRead, 0.075);
-        push("gemini-3.7-flash", TokenRateKind::Output, 3.75);
-
-        // Adversarial finding (high severity): reasoning tokens were tracked
-        // (TurnTokenUsage/TokenEconomics::reasoning_output_tokens) but had no rate row at all,
-        // so no adapter could ever price them. OpenAI's reasoning-capable models (the o-series
-        // and GPT-4o's own reasoning mode) publish that reasoning tokens are billed as part of
-        // completion/output tokens, at the SAME published output rate -- this is genuine,
-        // documented billing behavior, not a fabricated number. No provider seeded in this
-        // table publishes a distinct, separate reasoning-token rate. Given that, "same as
-        // Output" is the closest defensible default for every seeded model: 0.0 would silently
-        // under-price every reasoning-heavy session (worse than a documented approximation),
-        // and inventing a distinct number for non-OpenAI models would fabricate data this table
-        // has no source for. This is an explicit judgment call, not verified per-model pricing
-        // for every seeded provider -- revisit if a provider publishes a differing rate.
+        // Reasoning rows for the legacy layer only: the vendored layer supplies its own (see
+        // pricing_source::load_vendored_rates). Adversarial finding (high severity, original to
+        // this table): reasoning tokens were tracked (TurnTokenUsage/
+        // TokenEconomics::reasoning_output_tokens) but had no rate row at all, so no adapter
+        // could ever price them. Every provider observed bills reasoning tokens as part of
+        // completion/output tokens, at the SAME published output rate -- "same as Output" is
+        // the closest defensible default absent a provider-published distinct reasoning rate.
         // Each value below is copied verbatim from that same model's Output row pushed above --
         // deliberately duplicated, not looked up, so this loop can run without re-borrowing
         // `rates` while `push` still holds it mutably.
@@ -191,21 +151,15 @@ impl PricingTable {
             ("claude-3-5-haiku", 4.00),
             ("qwen-2.5-coder", 0.60),
             ("claude-opus", 75.00),
-            ("gpt-4o", 10.00),
             ("deepseek-r1", 2.19),
             ("kimi-k1.5", 2.00),
             ("glm-4-plus", 1.40),
-            ("gemini-2.0-flash", 0.40),
             ("gemini-2.0-pro", 5.00),
-            ("claude-fable-5", 50.00),
-            ("claude-opus-5", 25.00),
-            ("claude-sonnet-5", 10.00),
-            ("claude-haiku-4-5", 5.00),
-            ("gpt-5.6-terra", 12.00),
-            ("gemini-3.7-flash", 3.75),
         ] {
             push(model, TokenRateKind::Reasoning, output_rate);
         }
+
+        rates.extend(crate::pricing_source::load_vendored_rates(epoch));
 
         Self { rates }
     }

@@ -147,12 +147,15 @@ fn test_codex_adapter_prices_tiered_session_nonzero() {
     assert_eq!(transcript.economics.output_tokens, 110);
 
     // model_family is "gpt-5.6-terra" (Bug 4 fix), extracted from the fixture's real
-    // thread_settings.model field, and is now a real seeded model (official OpenAI pricing,
-    // developers.openai.com/api/docs/pricing, fetched 2026-08-21): $2.00/M input, $2.00/M
-    // cache-write (OpenAI has no separate cache-write charge), $0.20/M cache-read, $12.00/M
-    // output, $12.00/M reasoning (same judgment-call convention as every other seeded model).
+    // thread_settings.model field, and is now a real seeded model, vendored from LiteLLM's
+    // model_prices_and_context_window.json (CRIT-LUMEN-170): $2.00/M input, $2.50/M cache-write
+    // (a real distinct rate -- CRIT-LUMEN-170 corrected the prior hand-typed assumption that
+    // OpenAI never bills a separate cache-write rate; gpt-5.6-terra actually does), $0.20/M
+    // cache-read, $12.00/M output, $12.00/M reasoning (LiteLLM publishes no distinct reasoning
+    // rate for this model, so it falls back to the output rate, same convention as every other
+    // seeded model without one).
     let expected_cost = 1500.0 * 2.00 / 1_000_000.0
-        + 25.0 * 2.00 / 1_000_000.0
+        + 25.0 * 2.50 / 1_000_000.0
         + 900.0 * 0.20 / 1_000_000.0
         + 110.0 * 12.00 / 1_000_000.0
         + 55.0 * 12.00 / 1_000_000.0;
@@ -183,9 +186,10 @@ fn test_codex_adapter_reasoning_tokens_flow_into_pricing_math() {
     assert_eq!(transcript.economics.reasoning_output_tokens, 55);
 
     // model_family "gpt-5.6-terra" is a real seeded model (see
-    // test_codex_adapter_prices_tiered_session_nonzero for the sourced rates).
+    // test_codex_adapter_prices_tiered_session_nonzero for the sourced rates, including why
+    // cache-write is $2.50/M rather than $2.00/M).
     let cost_without_reasoning = 1500.0 * 2.00 / 1_000_000.0
-        + 25.0 * 2.00 / 1_000_000.0
+        + 25.0 * 2.50 / 1_000_000.0
         + 900.0 * 0.20 / 1_000_000.0
         + 110.0 * 12.00 / 1_000_000.0;
     let reasoning_contribution = 55.0 * 12.00 / 1_000_000.0;

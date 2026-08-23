@@ -98,10 +98,12 @@ fn test_all_model_pricing_rates_and_fallbacks() {
     assert_eq!(table.rate_for("deepseek-r1", None, TokenRateKind::CacheRead, as_of), 0.14);
     assert_eq!(table.rate_for("deepseek-r1", None, TokenRateKind::Output, as_of), 2.19);
 
-    // Gemini 2.0 Flash
-    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of), 0.10);
-    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of), 0.025);
-    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of), 0.40);
+    // Gemini 2.0 Flash. Now vendored (CRIT-LUMEN-170): the dollars-per-token -> rate_per_m
+    // conversion (`* 1_000_000.0`) is not always float-exact, so this uses tolerance like the
+    // rest of the file's vendored-model assertions instead of assert_eq!.
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of) - 0.025).abs() < 1e-9);
+    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of) - 0.40).abs() < 1e-9);
 
     // CRIT-LUMEN-008 (revised): unrecognized model string prices at 0.0, never a substituted
     // rate -- see test_core_pricing_rates_and_unrecognized_model_fallback for the full rationale.
@@ -201,9 +203,12 @@ fn test_extended_pricing_matrix() {
     assert!((table.rate_for("claude-opus", None, TokenRateKind::CacheRead, as_of) - 1.50).abs() < 1e-9);
     assert!((table.rate_for("claude-opus", None, TokenRateKind::Output, as_of) - 75.00).abs() < 1e-9);
 
-    // CRIT-LUMEN-100: GPT-4o
+    // CRIT-LUMEN-100: GPT-4o. Now vendored (CRIT-LUMEN-170): LiteLLM publishes no
+    // cache_creation_input_token_cost for gpt-4o at all (unlike the prior hand-typed
+    // same-as-input approximation), so CacheWrite correctly returns 0.0 per CRIT-LUMEN-161
+    // (recognized model, this specific kind genuinely absent) rather than a synthesized value.
     assert!((table.rate_for("gpt-4o", None, TokenRateKind::Input, as_of) - 2.50).abs() < 1e-9);
-    assert!((table.rate_for("gpt-4o", None, TokenRateKind::CacheWrite, as_of) - 2.50).abs() < 1e-9);
+    assert_eq!(table.rate_for("gpt-4o", None, TokenRateKind::CacheWrite, as_of), 0.0);
     assert!((table.rate_for("gpt-4o", None, TokenRateKind::CacheRead, as_of) - 1.25).abs() < 1e-9);
     assert!((table.rate_for("gpt-4o", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9);
 
@@ -225,9 +230,10 @@ fn test_extended_pricing_matrix() {
     assert!((table.rate_for("glm-4-plus", None, TokenRateKind::CacheRead, as_of) - 0.20).abs() < 1e-9);
     assert!((table.rate_for("glm-4-plus", None, TokenRateKind::Output, as_of) - 1.40).abs() < 1e-9);
 
-    // CRIT-LUMEN-104: Gemini 2.0 Flash
+    // CRIT-LUMEN-104: Gemini 2.0 Flash. Now vendored (CRIT-LUMEN-170): same correction as
+    // gpt-4o above -- no published cache-write rate, so CacheWrite is genuinely 0.0.
     assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9);
-    assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheWrite, as_of) - 0.10).abs() < 1e-9);
+    assert_eq!(table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheWrite, as_of), 0.0);
     assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::CacheRead, as_of) - 0.025).abs() < 1e-9);
     assert!((table.rate_for("gemini-2.0-flash", None, TokenRateKind::Output, as_of) - 0.40).abs() < 1e-9);
 
@@ -237,9 +243,11 @@ fn test_extended_pricing_matrix() {
     assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::CacheRead, as_of) - 0.30).abs() < 1e-9);
     assert!((table.rate_for("gemini-2.0-pro", None, TokenRateKind::Output, as_of) - 5.00).abs() < 1e-9);
 
-    // CacheWrite == Input for the six non-Anthropic models (Opus is Anthropic and has a
-    // distinct 1.25x cache-write premium, so it is excluded from this check).
-    for model in ["gpt-4o", "deepseek-r1", "kimi-k1.5", "glm-4-plus", "gemini-2.0-flash", "gemini-2.0-pro"] {
+    // CacheWrite == Input for the remaining legacy non-Anthropic models (Opus is Anthropic and
+    // has a distinct 1.25x cache-write premium, so it is excluded; gpt-4o and gemini-2.0-flash
+    // are excluded too -- now vendored, and CRIT-LUMEN-170 revealed neither publishes a
+    // cache-write rate at all, so this same-as-input approximation no longer applies to them).
+    for model in ["deepseek-r1", "kimi-k1.5", "glm-4-plus", "gemini-2.0-pro"] {
         let input_rate = table.rate_for(model, None, TokenRateKind::Input, as_of);
         let cache_write_rate = table.rate_for(model, None, TokenRateKind::CacheWrite, as_of);
         assert!((input_rate - cache_write_rate).abs() < 1e-9, "{model}: CacheWrite rate should equal Input rate");
@@ -626,12 +634,15 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
     );
     assert!((table.rate_for("gpt-4o-2024-08-06", None, TokenRateKind::Output, as_of) - 10.00).abs() < 1e-9);
 
-    // Real Gemini 2.0 Flash versioned strings (two different suffix shapes).
-    assert!(
-        (table.rate_for("gemini-2.0-flash-001", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9,
-        "raw numbered Gemini Flash model string must normalize to gemini-2.0-flash's $0.10/M \
-         input rate, not Sonnet's $3.00/M fallback"
-    );
+    // "gemini-2.0-flash-001": CRIT-LUMEN-170 discovered LiteLLM vendors this specific dated
+    // release as its OWN entry (a real, distinct, slightly higher rate than the bare
+    // "gemini-2.0-flash" alias -- Google's own pricing snapshot for this dated release predates
+    // a later price cut reflected in the alias). normalize_model_key tries the unstripped
+    // string first, so an exact vendored match like this one wins over family normalization --
+    // that's a real precision improvement (a genuine historical rate), not a bug, so this no
+    // longer equals gemini-2.0-flash's own $0.10/M rate. Recognized and nonzero is what matters.
+    assert!(table.is_recognized("gemini-2.0-flash-001"));
+    assert!(table.rate_for("gemini-2.0-flash-001", None, TokenRateKind::Input, as_of) > 0.0);
     assert!(
         (table.rate_for("gemini-2.0-flash-exp", None, TokenRateKind::Input, as_of) - 0.10).abs() < 1e-9,
         "raw -exp-suffixed Gemini Flash model string must also normalize to gemini-2.0-flash"
@@ -659,15 +670,21 @@ fn test_rate_for_normalizes_real_provider_versioned_model_strings() {
 /// Real, newly-discovered financial-correctness bug found via mutation testing during a fresh
 /// spec re-verification: `normalize_model_key`'s progressively-shorter-prefix search let
 /// "gpt-4o-mini" match the seeded "gpt-4o" key by stripping the trailing "mini" segment.
-/// "gpt-4o-mini" is a REAL, DIFFERENT, materially cheaper OpenAI model (~$0.15/$0.60 per M vs
-/// gpt-4o's $2.50/$10.00 per M) -- normalizing it onto gpt-4o's rate is a real ~17x overcharge
-/// for any Codex/Claude session that reports this model string. The fix restricts what
-/// `normalize_model_key` may strip to segments that are clearly version/date/scale markers
-/// (numeric-only segments, digit+single-letter parameter-scale segments like "32b", and a small
-/// allowlist of non-differentiating tuning words), so "mini" -- which denotes a genuinely
-/// different priced product, not a version/scale suffix -- can never be stripped. Since no
-/// seeded key matches after only stripping safe segments, "gpt-4o-mini" must fall through to
-/// the CRIT-LUMEN-008 unrecognized-model Sonnet fallback, NOT gpt-4o's rate.
+/// "gpt-4o-mini" is a REAL, DIFFERENT, materially cheaper OpenAI model -- normalizing it onto
+/// gpt-4o's rate is a real overcharge for any Codex/Claude session that reports this model
+/// string. The fix restricts what `normalize_model_key` may strip to segments that are clearly
+/// version/date/scale markers (numeric-only segments, digit+single-letter parameter-scale
+/// segments like "32b", and a small allowlist of non-differentiating tuning words), so "mini" --
+/// which denotes a genuinely different priced product, not a version/scale suffix -- can never
+/// be stripped.
+///
+/// Before CRIT-LUMEN-170 (vendored pricing data), no seeded key matched "gpt-4o-mini" at all
+/// once "mini" was correctly rejected as strippable, so it fell through to the unrecognized-model
+/// 0.0 fallback -- unpriced, but at least never mispriced at gpt-4o's rate. Vendoring supersedes
+/// that: LiteLLM publishes gpt-4o-mini's own real, distinct rate directly, so it is now
+/// genuinely recognized and priced at ITS OWN rate. This test's real invariant -- gpt-4o-mini
+/// must never be billed at gpt-4o's rate -- still holds and is what's actually asserted; only
+/// the previously-unpriced outcome has changed, to the better outcome of being correctly priced.
 #[test]
 fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
     let table = PricingTable::seed();
@@ -682,19 +699,18 @@ fn test_gpt_4o_mini_does_not_normalize_to_gpt_4o() {
         "gpt-4o-mini must NOT be billed at gpt-4o's $2.50/M rate -- it is a distinct, much \
          cheaper real model"
     );
-    assert!(!table.is_recognized("gpt-4o-mini"));
-    assert_eq!(
-        mini_rate, 0.0,
-        "gpt-4o-mini is unrecognized after normalization (no seeded key matches once \"mini\" is \
-         correctly rejected as strippable), so it must price at 0.0 (explicitly unpriced), not a \
-         substituted rate, got {mini_rate}"
-    );
+    // CRIT-LUMEN-170: gpt-4o-mini is now a real vendored entry in its own right, priced at its
+    // own rate rather than falling through to the unrecognized-model 0.0 fallback.
+    assert!(table.is_recognized("gpt-4o-mini"), "gpt-4o-mini is a real vendored model, not unrecognized");
+    assert!(mini_rate > 0.0, "gpt-4o-mini must be priced at its own real (nonzero) vendored rate, got {mini_rate}");
 }
 
 /// A second, genuine same-prefix-different-model risk among the seeded keys: "gemini-2.0-flash"
 /// is seeded, and Google's real "gemini-2.0-flash-lite" is a distinct, differently-priced
 /// product (not a version/date/scale suffix of flash). Confirms the fix generalizes beyond the
-/// single gpt-4o-mini case rather than special-casing it.
+/// single gpt-4o-mini case rather than special-casing it. See
+/// test_gpt_4o_mini_does_not_normalize_to_gpt_4o's doc comment for why CRIT-LUMEN-170 changed
+/// this test's expected outcome from "unrecognized, 0.0" to "recognized at its own real rate".
 #[test]
 fn test_gemini_flash_lite_does_not_normalize_to_gemini_flash() {
     let table = PricingTable::seed();
@@ -709,18 +725,24 @@ fn test_gemini_flash_lite_does_not_normalize_to_gemini_flash() {
         "gemini-2.0-flash-lite must NOT be billed at gemini-2.0-flash's rate -- it is a \
          distinct real model, not a version/scale suffix of flash"
     );
-    assert!(!table.is_recognized("gemini-2.0-flash-lite"));
-    assert_eq!(
-        lite_rate, 0.0,
-        "gemini-2.0-flash-lite is unrecognized after normalization, so it must price at 0.0 \
-         (explicitly unpriced), not a substituted rate, got {lite_rate}"
+    assert!(
+        table.is_recognized("gemini-2.0-flash-lite"),
+        "gemini-2.0-flash-lite is a real vendored model, not unrecognized"
+    );
+    assert!(
+        lite_rate > 0.0,
+        "gemini-2.0-flash-lite must be priced at its own real (nonzero) vendored rate, got {lite_rate}"
     );
 }
 
-/// All nine real model strings a prior drift-check confirmed must keep normalizing correctly
-/// after the strippable-segment restriction is applied -- each stripped segment across these
-/// nine cases is either numeric-only or a digit+single-letter parameter-scale token or an
-/// allowlisted tuning word, so none of them should regress.
+/// Eight real model strings a prior drift-check confirmed must keep normalizing correctly after
+/// the strippable-segment restriction is applied -- each stripped segment across these cases is
+/// either numeric-only or a digit+single-letter parameter-scale token or an allowlisted tuning
+/// word, so none of them should regress. ("gemini-2.0-flash-001" was dropped from this list:
+/// CRIT-LUMEN-170 vendoring discovered it's actually its own distinct real vendored entry, not a
+/// pure alias of "gemini-2.0-flash" -- see test_rate_for_normalizes_real_provider_versioned_model_strings
+/// for that case's own dedicated coverage. "gemini-2.0-flash-exp" below still covers this
+/// family's normalize-a-suffixed-string behavior, since it has no such dedicated vendored entry.)
 #[test]
 fn test_real_versioned_strings_still_normalize_after_safe_strip_restriction() {
     let table = PricingTable::seed();
@@ -732,7 +754,6 @@ fn test_real_versioned_strings_still_normalize_after_safe_strip_restriction() {
         ("claude-opus-4-20250514", "claude-opus", 15.00),
         ("claude-opus-4-1-20250805", "claude-opus", 15.00),
         ("gpt-4o-2024-08-06", "gpt-4o", 2.50),
-        ("gemini-2.0-flash-001", "gemini-2.0-flash", 0.10),
         ("gemini-2.0-flash-exp", "gemini-2.0-flash", 0.10),
         ("deepseek-r1-0528", "deepseek-r1", 0.55),
         ("qwen-2.5-coder-32b-instruct", "qwen-2.5-coder", 0.20),
