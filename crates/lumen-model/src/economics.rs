@@ -6,6 +6,34 @@ use std::collections::HashMap;
 use crate::pricing::{PricingTable, TokenRateKind};
 use crate::turn::TurnTokenUsage;
 
+/// A cost value that may or may not be genuinely known, pairing the dollar amount with
+/// [`TokenEconomics::is_fully_priced`]'s recognition signal at the type level (CRIT-LUMEN-171).
+/// The (`f64` total_cost_usd, `bool` is_fully_priced) pair those fields form is still the right
+/// representation for computation and storage -- summing costs across turns/sessions and
+/// persisting to SQL both need the raw numeric value regardless of pricing status -- but at the
+/// point a cost is surfaced to a human (a CLI table, a report), reading `total_cost_usd` alone
+/// silently mis-displays an unpriced session as a suspicious-looking `$0.00`. `Cost` makes that
+/// mistake a compile error at the display boundary: obtain one via [`TokenEconomics::cost`] and
+/// the `Unpriced` case must be handled to get a number out at all.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cost {
+    /// A dollar amount computed from at least one seeded `PricingTable` row.
+    Priced(f64),
+    /// No seeded pricing matched the model -- the real cost is unknown, not `$0.00`.
+    Unpriced,
+}
+
+impl Cost {
+    /// Formats this cost for display: `$X.XXXX` when priced, or `unpriced_label` verbatim when
+    /// not (e.g. `"unknown (model not in pricing table)"`).
+    pub fn format_usd(&self, unpriced_label: &str) -> String {
+        match self {
+            Cost::Priced(v) => format!("${v:.4}"),
+            Cost::Unpriced => unpriced_label.to_string(),
+        }
+    }
+}
+
 /// One turn's token usage plus the pricing context (timestamp, tier) needed to price it
 /// independently -- required so a session whose turns straddle a price-change boundary (or a
 /// service_tier change) is priced correctly on both sides of the boundary.
@@ -52,6 +80,17 @@ pub struct ModelTokenSummary {
     pub turns: u64,
     /// See [`TokenEconomics::is_fully_priced`].
     pub is_fully_priced: bool,
+}
+
+impl ModelTokenSummary {
+    /// See [`TokenEconomics::cost`].
+    pub fn cost(&self) -> Cost {
+        if self.is_fully_priced {
+            Cost::Priced(self.cost_usd)
+        } else {
+            Cost::Unpriced
+        }
+    }
 }
 
 impl TokenEconomics {
@@ -157,6 +196,17 @@ impl TokenEconomics {
             per_model,
             reasoning_output_tokens: reasoning_tokens_total,
             is_fully_priced,
+        }
+    }
+
+    /// Surfaces `total_cost_usd`/`is_fully_priced` as a single [`Cost`] value -- the
+    /// CRIT-LUMEN-171 display-boundary accessor. Prefer this over reading `total_cost_usd`
+    /// directly whenever the value is headed somewhere a human will read it.
+    pub fn cost(&self) -> Cost {
+        if self.is_fully_priced {
+            Cost::Priced(self.total_cost_usd)
+        } else {
+            Cost::Unpriced
         }
     }
 }

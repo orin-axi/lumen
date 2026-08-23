@@ -41,7 +41,23 @@ pub struct SessionSummaryReadModel {
     pub cache_hit_ratio: f32,
     pub total_cost_usd: f64,
     pub net_savings_usd: f64,
+    /// See `lumen_model::TokenEconomics::is_fully_priced`. Persisted per CRIT-LUMEN-171 --
+    /// previously lost on every store round-trip (never written by `upsert_session`, always
+    /// read back hardcoded `true`), which meant a genuinely unpriced session displayed as an
+    /// indistinguishable-from-real `$0.0000` everywhere the store's read models were used.
+    pub is_fully_priced: bool,
     pub created_at: DateTime<Utc>,
+}
+
+impl SessionSummaryReadModel {
+    /// See `lumen_model::TokenEconomics::cost`.
+    pub fn cost(&self) -> lumen_model::Cost {
+        if self.is_fully_priced {
+            lumen_model::Cost::Priced(self.total_cost_usd)
+        } else {
+            lumen_model::Cost::Unpriced
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

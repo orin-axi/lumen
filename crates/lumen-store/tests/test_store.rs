@@ -260,6 +260,100 @@ fn test_session_repository_idempotent_upsert_and_list() {
     assert_eq!(detail.economics.net_savings_usd, 0.135);
 }
 
+/// CRIT-LUMEN-171: `is_fully_priced` was never persisted by `upsert_session` (no backing
+/// column) and was hardcoded to `true` in `get_session`'s read-back regardless of the real
+/// value -- so a genuinely unpriced session (unrecognized model, real cost unknown) round-tripped
+/// through the store and came back indistinguishable from a verified $0.00 session everywhere
+/// the store's read models are used (`lumen sessions`/`lumen session` CLI output, JSON API
+/// consumers). Proves the real value survives `upsert_session` -> `list_recent`/`get_session`
+/// for both the top-level session and its per-model breakdown (`TokenUsageRepository`).
+#[test]
+fn test_session_repository_is_fully_priced_round_trips_through_store() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("is_fully_priced_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+
+    let repo = SessionRepository::new(&conn);
+
+    let mut per_model = std::collections::HashMap::new();
+    per_model.insert(
+        compact_str::CompactString::from("totally-unrecognized-model-xyz"),
+        lumen_model::ModelTokenSummary {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            reasoning_tokens: 0,
+            cost_usd: 0.0,
+            turns: 1,
+            is_fully_priced: false,
+        },
+    );
+
+    let record = SessionFactRecord {
+        provider: "claude".to_string(),
+        provider_session_id: "sess-unpriced-1".to_string(),
+        model_family: "totally-unrecognized-model-xyz".to_string(),
+        orchestrator: OrchestratorKind::ClaudeCode,
+        started_at: Utc::now(),
+        ended_at: Utc::now(),
+        wall_duration_ms: 1000,
+        turn_count: 1,
+        economics: TokenEconomics {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            ephemeral_5m_tokens: 0,
+            ephemeral_1h_tokens: 0,
+            cache_hit_ratio: 0.0,
+            total_cost_usd: 0.0,
+            provided_cost_usd: None,
+            baseline_cost_no_cache_usd: 0.0,
+            net_savings_usd: 0.0,
+            efficiency_multiplier: 1.0,
+            per_model,
+            reasoning_output_tokens: 0,
+            is_fully_priced: false,
+        },
+        has_anomalies: false,
+    };
+
+    repo.upsert_session(&record).expect("upsert failed");
+
+    let list = repo.list_recent(&SessionFilter { provider: None, limit: 10 }).expect("list_recent failed");
+    assert_eq!(list.len(), 1);
+    assert!(!list[0].is_fully_priced, "list_recent must report the real is_fully_priced value, not hardcoded true");
+    assert!(matches!(list[0].cost(), lumen_model::Cost::Unpriced));
+
+    let detail = repo.get_session("claude", "sess-unpriced-1").expect("get_session failed").expect("session not found");
+    assert!(
+        !detail.summary.is_fully_priced,
+        "get_session's summary must report the real is_fully_priced value, not hardcoded true"
+    );
+    assert!(
+        !detail.economics.is_fully_priced,
+        "get_session's economics must report the real is_fully_priced value, not hardcoded true"
+    );
+    assert!(matches!(detail.economics.cost(), lumen_model::Cost::Unpriced));
+
+    let model_summary =
+        detail.economics.per_model.get("totally-unrecognized-model-xyz").expect("per-model breakdown must round-trip");
+    assert!(
+        !model_summary.is_fully_priced,
+        "per-model is_fully_priced must round-trip through token_usage, not hardcoded true"
+    );
+
+    // Sanity: a normal, recognized-model session still round-trips as fully priced (the fix
+    // must not have flipped the default for the common case).
+    repo.upsert_session(&make_test_session_record("sess-priced-1")).expect("upsert failed");
+    let priced_detail =
+        repo.get_session("claude", "sess-priced-1").expect("get_session failed").expect("session not found");
+    assert!(priced_detail.summary.is_fully_priced);
+    assert!(priced_detail.economics.is_fully_priced);
+}
+
 #[test]
 fn test_findings_repository_insert_and_query() {
     let dir = tempdir().unwrap();

@@ -925,3 +925,42 @@ fn test_unrecognized_model_sets_is_fully_priced_false() {
     assert!(recognized.total_cost_usd > 0.0);
     assert!(recognized.per_model["claude-sonnet-5"].is_fully_priced);
 }
+
+/// CRIT-LUMEN-171: `Cost` is the structural fix for the same class of bug
+/// test_unrecognized_model_sets_is_fully_priced_false guards -- `TokenEconomics::cost()` and
+/// `ModelTokenSummary::cost()` must produce `Unpriced`/`Priced` matching `is_fully_priced`
+/// exactly, and `Cost::format_usd` must never print a dollar figure for `Unpriced`.
+#[test]
+fn test_cost_reflects_is_fully_priced_and_formats_correctly() {
+    let pricing = PricingTable::seed();
+    let as_of = Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap();
+
+    let usage = TurnTokenUsage {
+        input_tokens: 1_000_000,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_creation_1h_tokens: 0,
+        cache_read_tokens: 0,
+        reasoning_tokens: 0,
+    };
+    let turn = TurnPricingInput { usage, timestamp: as_of, tier: None };
+
+    let unrecognized =
+        TokenEconomics::calculate(std::slice::from_ref(&turn), "another-brand-new-model-nobody-seeded", &pricing, None);
+    assert_eq!(unrecognized.cost(), Cost::Unpriced);
+    assert_eq!(unrecognized.cost().format_usd("unknown"), "unknown");
+    assert_eq!(
+        unrecognized.per_model["another-brand-new-model-nobody-seeded"].cost(),
+        Cost::Unpriced,
+        "ModelTokenSummary::cost() must agree with TokenEconomics::cost()"
+    );
+
+    let recognized = TokenEconomics::calculate(&[turn], "claude-sonnet-5", &pricing, None);
+    assert_eq!(recognized.cost(), Cost::Priced(recognized.total_cost_usd));
+    assert!((recognized.total_cost_usd - 2.00).abs() < 1e-9, "sanity: 1M input tokens @ $2.00/M");
+    assert_eq!(recognized.cost().format_usd("unknown"), "$2.0000");
+    assert_eq!(
+        recognized.per_model["claude-sonnet-5"].cost(),
+        Cost::Priced(recognized.per_model["claude-sonnet-5"].cost_usd)
+    );
+}

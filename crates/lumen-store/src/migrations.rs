@@ -59,6 +59,7 @@ impl MigrationManager {
             net_savings_usd REAL NOT NULL,
             efficiency_multiplier REAL NOT NULL,
             has_anomalies INTEGER NOT NULL DEFAULT 0,
+            is_fully_priced INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(provider, provider_session_id)
         );
@@ -74,7 +75,8 @@ impl MigrationManager {
             cache_read_tokens INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL,
             cost_usd REAL NOT NULL,
-            turns INTEGER NOT NULL DEFAULT 0
+            turns INTEGER NOT NULL DEFAULT 0,
+            is_fully_priced INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
 

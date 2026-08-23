@@ -227,27 +227,36 @@ fn print_economics_table(eco: &TokenEconomics) {
         Cell::new(format!("{:.1}%", eco.cache_hit_ratio)).fg(Color::Green),
     ]));
 
-    if eco.is_fully_priced {
-        table.add_row(Row::from(vec![
-            Cell::new("Actual USD Spend").fg(Color::Cyan),
-            Cell::new(format!("${:.4}", eco.total_cost_usd)).fg(Color::Cyan),
-        ]));
-        table.add_row(Row::from(vec!["Baseline Cost (No Cache)", &format!("${:.4}", eco.baseline_cost_no_cache_usd)]));
-        table.add_row(Row::from(vec![
-            Cell::new("Net Savings USD").fg(Color::Green),
-            Cell::new(format!("${:.4}", eco.net_savings_usd)).fg(Color::Green),
-        ]));
-        table.add_row(Row::from(vec![
-            Cell::new("Efficiency Multiplier").fg(Color::Yellow),
-            Cell::new(format!("{:.2}x", eco.efficiency_multiplier)).fg(Color::Yellow),
-        ]));
-    } else {
-        // No seeded pricing row matched this model -- report cost as an explicit unknown rather
-        // than the misleading $0.00 that a silently-wrong or silently-zero rate would produce.
-        table.add_row(Row::from(vec![
-            Cell::new("USD Spend").fg(Color::Red),
-            Cell::new("unknown (model not in pricing table)").fg(Color::Red),
-        ]));
+    // CRIT-LUMEN-171: eco.cost() forces this match, so a future call site can't add a new
+    // dollar figure here and forget the is_fully_priced check the way cmd_sessions once did.
+    match eco.cost() {
+        Cost::Priced(total) => {
+            table.add_row(Row::from(vec![
+                Cell::new("Actual USD Spend").fg(Color::Cyan),
+                Cell::new(format!("${total:.4}")).fg(Color::Cyan),
+            ]));
+            table.add_row(Row::from(vec![
+                "Baseline Cost (No Cache)",
+                &format!("${:.4}", eco.baseline_cost_no_cache_usd),
+            ]));
+            table.add_row(Row::from(vec![
+                Cell::new("Net Savings USD").fg(Color::Green),
+                Cell::new(format!("${:.4}", eco.net_savings_usd)).fg(Color::Green),
+            ]));
+            table.add_row(Row::from(vec![
+                Cell::new("Efficiency Multiplier").fg(Color::Yellow),
+                Cell::new(format!("{:.2}x", eco.efficiency_multiplier)).fg(Color::Yellow),
+            ]));
+        }
+        Cost::Unpriced => {
+            // No seeded pricing row matched this model -- report cost as an explicit unknown
+            // rather than the misleading $0.00 that a silently-wrong or silently-zero rate
+            // would produce.
+            table.add_row(Row::from(vec![
+                Cell::new("USD Spend").fg(Color::Red),
+                Cell::new("unknown (model not in pricing table)").fg(Color::Red),
+            ]));
+        }
     }
 
     println!("{table}");
@@ -319,11 +328,7 @@ fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()>
             "Cost USD",
         ]));
         for record in &ingested {
-            let cost = if record.economics.is_fully_priced {
-                format!("${:.4}", record.economics.total_cost_usd)
-            } else {
-                "unknown".to_string()
-            };
+            let cost = record.economics.cost().format_usd("unknown");
             table.add_row(Row::from(vec![
                 Cell::new(&record.provider),
                 Cell::new(&record.provider_session_id),
@@ -374,7 +379,10 @@ fn cmd_sessions(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, j
             Cell::new(&s.model_family),
             Cell::new(s.turn_count.to_string()),
             Cell::new(format!("{:.1}%", s.cache_hit_ratio)),
-            Cell::new(format!("${:.4}", s.total_cost_usd)),
+            // CRIT-LUMEN-171 (real bug, found via this pass): this read s.total_cost_usd
+            // directly with no is_fully_priced check at all, so an unpriced session (an
+            // unrecognized model) displayed as an indistinguishable-from-real "$0.0000" here.
+            Cell::new(s.cost().format_usd("unknown")),
         ]));
     }
     println!("{table}");

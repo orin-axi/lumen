@@ -39,8 +39,8 @@ impl<'a> TokenUsageRepository<'a> {
         let mut stmt = self
             .conn
             .prepare(
-                "INSERT INTO token_usage (session_id, model_name, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, cost_usd, turns)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO token_usage (session_id, model_name, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, cost_usd, turns, is_fully_priced)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )
             .map_err(StoreError::Sqlite)?;
 
@@ -54,6 +54,7 @@ impl<'a> TokenUsageRepository<'a> {
                 summary.output_tokens,
                 summary.cost_usd,
                 summary.turns,
+                if summary.is_fully_priced { 1 } else { 0 },
             ])
             .map_err(StoreError::Sqlite)?;
         }
@@ -83,7 +84,7 @@ impl<'a> TokenUsageRepository<'a> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT model_name, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, cost_usd, turns
+                "SELECT model_name, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, cost_usd, turns, is_fully_priced
                  FROM token_usage WHERE session_id = ?1",
             )
             .map_err(StoreError::Sqlite)?;
@@ -97,6 +98,7 @@ impl<'a> TokenUsageRepository<'a> {
                 let output_tokens: i64 = row.get(4)?;
                 let cost_usd: f64 = row.get(5)?;
                 let turns: i64 = row.get(6)?;
+                let is_fully_priced: i64 = row.get(7)?;
 
                 Ok((
                     CompactString::new(model_name),
@@ -105,13 +107,13 @@ impl<'a> TokenUsageRepository<'a> {
                         output_tokens: output_tokens as u64,
                         cache_creation_tokens: cache_creation_tokens as u64,
                         cache_read_tokens: cache_read_tokens as u64,
-                        // reasoning_tokens and is_fully_priced are not yet persisted columns --
-                        // pre-existing read-back gap, tracked alongside the other economics
-                        // fields already known to be lost on store round-trip.
+                        // reasoning_tokens has no backing column -- separate, already-known gap,
+                        // not addressed here (CRIT-LUMEN-171 scope is the pricing-honesty signal
+                        // only). is_fully_priced IS now a real persisted column (CRIT-LUMEN-171).
                         reasoning_tokens: 0,
                         cost_usd,
                         turns: turns as u64,
-                        is_fully_priced: true,
+                        is_fully_priced: is_fully_priced != 0,
                     },
                 ))
             })
