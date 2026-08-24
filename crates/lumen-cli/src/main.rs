@@ -564,6 +564,19 @@ fn cmd_trends(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, com
         return Err(miette!("lumen trends requires at least 2 sessions after filtering; found {}", points.len()));
     }
 
+    if compaction {
+        if let Some(p) = provider.as_deref() {
+            if p != "claude-code" {
+                return Err(miette!("--compaction is only available for --provider claude-code (got '{p}')"));
+            }
+        }
+        if provider.is_none() || provider.as_deref() == Some("claude-code") {
+            if repo.count_sessions("claude-code").into_diagnostic()? == 0 {
+                return Err(miette!("--compaction requires at least one Claude Code session; none found in the store"));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -703,6 +716,64 @@ mod tests {
         assert!(
             err.to_string().contains("at least 2 sessions"),
             "expected error to mention 'at least 2 sessions', got: {err}"
+        );
+    }
+
+    #[test]
+    fn cmd_trends_compaction_with_incompatible_provider_errors_naming_it() {
+        // CRIT-LUMEN-189: --compaction with --provider set to something other than
+        // "claude-code" must error, naming the incompatible provider, and this check must
+        // take precedence over CRIT-LUMEN-188.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+        for i in 0..2 {
+            repo.upsert_session(&SessionFactRecord {
+                provider: "codex".to_string(),
+                provider_session_id: format!("s{i}"),
+                ..Default::default()
+            })
+            .expect("upsert_session must succeed");
+        }
+        drop(conn);
+        drop(store);
+
+        let err = cmd_trends(&db_path, Some("codex".to_string()), 50, true, false)
+            .expect_err("expected an error for --compaction with an incompatible --provider");
+        let msg = err.to_string();
+        assert!(msg.contains("codex"), "expected error to name 'codex', got: {msg}");
+        assert!(msg.contains("claude-code"), "expected error to mention 'claude-code', got: {msg}");
+    }
+
+    #[test]
+    fn cmd_trends_compaction_with_no_claude_code_sessions_errors() {
+        // CRIT-LUMEN-188: --compaction with no/claude-code --provider and zero claude-code
+        // sessions store-wide must error.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+        for i in 0..2 {
+            repo.upsert_session(&SessionFactRecord {
+                provider: "codex".to_string(),
+                provider_session_id: format!("s{i}"),
+                ..Default::default()
+            })
+            .expect("upsert_session must succeed");
+        }
+        drop(conn);
+        drop(store);
+
+        let err = cmd_trends(&db_path, None, 50, true, false)
+            .expect_err("expected an error for --compaction with zero claude-code sessions");
+        assert!(
+            err.to_string().contains("Claude Code session"),
+            "expected error to mention 'Claude Code session', got: {err}"
         );
     }
 }
