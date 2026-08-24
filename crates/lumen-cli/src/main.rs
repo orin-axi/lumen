@@ -579,10 +579,10 @@ fn cmd_trends(
                 return Err(miette!("--compaction is only available for --provider claude-code (got '{p}')"));
             }
         }
-        if provider.is_none() || provider.as_deref() == Some("claude-code") {
-            if repo.count_sessions("claude-code").into_diagnostic()? == 0 {
-                return Err(miette!("--compaction requires at least one Claude Code session; none found in the store"));
-            }
+        if (provider.is_none() || provider.as_deref() == Some("claude-code"))
+            && repo.count_sessions("claude-code").into_diagnostic()? == 0
+        {
+            return Err(miette!("--compaction requires at least one Claude Code session; none found in the store"));
         }
     }
 
