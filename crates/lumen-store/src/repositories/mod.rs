@@ -7,6 +7,7 @@ pub mod session;
 pub mod snapshot;
 pub mod token_usage;
 pub mod tool_call;
+pub mod trend;
 
 pub use command_event::CommandEventRepository;
 pub use compaction::CompactionRepository;
@@ -17,3 +18,4 @@ pub use session::SessionRepository;
 pub use snapshot::SnapshotRepository;
 pub use token_usage::TokenUsageRepository;
 pub use tool_call::ToolCallRepository;
+pub use trend::TrendRepository;

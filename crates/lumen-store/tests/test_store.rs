@@ -1660,3 +1660,32 @@ fn test_upsert_session_persists_and_reingest_replaces_compaction_events() {
         .unwrap();
     assert_eq!(count_after, 0);
 }
+
+#[test]
+fn test_count_sessions_is_store_wide_and_ignores_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    for i in 0..3 {
+        session_repo
+            .upsert_session(&SessionFactRecord {
+                provider: "claude-code".to_string(),
+                provider_session_id: format!("cc-{i}"),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-0".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    assert_eq!(trend_repo.count_sessions("claude-code").unwrap(), 3);
+    assert_eq!(trend_repo.count_sessions("codex").unwrap(), 1);
+    assert_eq!(trend_repo.count_sessions("antigravity").unwrap(), 0);
+}
