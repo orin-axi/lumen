@@ -92,6 +92,18 @@ impl MigrationManager {
         );
         CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
 
+        CREATE TABLE IF NOT EXISTS compaction_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            sequence INTEGER NOT NULL,
+            trigger TEXT NOT NULL,
+            pre_tokens INTEGER NOT NULL,
+            post_tokens INTEGER NOT NULL,
+            cumulative_dropped_tokens INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_compaction_events_session ON compaction_events(session_id);
+
         CREATE TABLE IF NOT EXISTS command_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

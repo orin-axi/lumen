@@ -1558,3 +1558,27 @@ fn test_get_session_scoped_by_provider_avoids_cross_provider_collision() {
     );
     assert_eq!(codex_detail.summary.total_cost_usd, 9.99);
 }
+
+#[test]
+fn test_compaction_events_table_exists_with_expected_columns() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let mut stmt = conn.prepare("PRAGMA table_info(compaction_events)").unwrap();
+    let cols: Vec<String> =
+        stmt.query_map([], |row| row.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect();
+    assert_eq!(
+        cols,
+        vec![
+            "id",
+            "session_id",
+            "sequence",
+            "trigger",
+            "pre_tokens",
+            "post_tokens",
+            "cumulative_dropped_tokens",
+            "duration_ms"
+        ]
+    );
+}
