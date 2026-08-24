@@ -49,12 +49,9 @@ smallvec = { version = "1.13", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-simd-json = "0.14"
 
 # Graph and parallel processing
 petgraph = "0.6"
-rayon = "1.10"
-memmap2 = "0.9"
 
 # Error handling & CLI
 thiserror = "2.0"

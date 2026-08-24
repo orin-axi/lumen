@@ -16,12 +16,21 @@ impl<'a> SessionRepository<'a> {
         Self { conn }
     }
 
+    /// Upserts the session row plus its token_usage and tool_calls sub-records as one atomic
+    /// unit. Previously these were 1 + N + M separate autocommit statements (one commit each
+    /// under SQLite's default autocommit mode); a crash or error partway through left the
+    /// session row updated but sub-records partially deleted/inserted. `unchecked_transaction`
+    /// is used (rather than requiring `&mut Connection`) because `SessionRepository` -- like
+    /// every repository in this module -- is constructed from a shared `&Connection` so callers
+    /// can freely construct multiple repositories against the same connection; SQLite itself
+    /// has no issue beginning a transaction without exclusive Rust-level mutable access, which
+    /// is exactly what `unchecked_transaction` is for.
     pub fn upsert_session(&self, record: &SessionFactRecord) -> Result<(), StoreError> {
         let orchestrator_str = format!("{:?}", record.orchestrator);
+        let tx = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
 
-        self.conn
-            .execute(
-                "INSERT INTO sessions (
+        tx.execute(
+            "INSERT INTO sessions (
                     provider, provider_session_id, model_family, orchestrator,
                     started_at, ended_at, wall_duration_ms, turn_count,
                     cache_hit_ratio, total_cost_usd, baseline_cost_usd, net_savings_usd,
@@ -41,28 +50,27 @@ impl<'a> SessionRepository<'a> {
                     efficiency_multiplier = excluded.efficiency_multiplier,
                     has_anomalies = excluded.has_anomalies,
                     is_fully_priced = excluded.is_fully_priced",
-                params![
-                    record.provider,
-                    record.provider_session_id,
-                    record.model_family,
-                    orchestrator_str,
-                    record.started_at,
-                    record.ended_at,
-                    record.wall_duration_ms as i64,
-                    record.turn_count as i64,
-                    record.economics.cache_hit_ratio,
-                    record.economics.total_cost_usd,
-                    record.economics.baseline_cost_no_cache_usd,
-                    record.economics.net_savings_usd,
-                    record.economics.efficiency_multiplier,
-                    if record.has_anomalies { 1 } else { 0 },
-                    if record.economics.is_fully_priced { 1 } else { 0 },
-                ],
-            )
-            .map_err(StoreError::Sqlite)?;
+            params![
+                record.provider,
+                record.provider_session_id,
+                record.model_family,
+                orchestrator_str,
+                record.started_at,
+                record.ended_at,
+                record.wall_duration_ms as i64,
+                record.turn_count as i64,
+                record.economics.cache_hit_ratio,
+                record.economics.total_cost_usd,
+                record.economics.baseline_cost_no_cache_usd,
+                record.economics.net_savings_usd,
+                record.economics.efficiency_multiplier,
+                if record.has_anomalies { 1 } else { 0 },
+                if record.economics.is_fully_priced { 1 } else { 0 },
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
 
-        let internal_id: i64 = self
-            .conn
+        let internal_id: i64 = tx
             .query_row(
                 "SELECT id FROM sessions WHERE provider = ?1 AND provider_session_id = ?2",
                 params![record.provider, record.provider_session_id],
@@ -70,7 +78,7 @@ impl<'a> SessionRepository<'a> {
             )
             .map_err(StoreError::Sqlite)?;
 
-        let token_usage_repo = TokenUsageRepository::new(self.conn);
+        let token_usage_repo = TokenUsageRepository::new(&tx);
         token_usage_repo.delete_for_session(internal_id)?;
         token_usage_repo.insert_token_usage(&record.provider, &record.provider_session_id, &record.economics)?;
 
@@ -78,10 +86,11 @@ impl<'a> SessionRepository<'a> {
         // get_session's tool_counts/error_counts (populated via ToolCallRepository) were always
         // empty for every real ingested session -- a shipped, already-advertised field that
         // silently never worked because nothing ever called insert_tool_calls.
-        let tool_call_repo = ToolCallRepository::new(self.conn);
+        let tool_call_repo = ToolCallRepository::new(&tx);
         tool_call_repo.delete_for_session(internal_id)?;
         tool_call_repo.insert_tool_calls(internal_id, &record.tool_calls)?;
 
+        tx.commit().map_err(StoreError::Sqlite)?;
         Ok(())
     }
 

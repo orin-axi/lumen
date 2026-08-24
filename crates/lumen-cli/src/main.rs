@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, Row, Table};
+use lumen_analysis::detect_trajectory_anomalies;
 use lumen_model::*;
 use lumen_session::*;
 use lumen_store::{SessionFactRecord, SessionFilter, SessionRepository, SqliteStore, ToolCallFactRecord};
@@ -104,10 +105,11 @@ fn provider_str(orchestrator: OrchestratorKind) -> &'static str {
 /// one per real session row for OpenCode's SQLite store (a single `.db` file commonly holds many
 /// real sessions -- see `OpenCodeAdapter`'s doc comment).
 fn load_sessions(path: &Path) -> Result<Vec<CanonicalTranscript>> {
-    // Read initial sample for fingerprinting
+    // Read initial sample for fingerprinting, then reuse the same handle (seeked back to the
+    // start) for the real parse below instead of opening the file a second time.
+    use std::io::{Read, Seek, SeekFrom};
     let mut sample_file = File::open(path).into_diagnostic()?;
     let mut buffer = [0u8; 2048];
-    use std::io::Read;
     let n = sample_file.read(&mut buffer).unwrap_or(0);
     let sample = &buffer[..n];
 
@@ -120,23 +122,59 @@ fn load_sessions(path: &Path) -> Result<Vec<CanonicalTranscript>> {
         )
     })?;
 
-    match orchestrator {
-        OrchestratorKind::OpenCode => OpenCodeAdapter.parse_database(path).into_diagnostic(),
-        _ => {
-            let file = File::open(path).into_diagnostic()?;
-            let reader = BufReader::new(file);
-            let transcript = match orchestrator {
-                OrchestratorKind::ClaudeCode => ClaudeCodeAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
-                OrchestratorKind::Antigravity => AgyAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
-                OrchestratorKind::Codex => CodexAdapter.parse_stream(Box::new(reader)).into_diagnostic(),
-                other => Err(miette!(
+    // ClaudeCode alone can have sibling `subagents/<worker>.jsonl` files (CRIT-LUMEN-026) --
+    // parse_session_with_subagents links them into CanonicalTranscript.subagents, which
+    // rolled_up_economics (CRIT-LUMEN-176) and detected_anomalies (CRIT-LUMEN-179) both need
+    // populated to be meaningful. This can't go through the uniform SessionAdapter::load(source)
+    // path below: `load` only ever receives an abstract Box<dyn BufRead> or a bare database
+    // path, neither of which carries "the real directory this file lives in" -- sibling-file
+    // discovery is inherently a real-filesystem concern, not something SessionSource can express
+    // without coupling every adapter's trait contract to "you get a directory, not just a
+    // source." A single, honest special case for the one adapter that actually needs it.
+    let mut transcripts = if orchestrator == OrchestratorKind::ClaudeCode {
+        let session_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| miette!("session file name is not valid UTF-8: {}", path.display()))?;
+        vec![ClaudeCodeAdapter.parse_session_with_subagents(session_dir, file_name).into_diagnostic()?]
+    } else {
+        let adapter: Box<dyn SessionAdapter> = match orchestrator {
+            OrchestratorKind::Antigravity => Box::new(AgyAdapter),
+            OrchestratorKind::Codex => Box::new(CodexAdapter),
+            OrchestratorKind::OpenCode => Box::new(OpenCodeAdapter),
+            other => {
+                return Err(miette!(
                     "recognized orchestrator {:?} for {} but no adapter is implemented for it yet",
                     other,
                     path.display()
-                )),
-            }?;
-            Ok(vec![transcript])
-        }
+                ))
+            }
+        };
+        let source = if orchestrator == OrchestratorKind::OpenCode {
+            SessionSource::Database(path)
+        } else {
+            sample_file.seek(SeekFrom::Start(0)).into_diagnostic()?;
+            SessionSource::Stream(Box::new(BufReader::new(sample_file)))
+        };
+        adapter.load(source).into_diagnostic()?
+    };
+
+    for transcript in &mut transcripts {
+        populate_detected_anomalies(transcript);
+    }
+
+    Ok(transcripts)
+}
+
+/// Detects CircularLoop/GateStall anomalies (CRIT-LUMEN-179) for `transcript` and every
+/// subagent transitively, each scoped to its own `turns` -- not flattened across the tree, the
+/// same per-transcript-node discipline `rolled_up_economics` documents: a cycle or stall found
+/// inside one subagent's own trajectory is that subagent's fact, not the root's.
+fn populate_detected_anomalies(transcript: &mut CanonicalTranscript) {
+    transcript.detected_anomalies = detect_trajectory_anomalies(transcript);
+    for subagent in &mut transcript.subagents {
+        populate_detected_anomalies(subagent);
     }
 }
 
@@ -197,10 +235,12 @@ fn cmd_trace(path: &Path, json_mode: bool) -> Result<()> {
 
 fn cmd_audit(path: &Path, json_mode: bool) -> Result<()> {
     let transcript = load_session(path)?;
-    let eco = &transcript.economics;
+    // Includes subagent spend, not just the root transcript's own turns -- see
+    // CanonicalTranscript::rolled_up_economics.
+    let eco = transcript.rolled_up_economics();
 
     if json_mode {
-        let json_out = serde_json::to_string_pretty(eco).into_diagnostic()?;
+        let json_out = serde_json::to_string_pretty(&eco).into_diagnostic()?;
         println!("{}", json_out);
         return Ok(());
     }
@@ -208,7 +248,7 @@ fn cmd_audit(path: &Path, json_mode: bool) -> Result<()> {
     println!("\n Token Economics & Cache Audit: {}", transcript.session_id);
     println!(" Model: {}\n", transcript.model_family);
 
-    print_economics_table(eco);
+    print_economics_table(&eco);
     Ok(())
 }
 
@@ -348,7 +388,9 @@ fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()>
                         ended_at: transcript.timing.ended_at,
                         wall_duration_ms: transcript.timing.wall_duration_ms,
                         turn_count: transcript.turns.len(),
-                        economics: transcript.economics.clone(),
+                        // Includes subagent spend, not just the root transcript's own turns --
+                        // see CanonicalTranscript::rolled_up_economics.
+                        economics: transcript.rolled_up_economics(),
                         has_anomalies: !transcript.detected_anomalies.is_empty(),
                         tool_calls: build_tool_call_records(&transcript.turns),
                     };
@@ -485,6 +527,54 @@ mod tests {
         let result = load_session(file.path());
 
         assert!(result.is_err(), "expected an Err for an unrecognized session format, got Ok");
+    }
+
+    #[test]
+    fn load_session_populates_detected_anomalies_from_a_real_circular_loop() {
+        // CRIT-LUMEN-179: end-to-end through load_session (fingerprint -> parse -> anomaly
+        // detection), not just the lumen-analysis-level glue function directly.
+        let sample = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"parentUuid\":\"t0\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c0\",\"name\":\"grep_search\",\"input\":{\"Query\":\"get_balance\"}}],\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"parentUuid\":\"t1\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c1\",\"name\":\"grep_search\",\"input\":{\"Query\":\"get_balance\"}}],\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"parentUuid\":\"t2\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c2\",\"name\":\"grep_search\",\"input\":{\"Query\":\"get_balance\"}}],\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n",
+        );
+        let file = write_temp_file(sample);
+
+        let transcript = load_session(file.path()).expect("expected a real transcript to parse");
+
+        assert_eq!(transcript.detected_anomalies.len(), 1);
+        assert!(matches!(
+            &transcript.detected_anomalies[0],
+            TrajectoryAnomaly::CircularLoop { symbol, cycle_depth } if symbol == "get_balance" && *cycle_depth == 3
+        ));
+    }
+
+    #[test]
+    fn load_session_links_sibling_subagent_files_and_rolls_up_their_cost() {
+        // CRIT-LUMEN-176/179 were both inert via the CLI until now: load_sessions previously
+        // called ClaudeCodeAdapter::parse_stream directly, never parse_session_with_subagents,
+        // so CanonicalTranscript.subagents was always empty for every real `lumen ingest`/`lumen
+        // audit` run regardless of how many sibling subagents/*.jsonl files a real session had.
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        let main_line = "{\"type\":\"assistant\",\"sessionId\":\"parent-1\",\"parentUuid\":\"t0\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"main\"}],\"usage\":{\"input_tokens\":1000,\"output_tokens\":100}}}\n";
+        std::fs::write(dir.path().join("main.jsonl"), main_line).expect("write main.jsonl");
+
+        let subagents_dir = dir.path().join("subagents");
+        std::fs::create_dir(&subagents_dir).expect("create subagents dir");
+        let worker_line = "{\"type\":\"assistant\",\"sessionId\":\"child-1\",\"parentUuid\":\"t0\",\"message\":{\"model\":\"claude-3-5-haiku-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"worker\"}],\"usage\":{\"input_tokens\":2000,\"output_tokens\":200}}}\n";
+        std::fs::write(subagents_dir.join("worker-a.jsonl"), worker_line).expect("write worker-a.jsonl");
+
+        let transcript = load_session(&dir.path().join("main.jsonl")).expect("expected a real transcript to parse");
+
+        assert_eq!(transcript.subagents.len(), 1);
+        assert_eq!(transcript.subagents[0].subagent_role, Some("worker-a".into()));
+
+        let rolled = transcript.rolled_up_economics();
+        assert!(
+            rolled.total_cost_usd > transcript.economics.total_cost_usd,
+            "rolled-up cost must exceed the root's own cost once a real subagent is linked"
+        );
     }
 
     #[test]

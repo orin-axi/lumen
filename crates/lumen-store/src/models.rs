@@ -35,6 +35,33 @@ pub struct SessionFactRecord {
     pub tool_calls: Vec<ToolCallFactRecord>,
 }
 
+impl Default for SessionFactRecord {
+    /// Test/placeholder construction: build with `SessionFactRecord { provider: ..., economics:
+    /// TokenEconomics { input_tokens: ..., ..Default::default() }, ..Default::default() }` so
+    /// adding a new field to either struct no longer breaks every existing call site -- 7 struct
+    /// literals across this crate's tests broke the same way when `tool_calls` was added
+    /// (CRIT-LUMEN-174), before this impl existed. `started_at`/`ended_at` default to the same
+    /// `Utc::now()` call (not `DateTime::UNIX_EPOCH`) so a default-constructed record's timing
+    /// still looks like a real, just-started session rather than a 1970 timestamp that could
+    /// trip up any caller assuming recency.
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            provider: String::new(),
+            provider_session_id: String::new(),
+            model_family: String::new(),
+            orchestrator: OrchestratorKind::default(),
+            started_at: now,
+            ended_at: now,
+            wall_duration_ms: 0,
+            turn_count: 0,
+            economics: TokenEconomics::default(),
+            has_anomalies: false,
+            tool_calls: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummaryReadModel {
     pub id: i64,

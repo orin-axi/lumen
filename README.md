@@ -39,7 +39,7 @@ flowchart TD
         A3["<b>Codex & OpenCode</b><br/><code>Session Logs</code>"]:::source
         
         F(["<b>detect_orchestrator()</b><br/>Header Sniff"]):::router
-        B[("<b>SIMD Streaming Parser</b><br/><code>memmap2 + simd-json</code>")]:::store
+        B[("<b>Streaming Parser</b><br/><code>BufReader + serde_json</code>")]:::store
 
         A1 -->|JSONL stream| F
         A2 -->|JSONL stream| F
@@ -113,26 +113,15 @@ flowchart TD
 
 ## Installation
 
-### Pre-Built Binaries
+Lumen crates are not yet published to crates.io, so `cargo install lumen-cli` and
+`cargo binstall` don't work yet, and there is no `install.sh` or Homebrew tap. Until
+the first crate publishes, build from source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/orin-axi/lumen/main/install.sh | bash
-```
-
-### Homebrew
-
-```bash
-brew install orin-axi/tap/lumen
-```
-
-### Cargo
-
-```bash
-# Via cargo-binstall
-cargo binstall lumen-cli
-
-# From source
-cargo install --locked lumen-cli
+git clone https://github.com/orin-axi/lumen.git
+cd lumen
+cargo build --release --workspace
+./target/release/lumen --help
 ```
 
 ---
@@ -222,7 +211,10 @@ figure.
 
 ## Accumulators
 
-Lumen processes transcript streams in a single linear pass using 22 zero-allocation accumulators:
+Lumen processes transcript streams using zero-allocation accumulators: 19 run in the main
+per-turn pass, `token_usage` is computed once from the transcript's rolled-up economics rather
+than per-turn, `otel_correlation` finalizes from the whole transcript rather than accumulating
+per-turn, and `hook_activity` is implemented but not yet wired into the analysis engine.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f8fafc', 'primaryBorderColor': '#64748b', 'primaryTextColor': '#0f172a', 'classText': '#0f172a', 'lineColor': '#8b5cf6' }}}%%
@@ -297,12 +289,13 @@ classDiagram
 
 ## Rust Crate Usage
 
+Not yet published to crates.io — depend on the git repo or a workspace path until the first
+release:
+
 ```toml
 [dependencies]
-lumen-model = "0.1.0"
-lumen-session = "0.1.0"
-lumen-analysis = "0.1.0"
-lumen-pattern = "0.1.0"
+lumen-model = { git = "https://github.com/orin-axi/lumen" }
+lumen-session = { git = "https://github.com/orin-axi/lumen" }
 ```
 
 ```rust

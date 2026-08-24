@@ -4,7 +4,7 @@ use lumen_model::*;
 use smallvec::SmallVec;
 use std::io::BufRead;
 
-use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
 use crate::fingerprint::detect_orchestrator;
 
 pub struct CodexAdapter;
@@ -32,7 +32,18 @@ impl SessionAdapter for CodexAdapter {
         }
     }
 
-    fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
+    fn load(&self, source: SessionSource) -> Result<Vec<CanonicalTranscript>, IngestionError> {
+        match source {
+            SessionSource::Stream(reader) => self.parse_stream(reader).map(|t| vec![t]),
+            SessionSource::Database(_) => {
+                Err(IngestionError::UnsupportedSourceKind { adapter: self.name(), source_kind: "database" })
+            }
+        }
+    }
+}
+
+impl CodexAdapter {
+    pub fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("codex-session");
         // Honest placeholder, not a real model name: "gpt-4o" was used here before, which was
         // harmless while every unrecognized model fell back to Sonnet's rate regardless. Now

@@ -331,3 +331,56 @@ fn test_claude_code_adapter_no_cost_usd_yields_none_provided_cost() {
 
     assert_eq!(transcript.economics.provided_cost_usd, None);
 }
+
+#[test]
+fn test_claude_code_adapter_attributes_turn_to_plugin_namespaced_skill_invocation() {
+    // CRIT-LUMEN-178: a Skill tool_use block's input.skill carries the real invoked name,
+    // colon-namespaced ("plugin:skill") when the skill is plugin-provided.
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"canon:architect"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    let attribution = transcript.turns[0].attribution.as_ref().expect("expected attribution to be set");
+    assert_eq!(attribution, &AttributionSource::Skill { name: "architect".into(), plugin: Some("canon".into()) });
+}
+
+#[test]
+fn test_claude_code_adapter_attributes_turn_to_unnamespaced_builtin_skill_with_no_plugin() {
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"artifact-design"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    let attribution = transcript.turns[0].attribution.as_ref().expect("expected attribution to be set");
+    assert_eq!(attribution, &AttributionSource::Skill { name: "artifact-design".into(), plugin: None });
+}
+
+#[test]
+fn test_claude_code_adapter_non_skill_turns_have_no_attribution() {
+    // The invocation turn itself gets attribution; a later turn produced as a result of the
+    // skill's loaded instructions does not -- Claude Code carries no structural signal linking
+    // it back, so this codebase does not guess.
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"canon:architect"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"following the skill's instructions"}],"usage":{"input_tokens":50,"output_tokens":5}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert!(transcript.turns[0].attribution.is_some());
+    assert_eq!(transcript.turns[1].attribution, None);
+}
+
+#[test]
+fn test_claude_code_adapter_turn_with_no_skill_tool_call_has_no_attribution() {
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"view_file","input":{"file_path":"Cargo.toml"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(transcript.turns[0].attribution, None);
+}

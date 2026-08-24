@@ -4,43 +4,28 @@ use lumen_model::*;
 use smallvec::SmallVec;
 use std::io::BufRead;
 
-use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
 use crate::fingerprint::detect_orchestrator;
 
 pub struct AgyAdapter;
 
 impl AgyAdapter {
     /// CRIT-LUMEN-165: resolves the real transcript path directly, bypassing the
-    /// ~/.gemini/logs symlink farm.
-    pub fn resolve_transcript_path(brain_root: &std::path::Path, conversation_id: &str) -> std::path::PathBuf {
-        brain_root.join(conversation_id).join(".system_generated").join("logs").join("transcript.jsonl")
-    }
-}
-
-impl SessionAdapter for AgyAdapter {
-    fn name(&self) -> &'static str {
-        "antigravity"
-    }
-
-    fn matches_fingerprint(&self, sample: &str) -> bool {
-        // Delegates to detect_orchestrator (single source of truth for orchestrator precedence)
-        // instead of an independently-coded condition that can drift.
-        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::Antigravity)
-    }
-
-    fn capabilities(&self) -> AdapterCapabilities {
-        AdapterCapabilities {
-            has_token_usage: true,
-            has_tool_results: true,
-            has_shell_commands: true,
-            has_file_events: true,
-            has_lifecycle_hooks: false,
-            supports_incremental_offsets: false,
-            supports_cost_estimation: true,
+    /// ~/.gemini/logs symlink farm. Returns `None` if `conversation_id` contains a path
+    /// separator or `..` component -- it must be a single, literal directory name, never a
+    /// multi-segment or traversal-capable path.
+    pub fn resolve_transcript_path(brain_root: &std::path::Path, conversation_id: &str) -> Option<std::path::PathBuf> {
+        if conversation_id.is_empty()
+            || conversation_id == ".."
+            || conversation_id.contains('/')
+            || conversation_id.contains('\\')
+        {
+            return None;
         }
+        Some(brain_root.join(conversation_id).join(".system_generated").join("logs").join("transcript.jsonl"))
     }
 
-    fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
+    pub fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let session_id = CompactString::new("agy-session");
         // Bug 1 fix: AGY's real on-disk transcript.jsonl schema (step_index, source, type,
         // status, created_at, content, plus thinking/tool_calls[] on PLANNER_RESPONSE entries
@@ -240,5 +225,38 @@ impl SessionAdapter for AgyAdapter {
             parse_failures,
             detected_anomalies: SmallVec::new(),
         })
+    }
+}
+
+impl SessionAdapter for AgyAdapter {
+    fn name(&self) -> &'static str {
+        "antigravity"
+    }
+
+    fn matches_fingerprint(&self, sample: &str) -> bool {
+        // Delegates to detect_orchestrator (single source of truth for orchestrator precedence)
+        // instead of an independently-coded condition that can drift.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::Antigravity)
+    }
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        AdapterCapabilities {
+            has_token_usage: true,
+            has_tool_results: true,
+            has_shell_commands: true,
+            has_file_events: true,
+            has_lifecycle_hooks: false,
+            supports_incremental_offsets: false,
+            supports_cost_estimation: true,
+        }
+    }
+
+    fn load(&self, source: SessionSource) -> Result<Vec<CanonicalTranscript>, IngestionError> {
+        match source {
+            SessionSource::Stream(reader) => self.parse_stream(reader).map(|t| vec![t]),
+            SessionSource::Database(_) => {
+                Err(IngestionError::UnsupportedSourceKind { adapter: self.name(), source_kind: "database" })
+            }
+        }
     }
 }

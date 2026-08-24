@@ -4,7 +4,7 @@ use lumen_model::*;
 use smallvec::SmallVec;
 use std::io::BufRead;
 
-use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter};
+use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
 use crate::fingerprint::detect_orchestrator;
 
 pub struct ClaudeCodeAdapter;
@@ -32,7 +32,18 @@ impl SessionAdapter for ClaudeCodeAdapter {
         }
     }
 
-    fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
+    fn load(&self, source: SessionSource) -> Result<Vec<CanonicalTranscript>, IngestionError> {
+        match source {
+            SessionSource::Stream(reader) => self.parse_stream(reader).map(|t| vec![t]),
+            SessionSource::Database(_) => {
+                Err(IngestionError::UnsupportedSourceKind { adapter: self.name(), source_kind: "database" })
+            }
+        }
+    }
+}
+
+impl ClaudeCodeAdapter {
+    pub fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError> {
         let mut session_id = CompactString::new("unknown");
         let mut model_family = CompactString::new("claude-code-unknown-model");
         let mut turns = Vec::new();
@@ -296,8 +307,9 @@ impl SessionAdapter for ClaudeCodeAdapter {
 
                     // Only push if turn has substantive content, tools, or usage
                     if turn_usage.is_some() || !tool_calls.is_empty() || turn_text.is_some() {
+                        let attribution = attribution_from_tool_calls(&tool_calls);
                         turns.push(CanonicalTurn {
-                            attribution: None,
+                            attribution,
                             turn_index: turns.len(),
                             role: TurnRole::Assistant,
                             timestamp: ended_at,
@@ -434,6 +446,29 @@ impl ClaudeCodeAdapter {
         }
 
         Ok(transcript)
+    }
+}
+
+/// Attributes a turn to the skill (and, when the name is plugin-namespaced, plugin) it invoked
+/// -- CRIT-LUMEN-178. Scoped deliberately narrow: only the turn containing the `Skill` tool_use
+/// block itself gets an attribution. Claude Code doesn't scope a skill's effect to a
+/// sub-transcript the way subagents do (no sibling JSONL, no boundary) -- it just injects the
+/// skill's instructions into the same ongoing thread -- so there is no structural signal for
+/// "this later turn happened because of that earlier skill invocation." Attributing that
+/// downstream cascade would require a heuristic (e.g. "everything until the next Skill
+/// invocation or an unrelated topic shift") that no other part of this codebase uses; deferred
+/// as a real, separate decision rather than silently guessed at here.
+fn attribution_from_tool_calls(tool_calls: &[CanonicalToolCall]) -> Option<AttributionSource> {
+    let skill_call = tool_calls.iter().find(|c| c.tool_name == "Skill")?;
+    let raw_name = skill_call.raw_arguments.get("skill").and_then(|v| v.as_str())?;
+
+    // Plugin-provided skills are named "plugin:skill" (e.g. "canon:architect", "proof:proof");
+    // a built-in skill with no plugin owner (e.g. "artifact-design") has no colon.
+    match raw_name.split_once(':') {
+        Some((plugin, skill)) => {
+            Some(AttributionSource::Skill { name: CompactString::new(skill), plugin: Some(CompactString::new(plugin)) })
+        }
+        None => Some(AttributionSource::Skill { name: CompactString::new(raw_name), plugin: None }),
     }
 }
 

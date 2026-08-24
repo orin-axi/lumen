@@ -19,13 +19,21 @@ cargo build --workspace
 
 # Run all unit and integration tests
 cargo test --workspace
-
-# Check formatting
-cargo fmt --all -- --check
-
-# Check clippy lints
-cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+### Before Opening a PR
+
+CI runs `just ci`, which is more than `build`/`test`/`fmt`/`clippy` — it also checks for
+unused dependencies (`cargo machete`), broken doc links (`cargo doc -D warnings`), and
+license/dependency policy (`cargo deny`). Run the same pipeline locally before pushing:
+
+```bash
+just ci
+```
+
+Individual checks (`just check`, `just lint`, `just fmt-check`, `just machete`,
+`just doc-check`, `just deny`, `just audit`) are defined in the [`justfile`](./justfile) if you
+want to run one in isolation.
 
 ---
 
@@ -45,5 +53,5 @@ Contributors must maintain the following architectural rules:
 
 1. **Create a Branch**: Use a descriptive branch name (e.g. `feat/new-accumulator`, `fix/agy-parser`).
 2. **Write Tests First**: Add unit or integration tests verifying the change.
-3. **Verify CI**: Ensure `cargo test --workspace` and `cargo clippy` pass with zero warnings.
+3. **Verify CI**: Run `just ci` locally — it's the same pipeline CI runs.
 4. **Conventional Commits**: Format commit messages using conventional prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`).

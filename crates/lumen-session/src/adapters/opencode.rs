@@ -5,7 +5,8 @@ use rusqlite::{Connection, OpenFlags};
 use smallvec::SmallVec;
 use std::path::Path;
 
-use crate::adapter::IngestionError;
+use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
+use crate::fingerprint::detect_orchestrator;
 
 /// (tool calls, tool results, joined text) extracted from one message's real `part` rows.
 type MessageParts = (SmallVec<[CanonicalToolCall; 2]>, SmallVec<[CanonicalToolResult; 2]>, Option<String>);
@@ -13,12 +14,12 @@ type MessageParts = (SmallVec<[CanonicalToolCall; 2]>, SmallVec<[CanonicalToolRe
 /// OpenCode's real on-disk store is a SQLite database
 /// (`~/.local/share/opencode/opencode.db`), not a JSONL line stream -- confirmed against a real
 /// local database this session (`session`/`message`/`part` tables, JSON blobs in a `data`
-/// column). This is structurally incompatible with `SessionAdapter::parse_stream`'s
-/// `Box<dyn BufRead>` contract (there is no meaningful way to stream a SQLite file line by
-/// line), so `OpenCodeAdapter` does not implement that trait -- it exposes `parse_database`
-/// instead, taking a file path and returning one `CanonicalTranscript` per real session found in
-/// the database (a single `.db` file commonly holds many real sessions, unlike the other three
-/// adapters' 1-file-to-1-session JSONL logs).
+/// column). This was structurally incompatible with the old `SessionAdapter::parse_stream`
+/// contract (there is no meaningful way to stream a SQLite file line by line), so
+/// `OpenCodeAdapter` used to not implement `SessionAdapter` at all -- `SessionSource` (CRIT-LUMEN-180)
+/// resolved that by giving the trait's `load` method a source shape (`SessionSource::Database`)
+/// this adapter can actually accept; `parse_database` below remains the real, direct entry
+/// point when a caller already knows it's dealing with an OpenCode database specifically.
 pub struct OpenCodeAdapter;
 
 impl OpenCodeAdapter {
@@ -240,6 +241,41 @@ impl OpenCodeAdapter {
 
         let text = if text_segments.is_empty() { None } else { Some(text_segments.join("\n")) };
         Ok((tool_calls, tool_results, text))
+    }
+}
+
+impl SessionAdapter for OpenCodeAdapter {
+    fn name(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn matches_fingerprint(&self, sample: &str) -> bool {
+        // Cheap binary-prefix pre-filter (the SQLite file-format magic bytes), same source of
+        // truth the other three adapters delegate to -- see detect_orchestrator's own doc
+        // comment for why this is only a pre-filter and `matches_database` is the real schema
+        // check `load`/`parse_database` themselves rely on.
+        detect_orchestrator(sample.as_bytes()) == Some(OrchestratorKind::OpenCode)
+    }
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        AdapterCapabilities {
+            has_token_usage: true,
+            has_tool_results: true,
+            has_shell_commands: true,
+            has_file_events: true,
+            has_lifecycle_hooks: false,
+            supports_incremental_offsets: false,
+            supports_cost_estimation: true,
+        }
+    }
+
+    fn load(&self, source: SessionSource) -> Result<Vec<CanonicalTranscript>, IngestionError> {
+        match source {
+            SessionSource::Database(path) => self.parse_database(path),
+            SessionSource::Stream(_) => {
+                Err(IngestionError::UnsupportedSourceKind { adapter: self.name(), source_kind: "stream" })
+            }
+        }
     }
 }
 

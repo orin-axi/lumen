@@ -841,29 +841,19 @@ fn make_test_session_record(provider_session_id: &str) -> SessionFactRecord {
         provider_session_id: provider_session_id.to_string(),
         model_family: "claude-3-5-sonnet-20241022".to_string(),
         orchestrator: OrchestratorKind::ClaudeCode,
-        started_at: Utc::now(),
-        ended_at: Utc::now(),
         wall_duration_ms: 1000,
         turn_count: 3,
         economics: TokenEconomics {
             input_tokens: 100,
             output_tokens: 50,
-            cache_creation_tokens: 0,
-            cache_read_tokens: 0,
-            ephemeral_5m_tokens: 0,
-            ephemeral_1h_tokens: 0,
-            cache_hit_ratio: 0.0,
             total_cost_usd: 0.01,
-            provided_cost_usd: None,
             baseline_cost_no_cache_usd: 0.02,
             net_savings_usd: 0.01,
             efficiency_multiplier: 2.0,
-            per_model: std::collections::HashMap::new(),
-            reasoning_output_tokens: 0,
             is_fully_priced: true,
+            ..Default::default()
         },
-        has_anomalies: false,
-        tool_calls: Vec::new(),
+        ..Default::default()
     }
 }
 

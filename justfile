@@ -46,6 +46,12 @@ lint-affected:
 deny:
     moon run :deny
 
+# Known-vulnerable dependency check (RUSTSEC advisories). Separate from `deny`
+# (license/layer-boundary bans) -- both are cargo-deny checks but against
+# different databases, and neither subsumes the other.
+audit:
+    moon run :audit
+
 # Unused-dependency check. Directly closes the gap that let 6 unused deps across
 # 3 crates (rayon/memmap2, smallvec/tracing, simd-json/memmap2) go unnoticed
 # until a manual audit found them.
@@ -101,4 +107,4 @@ hooks:
     @echo "Git pre-commit and pre-push hooks installed successfully."
 
 # ── CI Verification Pipeline ───────────────────────────────────────────────
-ci: fmt-check lint deny machete doc-check test
+ci: fmt-check lint deny audit machete doc-check test

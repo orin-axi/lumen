@@ -9,6 +9,7 @@ description = "22 Single-pass streaming accumulators and telemetry analytics for
 
 [dependencies]
 lumen-model = { workspace = true }
+lumen-pattern = { workspace = true }
 compact_str = { workspace = true }
 smallvec = { workspace = true }
 serde = { workspace = true }

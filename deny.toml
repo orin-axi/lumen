@@ -18,15 +18,27 @@ external-default-features = "allow"
 #
 # lumen-model (Layer 1) and lumen-session (Layer 1.5) are MIT OR Apache-2.0
 # and must remain permissive and standalone. lumen-analysis, lumen-pattern,
-# and lumen-cli (Layer 2 / Layer 4) are FSL-1.1-MIT. If a Layer 1/1.5 crate
-# ever depends on a Layer 2/4 crate -- directly or transitively -- it would
-# transitively absorb FSL-licensed code into a crate promised as permissive.
+# lumen-store, lumen-fixtures, and lumen-cli (Layer 2 / 2.5 / 4) are
+# FSL-1.1-MIT. If a Layer 1/1.5 crate ever depends on a Layer 2/2.5/4 crate
+# as a runtime [dependencies] entry -- directly or transitively -- it would
+# transitively absorb FSL-licensed code into a published crate promised as
+# permissive.
 #
 # Each entry below bans the FSL crate from the dependency graph entirely,
-# except when it is a direct dependency of another Layer 2/4 crate that is
-# allowed to depend on it. lumen-model and lumen-session are deliberately
-# absent from every `wrappers` list, so any edge from either of them to one
-# of these crates is a bans violation.
+# except when it is a dependency of another Layer 2/2.5/4 crate that is
+# allowed to depend on it. lumen-model is absent from every `wrappers`
+# list, so any [dependencies] edge from it to one of these crates is a
+# bans violation.
+#
+# lumen-session (Layer 1.5) is a documented, deliberate exception for
+# lumen-fixtures specifically: lumen-session's [dev-dependencies] include
+# lumen-fixtures (for realistic adapter test data), which brings FSL code
+# into `cargo test -p lumen-session`'s build graph. Dev-dependencies never
+# ship in the published crate a downstream consumer resolves via
+# `cargo add lumen-session`, so this does not violate the "remain
+# permissive" promise to that consumer -- only lumen-session's own local
+# test/CI build sees FSL code. See AGENTS.md section 1 for the resolution
+# record (2026-08-23).
 #
 # lumen-cli is not listed here: nothing in the workspace legitimately
 # depends on it (it is the top-level binary), so `wrappers` has no
@@ -35,7 +47,9 @@ external-default-features = "allow"
 # unrepresentable (lumen-cli always transitively depends back on both).
 deny = [
     { crate = "lumen-analysis", wrappers = ["lumen-cli"] },
-    { crate = "lumen-pattern", wrappers = ["lumen-cli"] },
+    { crate = "lumen-pattern", wrappers = ["lumen-cli", "lumen-analysis"] },
+    { crate = "lumen-store", wrappers = ["lumen-cli", "lumen-fixtures"] },
+    { crate = "lumen-fixtures", wrappers = ["lumen-cli", "lumen-analysis", "lumen-session"] },
 ]
 
 [licenses]

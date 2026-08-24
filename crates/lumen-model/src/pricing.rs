@@ -274,14 +274,38 @@ impl PricingTable {
     /// CodexAdapter's captured `service_tier`) matched zero rows and silently priced at 0.0. A
     /// row that matches the exact requested tier still always wins over this fallback.
     pub fn rate_for(&self, model: &str, tier: Option<&str>, kind: TokenRateKind, as_of: DateTime<Utc>) -> f64 {
-        let lookup_model = self.normalize_model_key(model).unwrap_or(model);
+        let rows = self.rows_for_model(model);
+        Self::rate_for_rows(&rows, tier, kind, as_of)
+    }
 
+    /// Narrows `self.rates` (now ~1,500+ rows post-CRIT-LUMEN-170 vendoring) down to the small
+    /// subset matching `model`'s normalized key -- the one full-table scan a caller needs to do
+    /// per model. [`rate_for_rows`] then searches only this narrowed subset, so a caller pricing
+    /// many turns for the same model (e.g. [`crate::economics::TokenEconomics::calculate`],
+    /// which calls this six times per turn -- one per [`TokenRateKind`]) can call this once
+    /// outside its loop instead of re-scanning the full table on every call. `rate_for` itself
+    /// still scans once per call for callers that only need a single lookup.
+    ///
+    /// [`rate_for_rows`]: Self::rate_for_rows
+    pub(crate) fn rows_for_model(&self, model: &str) -> Vec<&PricingRate> {
+        let lookup_model = self.normalize_model_key(model).unwrap_or(model);
+        self.rates.iter().filter(|r| r.model == lookup_model).collect()
+    }
+
+    /// Same matching logic as [`rate_for`], scoped to an already-narrowed row set from
+    /// [`rows_for_model`] instead of the full table.
+    ///
+    /// [`rate_for`]: Self::rate_for
+    pub(crate) fn rate_for_rows(
+        rows: &[&PricingRate],
+        tier: Option<&str>,
+        kind: TokenRateKind,
+        as_of: DateTime<Utc>,
+    ) -> f64 {
         let matching = |wanted_tier: Option<&str>| {
-            self.rates
-                .iter()
+            rows.iter()
                 .filter(|r| {
-                    r.model == lookup_model
-                        && r.kind == kind
+                    r.kind == kind
                         && r.tier.as_deref() == wanted_tier
                         && r.effective_from <= as_of
                         && r.effective_until.is_none_or(|until| as_of < until)

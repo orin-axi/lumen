@@ -45,7 +45,7 @@ pub struct TurnPricingInput {
 }
 
 /// Aggregate session token economics and financial savings metrics.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TokenEconomics {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -107,6 +107,10 @@ impl TokenEconomics {
         provided_cost_usd: Option<f64>,
     ) -> Self {
         let is_fully_priced = pricing.is_recognized(model_name);
+        // Narrows the (now ~1,500+ row, post-CRIT-LUMEN-170) pricing table down to this model's
+        // rows once, outside the loop below, instead of re-scanning the full table on every one
+        // of the 6 rate_for calls per turn.
+        let rows = pricing.rows_for_model(model_name);
 
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
@@ -121,12 +125,14 @@ impl TokenEconomics {
             let usage = &turn.usage;
             let tier = turn.tier.as_deref();
 
-            let input_rate = pricing.rate_for(model_name, tier, TokenRateKind::Input, turn.timestamp);
-            let cache_write_5m_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite, turn.timestamp);
-            let cache_write_1h_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheWrite1h, turn.timestamp);
-            let cache_read_rate = pricing.rate_for(model_name, tier, TokenRateKind::CacheRead, turn.timestamp);
-            let output_rate = pricing.rate_for(model_name, tier, TokenRateKind::Output, turn.timestamp);
-            let reasoning_rate = pricing.rate_for(model_name, tier, TokenRateKind::Reasoning, turn.timestamp);
+            let input_rate = PricingTable::rate_for_rows(&rows, tier, TokenRateKind::Input, turn.timestamp);
+            let cache_write_5m_rate =
+                PricingTable::rate_for_rows(&rows, tier, TokenRateKind::CacheWrite, turn.timestamp);
+            let cache_write_1h_rate =
+                PricingTable::rate_for_rows(&rows, tier, TokenRateKind::CacheWrite1h, turn.timestamp);
+            let cache_read_rate = PricingTable::rate_for_rows(&rows, tier, TokenRateKind::CacheRead, turn.timestamp);
+            let output_rate = PricingTable::rate_for_rows(&rows, tier, TokenRateKind::Output, turn.timestamp);
+            let reasoning_rate = PricingTable::rate_for_rows(&rows, tier, TokenRateKind::Reasoning, turn.timestamp);
 
             let cache_write_5m_tokens = usage.cache_creation_tokens.saturating_sub(usage.cache_creation_1h_tokens);
 

@@ -220,6 +220,17 @@ fn ground_tool_intent(intent: &ToolIntent) -> (Option<CompactString>, Option<Com
 
 /// Convenience helper to build `TrajectoryGraph` and calculate monotonicity score.
 pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32 {
+    build_trajectory_graph(transcript).calculate_monotonicity()
+}
+
+/// Convenience helper to build `TrajectoryGraph` and detect circular tool-call loops --
+/// CRIT-LUMEN-179. Mirrors `calculate_monotonicity`'s construction so both share the same
+/// grounding logic and can never disagree about what counts as a cycle.
+pub fn detect_circular_loops(transcript: &CanonicalTranscript) -> Vec<CircularLoopAnomaly> {
+    build_trajectory_graph(transcript).detect_circular_loops()
+}
+
+fn build_trajectory_graph(transcript: &CanonicalTranscript) -> TrajectoryGraph {
     let mut tg = TrajectoryGraph::new();
     for turn in &transcript.turns {
         for call in &turn.tool_calls {
@@ -234,7 +245,7 @@ pub fn calculate_monotonicity(transcript: &CanonicalTranscript) -> f32 {
             });
         }
     }
-    tg.calculate_monotonicity()
+    tg
 }
 
 #[cfg(test)]

@@ -79,7 +79,7 @@ fn test_agy_resolve_transcript_path_bypasses_symlink_layer() {
     // CRIT-LUMEN-165: resolves the real brain/ transcript path directly, not the
     // ~/.gemini/logs/<id>.jsonl symlink layer.
     let brain_root = std::path::Path::new("/Users/test/.gemini/antigravity-cli/brain");
-    let path = AgyAdapter::resolve_transcript_path(brain_root, "conv-123");
+    let path = AgyAdapter::resolve_transcript_path(brain_root, "conv-123").unwrap();
     assert_eq!(
         path,
         std::path::PathBuf::from(
@@ -87,6 +87,16 @@ fn test_agy_resolve_transcript_path_bypasses_symlink_layer() {
         )
     );
     assert!(!path.to_string_lossy().contains("/.gemini/logs/"));
+}
+
+#[test]
+fn test_agy_resolve_transcript_path_rejects_traversal_and_separators() {
+    let brain_root = std::path::Path::new("/Users/test/.gemini/antigravity-cli/brain");
+    assert_eq!(AgyAdapter::resolve_transcript_path(brain_root, ".."), None);
+    assert_eq!(AgyAdapter::resolve_transcript_path(brain_root, "../../etc/passwd"), None);
+    assert_eq!(AgyAdapter::resolve_transcript_path(brain_root, "conv/123"), None);
+    assert_eq!(AgyAdapter::resolve_transcript_path(brain_root, "conv\\123"), None);
+    assert_eq!(AgyAdapter::resolve_transcript_path(brain_root, ""), None);
 }
 
 #[test]

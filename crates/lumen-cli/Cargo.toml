@@ -15,6 +15,7 @@ path = "src/main.rs"
 lumen-model = { workspace = true }
 lumen-session = { workspace = true }
 lumen-store = { workspace = true }
+lumen-analysis = { workspace = true }
 camino = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true }

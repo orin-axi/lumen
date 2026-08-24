@@ -1,5 +1,6 @@
 use lumen_model::CanonicalTranscript;
 use std::io::BufRead;
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -12,6 +13,27 @@ pub enum IngestionError {
     /// querying it (via `OpenCodeAdapter::parse_database`) surface here rather than as `Io`.
     #[error("SQLite error reading session database: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// A `SessionAdapter::load` call was given a `SessionSource` variant this adapter doesn't
+    /// support -- e.g. a `Database` source handed to a stream-based adapter, or vice versa
+    /// (CRIT-LUMEN-180). A caller hits this only by constructing the wrong `SessionSource`
+    /// variant for a given adapter; `lumen-cli`'s `load_sessions` picks the right one via
+    /// `detect_orchestrator` before calling `load`, so this should never fire in practice --
+    /// it exists so a caller that does get it wrong sees a clear error, not a panic.
+    #[error("{adapter} adapter does not support a {source_kind} source")]
+    UnsupportedSourceKind { adapter: &'static str, source_kind: &'static str },
+}
+
+/// The physical shape of a session data source -- CRIT-LUMEN-180. Every known adapter needs
+/// exactly one of these two shapes: a one-file-to-one-session JSONL line stream (`ClaudeCode`,
+/// `Codex`, `Antigravity`), or a one-file-to-many-sessions SQLite database (`OpenCode`). Exists
+/// so `SessionAdapter::load` can be one method every adapter implements, letting a caller
+/// dispatch through `&dyn SessionAdapter` uniformly instead of a per-orchestrator special case
+/// for "how do I even call this adapter" -- previously `OpenCodeAdapter` couldn't implement
+/// `SessionAdapter` at all, because its `parse_database(&Path)` was structurally incompatible
+/// with `parse_stream(Box<dyn BufRead>)`.
+pub enum SessionSource<'a> {
+    Stream(Box<dyn BufRead + 'a>),
+    Database(&'a Path),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,5 +71,12 @@ pub trait SessionAdapter: Send + Sync {
     fn name(&self) -> &'static str;
     fn matches_fingerprint(&self, sample: &str) -> bool;
     fn capabilities(&self) -> AdapterCapabilities;
-    fn parse_stream<'a>(&self, reader: Box<dyn BufRead + 'a>) -> Result<CanonicalTranscript, IngestionError>;
+    /// Loads every real session found in `source` (CRIT-LUMEN-180) -- the single entry point
+    /// across both source shapes `SessionSource` covers. A stream-based adapter's
+    /// implementation always returns exactly one transcript (wrapping its own `parse_stream`
+    /// inherent method's result); `OpenCodeAdapter`'s may return several, since one real
+    /// database commonly holds many real sessions. Returns
+    /// `IngestionError::UnsupportedSourceKind` when given the source shape this adapter doesn't
+    /// support.
+    fn load(&self, source: SessionSource) -> Result<Vec<CanonicalTranscript>, IngestionError>;
 }
