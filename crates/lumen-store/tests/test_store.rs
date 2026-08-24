@@ -240,6 +240,7 @@ fn test_session_repository_idempotent_upsert_and_list() {
         },
         has_anomalies: false,
         tool_calls: Vec::new(),
+        compaction_events: Vec::new(),
     };
 
     // First insert
@@ -320,6 +321,7 @@ fn test_session_repository_is_fully_priced_round_trips_through_store() {
         },
         has_anomalies: false,
         tool_calls: Vec::new(),
+        compaction_events: Vec::new(),
     };
 
     repo.upsert_session(&record).expect("upsert failed");
@@ -460,6 +462,7 @@ fn test_tool_call_repository_insert_counts_rows_and_empty_slice_is_noop() {
         },
         has_anomalies: false,
         tool_calls: Vec::new(),
+        compaction_events: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
 
@@ -615,6 +618,7 @@ fn test_tool_call_repository_counts_by_session() {
         },
         has_anomalies: false,
         tool_calls: Vec::new(),
+        compaction_events: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
     let internal_id: i64 = conn
@@ -707,6 +711,7 @@ fn test_session_repository_get_session_populates_tool_counts_from_internal_id() 
         },
         has_anomalies: false,
         tool_calls: Vec::new(),
+        compaction_events: Vec::new(),
     };
     session_repo.upsert_session(&record).unwrap();
     let internal_id: i64 = conn
@@ -1611,5 +1616,47 @@ fn test_compaction_repository_insert_and_delete_for_session() {
     repo.delete_for_session(1).unwrap();
     let count_after: i64 =
         conn.query_row("SELECT COUNT(*) FROM compaction_events WHERE session_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_after, 0);
+}
+
+#[test]
+fn test_upsert_session_persists_and_reingest_replaces_compaction_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let repo = SessionRepository::new(&conn);
+    let mut record = SessionFactRecord {
+        provider: "claude-code".to_string(),
+        provider_session_id: "sess-compact-1".to_string(),
+        compaction_events: vec![CompactionFactRecord {
+            session_id: 0,
+            sequence: 0,
+            trigger: "auto".to_string(),
+            pre_tokens: 100,
+            post_tokens: 20,
+            cumulative_dropped_tokens: 80,
+            duration_ms: 5,
+        }],
+        ..Default::default()
+    };
+    repo.upsert_session(&record).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM compaction_events ce JOIN sessions s ON s.id = ce.session_id WHERE s.provider_session_id = 'sess-compact-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    record.compaction_events = vec![];
+    repo.upsert_session(&record).unwrap();
+    let count_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM compaction_events ce JOIN sessions s ON s.id = ce.session_id WHERE s.provider_session_id = 'sess-compact-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(count_after, 0);
 }

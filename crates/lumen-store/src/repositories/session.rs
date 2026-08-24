@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::error::StoreError;
 use crate::models::{SessionDetailReadModel, SessionFactRecord, SessionFilter, SessionSummaryReadModel};
+use crate::repositories::compaction::CompactionRepository;
 use crate::repositories::token_usage::TokenUsageRepository;
 use crate::repositories::tool_call::ToolCallRepository;
 
@@ -89,6 +90,12 @@ impl<'a> SessionRepository<'a> {
         let tool_call_repo = ToolCallRepository::new(&tx);
         tool_call_repo.delete_for_session(internal_id)?;
         tool_call_repo.insert_tool_calls(internal_id, &record.tool_calls)?;
+
+        // CRIT-LUMEN-185: delete-then-reinsert compaction facts inside the same atomic
+        // transaction as the rest of upsert_session's writes (CRIT-LUMEN-177's pattern).
+        let compaction_repo = CompactionRepository::new(&tx);
+        compaction_repo.delete_for_session(internal_id)?;
+        compaction_repo.insert_compaction_facts(internal_id, &record.compaction_events)?;
 
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(())

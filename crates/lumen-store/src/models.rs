@@ -33,6 +33,11 @@ pub struct SessionFactRecord {
     /// `economics.per_model` being persisted via `TokenUsageRepository` -- an empty `Vec` is
     /// valid (a session with no tool calls, or a caller that doesn't track them).
     pub tool_calls: Vec<ToolCallFactRecord>,
+    /// Per-compaction-event facts for this session (CRIT-LUMEN-185). Persisted internally by
+    /// `SessionRepository::upsert_session` via `CompactionRepository`, same pattern as
+    /// `tool_calls` above (CRIT-LUMEN-174) -- an empty `Vec` is valid (a session with no
+    /// compact_boundary events).
+    pub compaction_events: Vec<CompactionFactRecord>,
 }
 
 impl Default for SessionFactRecord {
@@ -58,6 +63,7 @@ impl Default for SessionFactRecord {
             economics: TokenEconomics::default(),
             has_anomalies: false,
             tool_calls: Vec::new(),
+            compaction_events: Vec::new(),
         }
     }
 }

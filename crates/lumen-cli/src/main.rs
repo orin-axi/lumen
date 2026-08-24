@@ -356,6 +356,28 @@ fn build_tool_call_records(turns: &[CanonicalTurn]) -> Vec<ToolCallFactRecord> {
         .collect()
 }
 
+/// Maps parsed `compact_boundary` events to store-layer fact records (CRIT-LUMEN-185).
+/// `session_id` is a placeholder `0` -- `upsert_session` resolves and uses the real internal
+/// id via `CompactionRepository`; the field's value here is ignored in favor of
+/// `insert_compaction_facts`'s explicit `session_id: i64` parameter.
+fn build_compaction_fact_records(events: &[CompactionEvent]) -> Vec<lumen_store::CompactionFactRecord> {
+    events
+        .iter()
+        .map(|e| lumen_store::CompactionFactRecord {
+            session_id: 0,
+            sequence: e.sequence,
+            trigger: match e.trigger {
+                CompactionTrigger::Auto => "auto".to_string(),
+                CompactionTrigger::Manual => "manual".to_string(),
+            },
+            pre_tokens: e.pre_tokens,
+            post_tokens: e.post_tokens,
+            cumulative_dropped_tokens: e.cumulative_dropped_tokens,
+            duration_ms: e.duration_ms,
+        })
+        .collect()
+}
+
 fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()> {
     let store = SqliteStore::open(db_path).into_diagnostic()?;
     let conn = store.connection().into_diagnostic()?;
@@ -393,6 +415,7 @@ fn cmd_ingest(path: &Path, db_path: &Utf8PathBuf, json_mode: bool) -> Result<()>
                         economics: transcript.rolled_up_economics(),
                         has_anomalies: !transcript.detected_anomalies.is_empty(),
                         tool_calls: build_tool_call_records(&transcript.turns),
+                        compaction_events: build_compaction_fact_records(&transcript.compaction_events),
                     };
                     match repo.upsert_session(&record) {
                         Ok(()) => ingested.push(record),
