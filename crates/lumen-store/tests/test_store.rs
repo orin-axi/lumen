@@ -1718,3 +1718,68 @@ fn test_list_session_trend_orders_oldest_to_newest_and_applies_limit_tiebreak() 
     assert_eq!(ids, vec!["s-b", "s-c", "s-d"]);
     assert!(points.windows(2).all(|w| w[0].started_at <= w[1].started_at));
 }
+
+#[test]
+fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "cc-with-events".to_string(),
+            compaction_events: vec![
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 0,
+                    trigger: "auto".to_string(),
+                    pre_tokens: 100,
+                    post_tokens: 20,
+                    cumulative_dropped_tokens: 80,
+                    duration_ms: 5,
+                },
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 2,
+                    trigger: "manual".to_string(),
+                    pre_tokens: 90,
+                    post_tokens: 10,
+                    cumulative_dropped_tokens: 160,
+                    duration_ms: 9,
+                },
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "cc-no-events".to_string(),
+            started_at: chrono::Utc::now() + chrono::Duration::seconds(1),
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-0".to_string(),
+            started_at: chrono::Utc::now() + chrono::Duration::seconds(2),
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    let points =
+        trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: true }).unwrap();
+    let by_id = |sid: &str| points.iter().find(|p| p.session_id == sid).unwrap();
+    let with_events = by_id("cc-with-events").compaction.as_ref().unwrap();
+    assert_eq!(with_events.event_count, 2);
+    assert_eq!(with_events.tokens_dropped_total, 160);
+    assert_eq!(with_events.auto_count, 1);
+    assert_eq!(with_events.manual_count, 1);
+    let no_events = by_id("cc-no-events").compaction.as_ref().unwrap();
+    assert_eq!(no_events.event_count, 0);
+    assert_eq!(no_events.tokens_dropped_total, 0);
+    assert!(by_id("cx-0").compaction.is_none());
+}

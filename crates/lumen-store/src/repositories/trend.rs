@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
 
 use crate::error::StoreError;
-use crate::models::{SessionTrendPoint, TrendFilter};
+use crate::models::{CompactionSummary, SessionTrendPoint, TrendFilter};
 
 pub struct TrendRepository<'a> {
     conn: &'a Connection,
@@ -20,11 +20,11 @@ impl<'a> TrendRepository<'a> {
         Ok(count as usize)
     }
 
-    /// Base query only (CRIT-LUMEN-183, CRIT-LUMEN-190): provider filter, then a --limit cap to
+    /// Base query (CRIT-LUMEN-183, CRIT-LUMEN-190): provider filter, then a --limit cap to
     /// at most `limit` most recent sessions by `started_at DESC` with a `provider_session_id ASC`
-    /// tie-break, then re-ordered oldest-to-newest for return. CompactionSummary population
-    /// (CRIT-LUMEN-184) is deliberately deferred to a later task -- `.compaction` is always
-    /// `None` here regardless of `filter.require_compaction`.
+    /// tie-break, then re-ordered oldest-to-newest for return. When `filter.require_compaction`
+    /// is set, `.compaction` is populated per Claude Code session (CRIT-LUMEN-184); non-Claude-Code
+    /// sessions keep `.compaction = None` regardless of the flag.
     pub fn list_session_trend(&self, filter: &TrendFilter) -> Result<Vec<SessionTrendPoint>, StoreError> {
         let limit = if filter.limit > 0 { filter.limit } else { 50 };
         let mut stmt = self
@@ -80,6 +80,47 @@ impl<'a> TrendRepository<'a> {
         // keeps the same ascending tie-break as the selection query.
         points.sort_by(|a, b| a.1.started_at.cmp(&b.1.started_at).then_with(|| a.1.session_id.cmp(&b.1.session_id)));
 
+        if filter.require_compaction {
+            for (id, point) in points.iter_mut() {
+                if point.provider == "claude-code" {
+                    point.compaction = Some(self.compaction_summary_for_session(*id)?);
+                }
+            }
+        }
+
         Ok(points.into_iter().map(|(_id, p)| p).collect())
+    }
+
+    /// CRIT-LUMEN-184: `tokens_dropped_total` is the `cumulative_dropped_tokens` value of the
+    /// LAST persisted compaction event by `sequence` order -- since that value is already a
+    /// running total, it must never be summed across events.
+    fn compaction_summary_for_session(&self, session_id: i64) -> Result<CompactionSummary, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT trigger, cumulative_dropped_tokens FROM compaction_events WHERE session_id = ?1 ORDER BY sequence ASC")
+            .map_err(StoreError::Sqlite)?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                let trigger: String = row.get(0)?;
+                let dropped: i64 = row.get(1)?;
+                Ok((trigger, dropped as u64))
+            })
+            .map_err(StoreError::Sqlite)?;
+
+        let mut event_count = 0usize;
+        let mut auto_count = 0usize;
+        let mut manual_count = 0usize;
+        let mut tokens_dropped_total = 0u64;
+        for r in rows {
+            let (trigger, dropped) = r.map_err(StoreError::Sqlite)?;
+            event_count += 1;
+            if trigger == "auto" {
+                auto_count += 1;
+            } else if trigger == "manual" {
+                manual_count += 1;
+            }
+            tokens_dropped_total = dropped;
+        }
+        Ok(CompactionSummary { event_count, tokens_dropped_total, auto_count, manual_count })
     }
 }
