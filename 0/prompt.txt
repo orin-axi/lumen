@@ -1,0 +1,198 @@
+Any outstanding bugs we've identified? Do we do another round of adversarial analysis looking for bugs? We're finding a lot which is weird given our plugins and our SDD workflow. That shouldnt' be happeneing. Did we not research appropriately? Are our specs not good enough? What's going on
+
+---
+
+I'm not just worried about those pieces, I'm worries about the whole codebase. Architecture, performance stance and analysis, security, DX, semantic model, etc
+
+---
+
+Some context from earlier: 
+
+Current bug status: No known live bugs remain from the original audit backlog — everything HIGH/MEDIUM found on 2026-08-22 is fixed and committed (6 commits, 190/190 tests, clippy/fmt/deny clean). What's left is a short low-priority cleanup list (minor allocations, a shared JSONL helper, unused deps) — nothing urgent.
+
+But the underlying question — why does this project keep finding bugs despite specs and plugins — deserves a real answer, not reassurance. Three distinct root causes, not one:
+
+1. A real research gap, but an old one, not a new one. OpenCodeAdapter was originally built against a "100% fictional JSONL format" (per this project's own memory) — someone wrote an adapter for a wire format they never actually fetched and inspected. That's not a spec-quality failure, it's a research-discipline failure: nothing in canon/vector/lambda forces you to go get a real sample before writing acceptance criteria against it. This class of bug (assumed-vs-real external formats) is basically eliminated now — everything fixed recently was checked against real captured data or a real upstream source (LiteLLM's actual pricing file, real local session logs).
+
+2. A structural blind spot in the SDD workflow: cross-layer round-trip invariants. The two bugs I found today (is_fully_priced silently dropped by the SQL store, tool_counts always empty) weren't found by adversarial bug-hunting — they were found by tracing every real call site of a field while implementing an unrelated criterion. Specs here are written and gated per-subsystem (a criterion lives in SPEC-LUMEN-001-MODEL or SPEC-LUMEN-003-STORE, and axiom's exit-gate checks that spec in isolation). Nobody ever wrote a criterion of the shape "field X, once computed, must survive ingest → persist → read → display unchanged" — so no gate ever checked it, because the question didn't exist yet, not because the gate failed at its job. proof's hazard-taxonomy scanner is also oriented toward local code shapes (unwraps, injection, resource handling), not "does this field silently vanish three files away in a different crate." That's a real gap in what gets checked, not a broken process.
+
+3. Normal early-stage entropy. The domain model (lumen-model) and the persistence layer (lumen-store) evolved somewhat independently — SessionFactRecord didn't even carry tool-call data until today. Fields get added to one layer before the other catches up; nobody notices until someone actually reads the full pipeline end to end.
+
+So: specs aren't bad, and the plugins aren't malfunctioning — but there's a category of bug (cross-subsystem round-trip loss) that this workflow structurally doesn't check for automatically. That's worth closing.
+
+Recommendation: not a generic re-run of proof — it already ran, and this bug class would slip past it again for the same structural reason. What's actually worth doing is a targeted pass asking, for every field on TokenEconomics/CanonicalTranscript that has a store column: does it survive ingest → persist → read → display, with a test proving it, not just an inspection. Want me to run that now?
+
+✻ Worked for 1m 4s
+
+❯ I'm not just worried about those pieces, I'm worries about the whole codebase. Architecture, performance stance and analysis, security, DX, semantic model, etc
+
+A whole-codebase sweep across architecture, performance, security, DX, and semantic model is a legitimately large undertaking for a multi-crate Rust workspace this size (~7 crates, several thousand lines). Worth being clear about what's already been covered versus what's genuinely new ground:
+
+Already covered (2026-08-22, one comprehensive multi-agent audit): architecture, security, performance, DX, and bugs — 17 findings raised, 16 confirmed and adversarially verified. All of those either got fixed already or turned into spec criteria that are now also fixed (pricing vendoring, redaction rewrite, the adapter contract, the Cost type, the round-trip bugs, the tool-call wiring). What's genuinely untouched from that audit is just the low-priority bucket (minor allocations, unused deps, a shared JSONL helper) and the layer-licensing dev-dependency question.
+
+Not really covered yet: the semantic model specifically — whether the domain types (CanonicalTranscript, TokenEconomics, ToolIntent, the adapter abstraction itself) are the right shapes for what this project is actually trying to represent, versus just internally consistent. That's a different, harder kind of review than "find bugs in the code as written."
+
+Given the scope you're describing, I have two realference matters enough that I don't want to justpick one:                                                                                                                     
+1. A proper multi-agent Workflow — one phase per dimension (architecture, perf, security, DX, semantic model), each with its  own finder(s), then an adversarial verificationore anything gets reported, the same shape as the2026-08-22 audit. This is thorough and catches things a single pass misses, but it's a real token spend across potentially dozens of subagent calls — this needs your expl"use a workflow" and I'll kick it off).
+2. A lighter pass I run myself via a few parallel forks, one per dimension, without the adversarial verification layer — faster
+   and cheaper, but more likely to surface plausibe nothing double-checks them.
+
+Given you're asking about the whole codebase and se, not a quick look, I'd lean toward option 1. Want me to run it as a workflow — and if so, any dimension you want weighted heaviest (semantic model sounds like the one that's actually novel here)?
+
+---
+
+<task-notification>
+<task-id>a84bf9977d4b8daa1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a84bf9977d4b8daa1.output</output-file>
+<status>completed</status>
+<summary>Agent "Architecture review of Lumen workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task**: Skeptical architecture review of Lumen workspace, new ground since the 2026-08-22 audit (licensing, adapter trait, daemon coupling, model/store separation, repository consistency).
+
+**Findings:**
+
+1. **The layer-licensing ban is not actually enforced for the known dev-dependency gap — this is a real, live gap, not just theoretical.** `deny.toml`'s `[bans].deny` list only bans `lumen-analysis` and `lumen-pattern` (`deny.toml:29-32`). But the file's own `[licenses]` comment (`deny.toml:38-40`) states `lumen-store` is *also* FSL-1.1-MIT and Layer 2. `lumen-session/Cargo.toml:20` lists `lumen-fixtures` as a dev-dependency, and `lumen-fixtures/Cargo.toml:11` depends on `lumen-store`. So `lumen-session` (Layer 1.5, promised MIT/Apache-2.0) transitively pulls FSL-licensed `lumen-store` code into its dev-dependency graph — exactly the scenario the top-of-file comment says must never happen — and `cargo-deny check bans` would pass cleanly because `lumen-store`/`lumen-fixtures` were never added to the `deny` array. The enforcement mechanism has a hole matching its own documented threat model. **High confidence.** Fix is mechanical: add `lumen-store` and `lumen-fixtures` entries to `[bans].deny` (with an appropriate `wrappers` list, or accept the dev-only exposure explicitly and document why it's fine — but right now nothing decided either way, it's just unenforced).
+
+2. **`SessionAdapter` is not a uniform abstraction across all 4 providers — `OpenCodeAdapter` doesn't implement it.** `lumen-session/src/adapters/opencode.rs:8-14`'s doc comment explains why: OpenCode's real backing store is SQLite, structurally incompatible with `parse_stream(Box&lt;dyn BufRead&gt;)`. `OpenCodeAdapter` instead exposes its own `parse_database(&amp;Path) -&gt; Result&lt;Vec&lt;CanonicalTranscript&gt;, IngestionError&gt;`, and `lumen-cli/src/main.rs:124` special-cases it with an explicit `match` arm rather than dispatching through the trait. This is self-documented and not silently broken (no dispatcher assumes uniformity), but it means the trait boundary was designed around a JSONL-stream assumption that one of four real-world adapters can't satisfy — any future adapter with a similarly non-stream-shaped source (a REST API, another SQLite/DB-backed tool) will face the same fork. Worth deciding now whether `SessionAdapter` should be generalized (e.g., an enum-returning entry point that both stream- and DB-backed adapters implement) rather than accumulating special cases in the CLI. **Medium-high confidence this is a real design smell; not currently causing a bug.**
+
+3. **`lumen-model` → `lumen-store` direction is clean; no violation found.** Checked `lumen-model/Cargo.toml` — zero storage/SQL dependencies, `lumen-model` has no knowledge of persistence concerns. Correct direction, no coupling. Not a finding, stated for completeness since it was explicitly in scope.
+
+4. **`QueueRepository`/`SnapshotRepository` are self-contained, not dead-weight-coupled.** Read both in full (`queue.rs`, `snapshot.rs`) — each owns its own table, no cross-repository calls, no leakage into `SessionRepository`. They're inert (unused by any caller) but impose no accidental coupling on the rest of `lumen-store` today. Confirms the prior session's "defer, don't build speculatively" call was architecturally sound, not just schedule-driven.
+
+5. **Repository module pattern is now consistent.** `session.rs`, `token_usage.rs`, `tool_call.rs` all follow the same `delete_for_session` + re-insert idempotency pattern post the CRIT-LUMEN-174/175 fixes; `command_event.rs`'s redaction logic is appropriately free-standing (module-level, not `impl`-scoped) after the lifetime-elision fix. No drift found.
+
+No findings on the vendored-pricing layer or `Cost` type from an architecture lens — those are correctly isolated to `lumen-model` and don't leak storage or session concerns.</result>
+<usage><subagent_tokens>107460</subagent_tokens><tool_uses>12</tool_uses><duration_ms>78224</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a47c70267589097</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a0a47c70267589097.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of Lumen workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That's a benign, low-risk `io::Error` Display (just OS error text, no file contents). Enough evidence gathered — reporting findings.
+
+## Security review — Lumen workspace
+
+**1. MEDIUM — `cargo-deny check advisories` (RUSTSEC vulnerability DB) is configured but never runs.** `deny.toml` has `[advisories]` set up correctly, and `.moon/tasks/rust.yml:44-49` defines a working `audit` task (`cargo-deny check advisories`). But `justfile:46-47`'s `deny` recipe only calls `moon run :deny`, which maps to the `deny` task (`cargo-deny check bans`, line 54-60) — license/dependency-graph bans only. `just ci` (justfile:104) calls `deny`, not `audit`. Net effect: the workspace has zero automated check for known-vulnerable dependency versions (RUSTSEC advisories) despite the tooling being fully wired and one `just` invocation away. A new CVE in `rusqlite`, `chrono`, `serde`, etc. would ship silently. Fix: add `audit` to `ci:` (and/or fold it into the `deny` recipe as a second `cargo-deny` invocation).
+
+**2. LOW-MEDIUM — Redaction gaps in `looks_like_secret` (command_event.rs:44-52), real bypass shapes:**
+- Env-style `KEY=value` args (e.g. `AWS_SECRET_ACCESS_KEY=abcd1234...`) aren't dash-prefixed, so they fall into the bare-positional-token branch (`redact_args` line ~86, the `else` arm) — actually those *are* fully redacted (bare tokens are unconditionally `&lt;redacted&gt;`). Correction: the real gap is the opposite — `--flag=value` is unconditionally redacted too. So the actual bypass is narrower than it first looks; skip.
+- Real bypass: a secret shorter than `MIN_SECRET_CANDIDATE_LEN` (8 chars) passed as a short-flag value, e.g. `-p a1B9!x` (7 chars) — under the length floor, never entropy-checked, and doesn't match any `SECRET_PREFIXES`. Low real-world impact (most real secrets are far longer) but it's a stated, deliberate blind spot worth a one-line doc note if not already there (it already is, "real secrets are essentially never this short" — accepted risk, not a bug).
+- Genuine gap: a secret embedded as a **substring of a longer non-dash-prefixed positional token that itself isn't a bare token** — not applicable since positionals are always fully redacted regardless of shape.
+- Genuine gap: multi-word secrets split across shlex-quoted tokens that shlex correctly parses as one token (fine) vs. a secret deliberately split across two adjacent short flags by an attacker trying to *evade* logging (not a defender's threat model — n/a here since this redacts local CLI history for display, not adversarial input).
+- Net: the redaction logic is sound for its actual threat model (accidental secret leakage in normal command args); no exploitable bypass found beyond the documented &lt;8-char floor.
+
+**3. LOW — `AgyAdapter::resolve_transcript_path` (agy.rs:15-17) does unvalidated path joining** (`brain_root.join(conversation_id)...`) with no `..`-traversal check. Currently dead code (not called from `cmd_ingest` or anywhere outside its own file) so not exploitable today. If wired up later with a `conversation_id` sourced from untrusted parsed data (rather than a direct CLI arg), this becomes a real traversal primitive. Since Lumen is a local single-user CLI with full filesystem access anyway, severity is capped at low even if activated — but worth a bounds check before this function gets a caller.
+
+**No findings:**
+- All `lumen-store` repository SQL uses `rusqlite::params!` bind parameters throughout; the one `format!()` in `session.rs:20` builds a Rust `Debug`-formatted enum string for a bound parameter value, not raw SQL — no injection surface.
+- No secret-shaped strings in `lumen-fixtures` (checked for `sk-`, `AKIA`, `ghp_`, PEM headers — none found).
+- `IngestionError`'s `Io`/`Sqlite` variants only surface OS/driver error text via `thiserror`, not file contents or secret values — no leak path found in error Display impls.
+- `deny.toml`'s license-ban mechanism is a genuine, correctly-scoped supply-chain control for the FSL/MIT boundary (not just decorative) — separate concern from advisories (finding #1).</result>
+<usage><subagent_tokens>99861</subagent_tokens><tool_uses>17</tool_uses><duration_ms>64489</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac662dc68fee4674e</task-id>
+<tool-use-id>toolu_01L9tLPmVrYYiJm5MKSBq21S</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/ac662dc68fee4674e.output</output-file>
+<status>completed</status>
+<summary>Agent "DX review of Lumen workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**DX review — scope: CLI ergonomics, public API docs, contributor onboarding, test fixture ergonomics, output formatting.**
+
+1. **README's "Installation" section documents three methods that don't exist yet.** `README.md:114-135` tells a user to `curl .../install.sh | bash`, `brew install orin-axi/tap/lumen`, or `cargo install --locked lumen-cli`. There is no `install.sh` anywhere in the repo, no release workflow (`.github/workflows/` has only `ci.yml`), and no crate has been published to crates.io yet (confirmed via memory — `check-api` is explicitly not wired into CI pending first publish). Every documented install path fails for a real user right now. **Severity: high** — this is the first thing anyone reads, and it's currently a 100% failure rate.
+
+2. **CONTRIBUTING.md's dev workflow silently omits half of what CI actually checks.** `CONTRIBUTING.md:14-28` tells contributors to run `cargo build/test/fmt/clippy` directly. But `.github/workflows/ci.yml` runs `just ci`, which (per this session's own hardening work) also runs `cargo machete` (unused deps), `RUSTDOCFLAGS=-D warnings cargo doc` (doc-check), and `cargo deny` (license/ban policy) — none of which CONTRIBUTING.md mentions, and none of which `just` itself is mentioned as existing. A contributor can pass every check the doc tells them to run and still get a red CI on a completely unrelated gate (an unused dep, a broken intra-doc link). **Severity: medium** — real, recurring friction, easy fix (point CONTRIBUTING.md at `just ci`/`just check`).
+
+3. **`SessionFactRecord` has no `Default`/builder, so every test hand-rolls a full ~15-field literal.** `crates/lumen-store/tests/test_store.rs` has 7 separate full struct literals (lines 215, 293/295, 405, 560, 652, 839, plus the concurrency test file) each duplicating `TokenEconomics` nested inside. This is exactly the pattern that broke 7 call sites when `tool_calls` was added this session (per session history) — not a one-off, a structural fragility. Every future field addition to either struct repeats that break. **Severity: medium** — worth a `SessionFactRecord::test_default()` / builder helper before the next field lands.
+
+4. **CLI error messages are good, not a Debug-dump.** Checked directly: `IngestionError` uses `thiserror` with clean human messages (`"I/O error reading session log: {0}"`, `"Unrecognized log format"`), routed through `miette` for pretty diagnostic rendering, and `load_sessions`/`load_session` add contextual wrapping (path, reason) rather than leaking raw `anyhow`/panic output. This is solid — no finding here, contrary to what I expected going in.
+
+5. **Public API doc comments are unusually strong, not a gap.** `Cost`, `TokenEconomics`, and `SessionAdapter` all carry doc comments that state not just what the type is but *why* (e.g. `SessionAdapter`'s CRIT-LUMEN-172 unknown-model contract, `Cost`'s rationale for existing alongside the raw `(f64, bool)` pair). A new contributor could use these without reading the impl. No finding here either — flagging so this doesn't get re-litigated as a gap in a future pass.
+
+6. **CLI output already has `--json` on every command and a clean human table** (`comfy-table`, color-coded rows, `Cost::Unpriced` rendered as an explicit "unknown" rather than misleading `$0.00`). No finding — this ground is solid.
+
+**Net: two real, concrete findings (#1, #2) that actively mislead a new user/contributor and are cheap to fix; one structural test-fragility finding (#3); three areas checked and found genuinely fine, not just unexamined.**</result>
+<usage><subagent_tokens>110520</subagent_tokens><tool_uses>17</tool_uses><duration_ms>69206</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a833b1f06e882eca1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a833b1f06e882eca1.output</output-file>
+<status>completed</status>
+<summary>Agent "Performance review of Lumen workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Task:** Skeptical performance review of the Lumen Rust workspace — adapters' JSONL parsing, pricing-table load/lookup cost, SQLite access patterns, CLI hot paths, and `normalize_model_key`.
+
+## Findings
+
+**1. REAL, confirmed: `rate_for`/`normalize_model_key` re-scan the full (now ~1,500-row) rate table per call, 6× per turn, with no caching.**
+`crates/lumen-model/src/economics.rs:124-129` calls `pricing.rate_for(...)` six times per turn (Input/CacheWrite/CacheWrite1h/CacheRead/Output/Reasoning). Each call (`pricing.rs:276-294`) calls `normalize_model_key` (`pricing.rs:180-195`), which allocates a fresh `Vec&lt;&amp;str&gt;` via `model.split('-').collect()` and then does `self.rates.iter().any(...)` — a linear scan of the *entire* rates vec — for each candidate prefix length. Then `rate_for`'s own `matching` closure does *another* full linear `.filter()` scan of `self.rates` (up to twice, if the tier fallback fires). Before the LiteLLM vendoring, `rates` was ~40 hand-typed rows; now it's ~1,500+ (377 direct-provider models × up to 6 rate kinds), confirmed by counting the vendored JSON. So this went from "trivially cheap" to a real cost: a session with 300 turns does up to ~3,600 linear scans of a 1,500-element vector plus 1,800 small Vec allocations, all recomputing the *same* normalized key and rate rows repeatedly (the model name and available rate kinds are identical across every turn in a session). At "dozens to low-hundreds of sessions," this is the one finding that will actually show up in wall-clock time on `lumen ingest` — likely tens to low hundreds of ms per large session, not catastrophic but a clean, easy fix: memoize the normalized key + a `HashMap&lt;(&amp;str, TokenRateKind, Option&lt;&amp;str&gt;), Vec&lt;&amp;PricingRate&gt;&gt;` (or per-model row slice) built once per `calculate()` call instead of re-deriving it per turn per kind.
+
+**2. Non-issue (already fixed): the vendored 1.8MB JSON is not reparsed per session.** `pricing.rs:49`, `pub static SEEDED: LazyLock&lt;PricingTable&gt; = LazyLock::new(PricingTable::seed)`, and every adapter (`claude.rs:376`, `codex.rs:250`, `agy.rs:234`, `opencode.rs:143`) passes `&amp;pricing::SEEDED`, not a fresh `PricingTable::seed()`. The only remaining `PricingTable::seed()` call outside `SEEDED` itself is in `snapshot.rs:84`, inside `#[cfg(test)]`. Parsed once per process. Good.
+
+**3. REAL, confirmed: `upsert_session` performs no explicit transaction around its multi-statement sequence.** `crates/lumen-store/src/repositories/session.rs:19-86` does: 1 session upsert, 1 select-back, then `TokenUsageRepository::delete_for_session` + N per-model inserts, then `ToolCallRepository::delete_for_session` + M per-tool-call inserts (`tool_call.rs:26-37`, one `stmt.execute` per call in a loop, no `conn.transaction()` wrapping). With SQLite's default autocommit, each `execute()` is its own commit — a session with 50 tool calls does ~55 separate commits instead of 1. Under WAL + `synchronous = NORMAL` (confirmed in `store.rs:23-26`) this isn't fsync-per-commit, so the pure latency hit is modest, but it's real overhead multiplied by every session ingested, and more importantly it's a genuine atomicity gap: a crash or error mid-`upsert_session` leaves the session row updated but token_usage/tool_calls partially deleted/inserted. Worth wrapping in a single `conn.transaction()`.
+
+**4. Confirmed present but trivial: double file-open in `main.rs`.** `load_sessions` (`main.rs:108` + `126`) opens the same path twice — once for a 2KB fingerprint sample, once for the real parse. Two extra syscalls per file; at this scale (dozens–hundreds of files) this is noise, not a perf bug.
+
+**5. Non-issues:** adapters stream via `BufReader` (`claude.rs:417-429`), not whole-file loads — fine. r2d2 pool sizes (16 read/write, 8 read-only, `store.rs:30,54`) are generous for a single-process CLI — harmless, not a bottleneck. WAL mode buys little for single-process access but costs nothing either.
+
+**Bottom line:** one real, worth-fixing hot-path inefficiency (#1, the pricing lookup — moderate impact, easy fix), one real correctness-adjacent perf gap (#3, missing transaction — low perf impact but genuine atomicity risk), everything else is either already fixed or negligible at this scale.</result>
+<usage><subagent_tokens>113260</subagent_tokens><tool_uses>18</tool_uses><duration_ms>97189</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a41ac433140304989</task-id>
+<tool-use-id>toolu_018UHBsD3tkSYmzChp888jk1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-lumen/838a26ab-646c-45ac-8200-638bc101304a/tasks/a41ac433140304989.output</output-file>
+<status>completed</status>
+<summary>Agent "Semantic model review of Lumen workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Directive: skeptical review of Lumen's domain model (semantic honesty, not implementation bugs) — read transcript.rs/turn.rs/economics.rs/adapter.rs, spot-checked ClaudeCode/Codex/Agy/OpenCode adapters directly.**
+
+**1. `subagents: Vec&lt;CanonicalTranscript&gt;` — cost and metrics silently don't roll up.**
+Only `ClaudeCodeAdapter` populates this (via sibling `subagents/*.jsonl` files); the other three adapters always emit `Vec::new()`. Worse: nothing downstream aggregates subagent economics into the parent. `TokenEconomics::calculate` runs only on the top-level transcript's own turns; `cmd_ingest` persists `transcript.economics.clone()` — the root's economics only. `lumen-store` has zero references to `subagents` anywhere. A session that spends heavily via subagents will report a `total_cost_usd` that silently excludes that spend, with no field anywhere flagging "this number is a rollup" vs "this number is root-only." Analysis engine (`engine.rs`) does the same: `process_transcript` iterates `transcript.turns` for all 18 accumulators (circuit_breaker, autonomy, tool_inventory, etc.) but only recurses into `subagents` for a stripped-down attribution-only pass. So subagent tool calls, anomalies, autonomy signals — everything except attribution — are invisible outside the nested tree. The recursive-transcript shape isn't wrong in principle, but the type makes an implicit promise ("a session's full picture, canonically") that only 1 of 4 adapters and roughly 1 of 19 analysis passes actually honor.
+
+**2. Economics rollup itself is internally sound.** `TokenEconomics::calculate` is the single source of truth — turns are priced once, summed once, and `per_model` is derived in the same pass. No parallel/independent resum happens elsewhere (checked: no code sums `turns[].usage` outside this function except the unrelated attribution accumulator's token-count, which is a display metric, not cost). So within one transcript, no divergence risk. The divergence risk is entirely at the subagent boundary described above.
+
+**3. `OrchestratorKind` has 2 of 6 variants that are structurally dead.** `Kimi` and `GenericOtel` are declared, referenced in one CLI display match arm, and never constructed by any adapter — no adapter targets them. The enum currently encodes "orchestrators we've thought about," not "orchestrators we ingest." `AgyAdapter → OrchestratorKind::Antigravity` is a real naming mismatch (module/type named `Agy`, domain value named `Antigravity`) — harmless today but a paper cut for anyone reading the type without knowing the history. Adding a real 6th adapter requires touching the enum, a new adapter file, and (per the CRIT-LUMEN-172 contract) the shared unknown-model golden test — that's reasonable coupling, not a smell.
+
+**4. `detected_anomalies: SmallVec&lt;TrajectoryAnomaly&gt;` is entirely aspirational.** All four adapters hard-code `SmallVec::new()`. Grepping the whole workspace outside `tests/`, no code anywhere constructs `TrajectoryAnomaly::CircularLoop/ContextFlood/GateStall/UngroundedDrafting`. The field exists, is serialized, is even read by the CLI (`has_anomalies: !transcript.detected_anomalies.is_empty()`), but there is no producer — it will always print `false`. `GateStall` in particular names a concept (exit-gates) that's meaningful only for plugin-orchestrated sessions, not something every `OrchestratorKind` has — the type doesn't distinguish "not detected yet" from "not applicable to this session's orchestrator," and right now both look identical (empty vec) even though they're different facts.
+
+**5. `AttributionSource` has the same shape of gap, but with a live consumer.** No adapter ever sets `attribution` to anything but `None` — `Plugin`/`Skill`/`Root` are constructed nowhere in adapter code. Yet `lumen-analysis`'s `AttributionAccumulator` actively pattern-matches all three variants and produces `by_subagent` attribution metrics in every `AnalysisReport`. This is a real, running analysis whose input is currently always `None` — it's not dead code, it's live code analyzing a field no adapter has ever populated, so its output is always the `Root | None` branch in practice.
+
+**6. `service_tier`/`otel_conversation_id` are genuinely provider-specific, and the type is honest about that.** Only Codex sets `service_tier`, only Claude sets `otel_conversation_id`; both are `Option&lt;_&gt;` and both adapters that don't have the concept correctly leave `None` rather than fabricating a value. This is the one case in the review where a not-universal field is represented honestly — contrast with anomalies/attribution above, which have the same "not universal" shape but no `Option`-like signal distinguishing absence from non-applicability at the type level (a `SmallVec`/`Option` that's always empty is not self-documenting the way `None` is when only one adapter ever populates it).
+
+**Bottom line:** the turn/economics core is sound and single-sourced. The recursive `subagents` shape and three fields (`detected_anomalies`, `AttributionSource`'s non-`Root` variants, 2 of 6 `OrchestratorKind` variants) are specified further than any adapter implements, creating types that look like a complete universal IR but are honest for only a subset of what they claim to cover — and the subagent-cost gap is a real, non-cosmetic undercount, not just an unused field.</result>
+<usage><subagent_tokens>108114</subagent_tokens><tool_uses>11</tool_uses><duration_ms>79873</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-type>artifact-changed</task-type>
+<summary>Artifact changed: "Shift-Left Gates"</summary>
+Artifact https://claude.ai/code/artifact/8dffec3b-bc4b-4664-a5eb-602c92d40b78 appears to have been republished by another session — it is now version 1787528041-f8a4. Your copy is stale; re-read before editing or republishing (WebFetch the url).
+</task-notification>
+
+---
+
+Shall we address these methodically?
+
+---
+
+Shall we address these methodically?
