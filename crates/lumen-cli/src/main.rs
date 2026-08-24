@@ -6,7 +6,9 @@ use comfy_table::{Cell, Color, Row, Table};
 use lumen_analysis::detect_trajectory_anomalies;
 use lumen_model::*;
 use lumen_session::*;
-use lumen_store::{SessionFactRecord, SessionFilter, SessionRepository, SqliteStore, ToolCallFactRecord};
+use lumen_store::{
+    SessionFactRecord, SessionFilter, SessionRepository, SqliteStore, ToolCallFactRecord, TrendFilter, TrendRepository,
+};
 use miette::{miette, IntoDiagnostic, Result};
 use std::fs::File;
 use std::io::BufReader;
@@ -53,6 +55,17 @@ pub enum Commands {
     },
     /// Show one session's full detail from the store
     Session { provider: String, id: String },
+    /// Show cost/cache-hit/turn-count/anomaly-rate trends across tracked sessions
+    Trends {
+        /// Filter to one provider (claude-code, codex, antigravity, opencode)
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Include per-session compaction event data (Claude Code only)
+        #[arg(long)]
+        compaction: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -65,6 +78,7 @@ fn main() -> Result<()> {
         Commands::Ingest { path } => cmd_ingest(&path, &db_path, cli.json)?,
         Commands::Sessions { provider, limit } => cmd_sessions(&db_path, provider, limit, cli.json)?,
         Commands::Session { provider, id } => cmd_session(&db_path, &provider, &id, cli.json)?,
+        Commands::Trends { provider, limit, compaction } => cmd_trends(&db_path, provider, limit, compaction, cli.json)?,
     }
 
     Ok(())
@@ -538,6 +552,21 @@ fn cmd_session(db_path: &Utf8PathBuf, provider: &str, id: &str, json_mode: bool)
     Ok(())
 }
 
+fn cmd_trends(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, compaction: bool, _json_mode: bool) -> Result<()> {
+    let store = SqliteStore::open(db_path).into_diagnostic()?;
+    let conn = store.connection().into_diagnostic()?;
+    let repo = TrendRepository::new(&conn);
+    let points = repo
+        .list_session_trend(&TrendFilter { provider: provider.clone(), limit, require_compaction: compaction })
+        .into_diagnostic()?;
+
+    if points.len() < 2 {
+        return Err(miette!("lumen trends requires at least 2 sessions after filtering; found {}", points.len()));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +678,31 @@ mod tests {
         assert_eq!(detail.tool_counts.get("view_file").copied(), Some(1));
         assert_eq!(detail.tool_counts.get("replace_file_content").copied(), Some(1));
         assert!(detail.error_counts.is_empty(), "neither real tool call in this fixture errored");
+    }
+
+    #[test]
+    fn cmd_trends_errors_when_fewer_than_2_sessions_remain() {
+        // CRIT-LUMEN-187: fewer than 2 sessions after --provider+--limit must error clearly,
+        // never render a degenerate table/JSON or panic.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "s1".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+        drop(conn);
+        drop(store);
+
+        let err = cmd_trends(&db_path, None, 50, false, false).expect_err("expected an error with only 1 session");
+        assert!(
+            err.to_string().contains("at least 2 sessions"),
+            "expected error to mention 'at least 2 sessions', got: {err}"
+        );
     }
 }
