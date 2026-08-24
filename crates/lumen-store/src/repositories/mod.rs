@@ -1,4 +1,5 @@
 pub mod command_event;
+pub mod compaction;
 pub mod findings;
 pub mod queue;
 pub mod rollup;
@@ -8,6 +9,7 @@ pub mod token_usage;
 pub mod tool_call;
 
 pub use command_event::CommandEventRepository;
+pub use compaction::CompactionRepository;
 pub use findings::FindingsRepository;
 pub use queue::QueueRepository;
 pub use rollup::RollupRepository;

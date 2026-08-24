@@ -155,6 +155,17 @@ pub struct ToolCallReadModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionFactRecord {
+    pub session_id: i64,
+    pub sequence: u32,
+    pub trigger: String,
+    pub pre_tokens: u64,
+    pub post_tokens: u64,
+    pub cumulative_dropped_tokens: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandEventFactRecord {
     pub command_base: String,
     pub sanitized_args: Option<String>,

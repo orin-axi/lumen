@@ -1582,3 +1582,34 @@ fn test_compaction_events_table_exists_with_expected_columns() {
         ]
     );
 }
+
+#[test]
+fn test_compaction_repository_insert_and_delete_for_session() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (provider, provider_session_id, model_family, orchestrator, started_at, ended_at, wall_duration_ms, turn_count, cache_hit_ratio, total_cost_usd, baseline_cost_usd, net_savings_usd, efficiency_multiplier) VALUES ('claude-code','s1','m','ClaudeCode','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,1,0,0,0,0,1)",
+        [],
+    )
+    .unwrap();
+    let repo = CompactionRepository::new(&conn);
+    let events = vec![CompactionFactRecord {
+        session_id: 1,
+        sequence: 0,
+        trigger: "auto".to_string(),
+        pre_tokens: 100,
+        post_tokens: 20,
+        cumulative_dropped_tokens: 80,
+        duration_ms: 5,
+    }];
+    repo.insert_compaction_facts(1, &events).unwrap();
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM compaction_events WHERE session_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 1);
+    repo.delete_for_session(1).unwrap();
+    let count_after: i64 =
+        conn.query_row("SELECT COUNT(*) FROM compaction_events WHERE session_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_after, 0);
+}
