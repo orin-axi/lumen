@@ -1618,6 +1618,47 @@ fn test_compaction_repository_insert_and_delete_for_session() {
     assert_eq!(count_after, 0);
 }
 
+/// CRIT-LUMEN-185: pre_tokens and post_tokens are distinct fields whose insertion order in the
+/// `params!` call at compaction.rs:25-32 could silently swap without any existing test catching
+/// it -- the prior test only asserted a row count. Use distinct, unambiguous values for every
+/// field and read the row back directly (no repository read method exists yet) to prove each
+/// column holds the field that was actually meant for it.
+#[test]
+fn test_compaction_repository_insert_round_trips_all_fields() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (provider, provider_session_id, model_family, orchestrator, started_at, ended_at, wall_duration_ms, turn_count, cache_hit_ratio, total_cost_usd, baseline_cost_usd, net_savings_usd, efficiency_multiplier) VALUES ('claude-code','s1','m','ClaudeCode','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',0,1,0,0,0,0,1)",
+        [],
+    )
+    .unwrap();
+    let repo = CompactionRepository::new(&conn);
+    let events = vec![CompactionFactRecord {
+        session_id: 1,
+        sequence: 7,
+        trigger: "manual".to_string(),
+        pre_tokens: 123_456,
+        post_tokens: 7_890,
+        cumulative_dropped_tokens: 654_321,
+        duration_ms: 42,
+    }];
+    repo.insert_compaction_facts(1, &events).unwrap();
+
+    let (pre, post, dropped, dur): (i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT pre_tokens, post_tokens, cumulative_dropped_tokens, duration_ms FROM compaction_events WHERE session_id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(pre, 123_456, "pre_tokens must round-trip, not be swapped with post_tokens");
+    assert_eq!(post, 7_890, "post_tokens must round-trip, not be swapped with pre_tokens");
+    assert_eq!(dropped, 654_321);
+    assert_eq!(dur, 42);
+}
+
 #[test]
 fn test_upsert_session_persists_and_reingest_replaces_compaction_events() {
     let dir = tempfile::tempdir().unwrap();
