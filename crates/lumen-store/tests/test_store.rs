@@ -1786,3 +1786,97 @@ fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() 
     assert_eq!(no_events.tokens_dropped_total, 0);
     assert!(by_id("cx-0").compaction.is_none());
 }
+
+/// Mutation-testing precision test (mutator-trends, 2026-08-24): `filter.limit > 0` survived
+/// mutation to `>= 0` -- always true for a `usize`, so the mutant bypassed the zero-limit-means-
+/// default-50 fallback and would pass a literal `LIMIT 0` to SQL, returning zero rows instead of
+/// the default cap. No existing test exercised `limit: 0` specifically.
+#[test]
+fn test_list_session_trend_zero_limit_defaults_to_fifty() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_zero_limit_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    for i in 0..3 {
+        session_repo
+            .upsert_session(&SessionFactRecord {
+                provider: "claude-code".to_string(),
+                provider_session_id: format!("cc-{i}"),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let trend_repo = TrendRepository::new(&conn);
+    let points =
+        trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 0, require_compaction: false }).unwrap();
+    assert_eq!(points.len(), 3, "limit: 0 must fall back to the default cap of 50, not LIMIT 0");
+}
+
+/// Mutation-testing precision test (mutator-trends, 2026-08-24): `is_fully_priced != 0` survived
+/// mutation to `== 0`, swapping which sessions map to Cost::Priced vs Cost::Unpriced. No existing
+/// test asserted the actual Cost variant list_session_trend returns.
+#[test]
+fn test_list_session_trend_cost_priced_vs_unpriced() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_cost_variant_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "priced".to_string(),
+            economics: TokenEconomics { total_cost_usd: 4.5, is_fully_priced: true, ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "unpriced".to_string(),
+            economics: TokenEconomics { total_cost_usd: 0.0, is_fully_priced: false, ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    let points =
+        trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: false }).unwrap();
+    let priced = points.iter().find(|p| p.session_id == "priced").unwrap();
+    let unpriced = points.iter().find(|p| p.session_id == "unpriced").unwrap();
+    assert!(matches!(priced.cost, Cost::Priced(v) if (v - 4.5).abs() < f64::EPSILON));
+    assert!(matches!(unpriced.cost, Cost::Unpriced));
+}
+
+/// Mutation-testing precision test (mutator-trends, 2026-08-24): `has_anomalies != 0` survived
+/// mutation to `== 0`, inverting the flag on SessionTrendPoint. No existing test asserted this
+/// field's value.
+#[test]
+fn test_list_session_trend_has_anomalies_flag() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_has_anomalies_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "anomalous".to_string(),
+            has_anomalies: true,
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "clean".to_string(),
+            has_anomalies: false,
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    let points =
+        trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: false }).unwrap();
+    assert!(points.iter().find(|p| p.session_id == "anomalous").unwrap().has_anomalies);
+    assert!(!points.iter().find(|p| p.session_id == "clean").unwrap().has_anomalies);
+}
