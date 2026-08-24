@@ -78,7 +78,9 @@ fn main() -> Result<()> {
         Commands::Ingest { path } => cmd_ingest(&path, &db_path, cli.json)?,
         Commands::Sessions { provider, limit } => cmd_sessions(&db_path, provider, limit, cli.json)?,
         Commands::Session { provider, id } => cmd_session(&db_path, &provider, &id, cli.json)?,
-        Commands::Trends { provider, limit, compaction } => cmd_trends(&db_path, provider, limit, compaction, cli.json)?,
+        Commands::Trends { provider, limit, compaction } => {
+            cmd_trends(&db_path, provider, limit, compaction, cli.json, &mut std::io::stdout())?
+        }
     }
 
     Ok(())
@@ -552,7 +554,14 @@ fn cmd_session(db_path: &Utf8PathBuf, provider: &str, id: &str, json_mode: bool)
     Ok(())
 }
 
-fn cmd_trends(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, compaction: bool, _json_mode: bool) -> Result<()> {
+fn cmd_trends(
+    db_path: &Utf8PathBuf,
+    provider: Option<String>,
+    limit: usize,
+    compaction: bool,
+    _json_mode: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<()> {
     let store = SqliteStore::open(db_path).into_diagnostic()?;
     let conn = store.connection().into_diagnostic()?;
     let repo = TrendRepository::new(&conn);
@@ -577,6 +586,46 @@ fn cmd_trends(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, com
         }
     }
 
+    let anomalous = points.iter().filter(|p| p.has_anomalies).count();
+    let anomaly_rate = format!("{:.1}", (anomalous as f64 / points.len() as f64) * 100.0).parse::<f64>().unwrap();
+    writeln!(writer, "\n {} session(s), anomaly rate: {:.1}%\n", points.len(), anomaly_rate).into_diagnostic()?;
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    let mut headers = vec!["Provider", "Session ID", "Started At", "Cost USD", "Cache Hit %", "Turns", "Anomalies"];
+    if compaction {
+        headers.extend(["Compaction Count", "Tokens Dropped", "Auto/Manual"]);
+    }
+    table.set_header(Row::from(headers));
+
+    for p in &points {
+        let mut cells = vec![
+            Cell::new(&p.provider),
+            Cell::new(&p.session_id),
+            Cell::new(p.started_at.to_rfc3339()),
+            Cell::new(p.cost.format_usd("unknown")),
+            Cell::new(format!("{:.1}%", p.cache_hit_ratio)),
+            Cell::new(p.turn_count.to_string()),
+            if p.has_anomalies { Cell::new("yes") } else { Cell::new("-") },
+        ];
+        if compaction {
+            match &p.compaction {
+                Some(c) => {
+                    cells.push(Cell::new(c.event_count.to_string()));
+                    cells.push(Cell::new(c.tokens_dropped_total.to_string()));
+                    cells.push(Cell::new(format!("{}/{}", c.auto_count, c.manual_count)));
+                }
+                None => {
+                    cells.push(Cell::new("n/a"));
+                    cells.push(Cell::new("n/a"));
+                    cells.push(Cell::new("n/a"));
+                }
+            }
+        }
+        table.add_row(cells);
+    }
+
+    writeln!(writer, "{table}").into_diagnostic()?;
     Ok(())
 }
 
@@ -712,7 +761,8 @@ mod tests {
         drop(conn);
         drop(store);
 
-        let err = cmd_trends(&db_path, None, 50, false, false).expect_err("expected an error with only 1 session");
+        let err = cmd_trends(&db_path, None, 50, false, false, &mut Vec::new())
+            .expect_err("expected an error with only 1 session");
         assert!(
             err.to_string().contains("at least 2 sessions"),
             "expected error to mention 'at least 2 sessions', got: {err}"
@@ -741,11 +791,73 @@ mod tests {
         drop(conn);
         drop(store);
 
-        let err = cmd_trends(&db_path, Some("codex".to_string()), 50, true, false)
+        let err = cmd_trends(&db_path, Some("codex".to_string()), 50, true, false, &mut Vec::new())
             .expect_err("expected an error for --compaction with an incompatible --provider");
         let msg = err.to_string();
         assert!(msg.contains("codex"), "expected error to name 'codex', got: {msg}");
         assert!(msg.contains("claude-code"), "expected error to mention 'claude-code', got: {msg}");
+    }
+
+    #[test]
+    fn cmd_trends_renders_table_with_cost_cache_hit_and_anomaly_rate() {
+        // CRIT-LUMEN-183/184/191: TABLE-mode rendering -- exact header set (no derived
+        // trend-direction/shift-detection signal), "unknown" for an unpriced session's cost
+        // (never a fabricated figure), half-to-even-rounded cache-hit-ratio and set-level
+        // anomaly-rate percentages.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "unpriced-session".to_string(),
+            turn_count: 3,
+            economics: TokenEconomics { cache_hit_ratio: 0.0, is_fully_priced: false, ..Default::default() },
+            has_anomalies: false,
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "priced-session".to_string(),
+            turn_count: 5,
+            economics: TokenEconomics {
+                cache_hit_ratio: 66.666_f32,
+                total_cost_usd: 1.2345,
+                is_fully_priced: true,
+                ..Default::default()
+            },
+            has_anomalies: true,
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        drop(conn);
+        drop(store);
+
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, false, false, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+
+        for header in ["Provider", "Session ID", "Started At", "Cost USD", "Cache Hit %", "Turns", "Anomalies"] {
+            assert!(output.contains(header), "expected header {header:?} in output, got:\n{output}");
+        }
+        assert!(!output.contains("Trend"), "must not emit a derived trend-direction label, got:\n{output}");
+        assert!(!output.contains("Direction"), "must not emit a derived trend-direction label, got:\n{output}");
+        assert!(!output.contains("Shift"), "must not emit a derived shift-detection label, got:\n{output}");
+        assert!(output.contains("unknown"), "unpriced row's cost must render as 'unknown', got:\n{output}");
+        assert!(
+            output.contains("66.7%"),
+            "priced row's cache hit ratio 66.666 must round half-to-even to 66.7%, got:\n{output}"
+        );
+        assert!(
+            output.contains("50.0%"),
+            "anomaly rate summary (1 of 2 sessions has anomalies) must render as 50.0%, got:\n{output}"
+        );
     }
 
     #[test]
@@ -769,7 +881,7 @@ mod tests {
         drop(conn);
         drop(store);
 
-        let err = cmd_trends(&db_path, None, 50, true, false)
+        let err = cmd_trends(&db_path, None, 50, true, false, &mut Vec::new())
             .expect_err("expected an error for --compaction with zero claude-code sessions");
         assert!(
             err.to_string().contains("Claude Code session"),
