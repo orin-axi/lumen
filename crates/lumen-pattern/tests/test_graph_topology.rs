@@ -65,6 +65,7 @@ fn test_calculate_monotonicity_free_function_detects_repeated_read_cycle() {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],

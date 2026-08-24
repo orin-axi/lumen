@@ -216,6 +216,7 @@ impl AgyAdapter {
             service_tier: None,
             parse_failures,
             detected_anomalies: SmallVec::new(),
+            compaction_events: SmallVec::new(),
         })
     }
 }

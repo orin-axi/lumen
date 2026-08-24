@@ -88,6 +88,7 @@ mod tests {
             subagents: vec![],
             extracted_schemas: smallvec::smallvec![],
             detected_anomalies: smallvec::smallvec![],
+            compaction_events: smallvec::smallvec![],
             otel_conversation_id: None,
             service_tier: None,
             parse_failures: smallvec::smallvec![],

@@ -59,6 +59,7 @@ fn synthetic_transcript(turn_count: usize) -> CanonicalTranscript {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],

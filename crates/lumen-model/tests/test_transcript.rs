@@ -70,6 +70,7 @@ fn test_canonical_transcript_roundtrip() {
             summary: Some(CompactString::new("SPEC-PRISM-001")),
         }],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],
@@ -134,6 +135,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],
@@ -264,6 +266,7 @@ fn test_canonical_transcript_full_hierarchy_roundtrip() {
                 target_file: CompactString::new("src/auth.rs"),
             },
         ],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],
@@ -322,6 +325,7 @@ fn transcript_with_one_turn(
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],
@@ -380,4 +384,20 @@ fn test_rolled_up_economics_with_no_subagents_matches_own_economics_cost() {
     let rolled = root.rolled_up_economics();
     assert_eq!(rolled.total_cost_usd, root.economics.total_cost_usd);
     assert_eq!(rolled.input_tokens, root.economics.input_tokens);
+}
+
+#[test]
+fn test_compaction_event_field_on_canonical_transcript() {
+    let event = CompactionEvent {
+        sequence: 0,
+        trigger: CompactionTrigger::Auto,
+        pre_tokens: 100_000,
+        post_tokens: 20_000,
+        cumulative_dropped_tokens: 80_000,
+        duration_ms: 1200,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+    assert_eq!(event.trigger, CompactionTrigger::Auto);
 }

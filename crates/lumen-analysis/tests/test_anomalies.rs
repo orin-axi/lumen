@@ -70,6 +70,7 @@ fn transcript_with_turns(turns: Vec<CanonicalTurn>) -> CanonicalTranscript {
         subagents: vec![],
         extracted_schemas: smallvec![],
         detected_anomalies: smallvec![],
+        compaction_events: smallvec![],
         otel_conversation_id: None,
         service_tier: None,
         parse_failures: smallvec![],

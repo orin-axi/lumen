@@ -169,6 +169,7 @@ impl OpenCodeAdapter {
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
+            compaction_events: SmallVec::new(),
         })
     }
 

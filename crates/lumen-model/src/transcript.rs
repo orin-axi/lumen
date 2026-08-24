@@ -27,6 +27,7 @@ pub struct CanonicalTranscript {
     pub otel_conversation_id: Option<CompactString>,
     pub service_tier: Option<CompactString>,
     pub parse_failures: SmallVec<[ParseFailureRecord; 2]>,
+    pub compaction_events: SmallVec<[CompactionEvent; 4]>,
 }
 
 impl CanonicalTranscript {
@@ -140,4 +141,20 @@ pub enum TrajectoryAnomaly {
     ContextFlood { turns: usize, uncompressed_tokens: u64 },
     GateStall { agent_pair: CompactString, observed_rounds: usize },
     UngroundedDrafting { missing_symbol: CompactString, target_file: CompactString },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionEvent {
+    pub sequence: u32,
+    pub trigger: CompactionTrigger,
+    pub pre_tokens: u64,
+    pub post_tokens: u64,
+    pub cumulative_dropped_tokens: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompactionTrigger {
+    Auto,
+    Manual,
 }
