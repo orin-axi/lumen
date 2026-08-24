@@ -60,6 +60,8 @@ impl ClaudeCodeAdapter {
         let mut pricing_inputs: Vec<TurnPricingInput> = Vec::new();
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
         let mut otel_conversation_id: Option<CompactString> = None;
+        let mut compaction_events: SmallVec<[CompactionEvent; 4]> = SmallVec::new();
+        let mut compaction_sequence: u32 = 0;
 
         // CRIT-LUMEN-182: carries a Skill invocation's attribution forward across subsequent
         // assistant turns, since Claude Code gives no structural signal for "this turn happened
@@ -376,6 +378,39 @@ impl ClaudeCodeAdapter {
                         usage: None,
                     });
                 }
+            } else if line_type == "system" {
+                let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+                if subtype == "compact_boundary" {
+                    let seq = compaction_sequence;
+                    compaction_sequence += 1;
+                    if let Some(meta) = val.get("compactMetadata").and_then(|m| m.as_object()) {
+                        if let (Some(trigger_str), Some(pre), Some(post), Some(dropped), Some(dur)) = (
+                            meta.get("trigger").and_then(|v| v.as_str()),
+                            meta.get("preTokens").and_then(|v| v.as_u64()),
+                            meta.get("postTokens").and_then(|v| v.as_u64()),
+                            meta.get("cumulativeDroppedTokens").and_then(|v| v.as_u64()),
+                            meta.get("durationMs").and_then(|v| v.as_u64()),
+                        ) {
+                            let trigger = if trigger_str == "auto" {
+                                Some(CompactionTrigger::Auto)
+                            } else if trigger_str == "manual" {
+                                Some(CompactionTrigger::Manual)
+                            } else {
+                                None
+                            };
+                            if let Some(trigger) = trigger {
+                                compaction_events.push(CompactionEvent {
+                                    sequence: seq,
+                                    trigger,
+                                    pre_tokens: pre,
+                                    post_tokens: post,
+                                    cumulative_dropped_tokens: dropped,
+                                    duration_ms: dur,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -402,7 +437,7 @@ impl ClaudeCodeAdapter {
             subagents: Vec::new(),
             extracted_schemas: SmallVec::new(),
             detected_anomalies: SmallVec::new(),
-            compaction_events: SmallVec::new(),
+            compaction_events,
             otel_conversation_id,
             service_tier: None,
             parse_failures,

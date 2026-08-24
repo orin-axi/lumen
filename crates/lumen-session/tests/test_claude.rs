@@ -428,3 +428,25 @@ fn test_claude_code_adapter_turn_with_no_skill_tool_call_has_no_attribution() {
 
     assert_eq!(transcript.turns[0].attribution, None);
 }
+
+#[test]
+fn test_claude_code_adapter_parses_compact_boundary_events_with_encounter_sequence() {
+    let sample = r#"{"type":"user","message":{"role":"user","content":"hi"}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000,"postTokens":20000,"cumulativeDroppedTokens":80000,"durationMs":1500}}
+{"type":"system","subtype":"other_system_event"}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("parse failed");
+
+    assert_eq!(transcript.compaction_events.len(), 2);
+    assert_eq!(transcript.compaction_events[0].sequence, 0);
+    assert_eq!(transcript.compaction_events[0].trigger, CompactionTrigger::Auto);
+    assert_eq!(transcript.compaction_events[0].pre_tokens, 100000);
+    assert_eq!(transcript.compaction_events[0].post_tokens, 20000);
+    assert_eq!(transcript.compaction_events[0].cumulative_dropped_tokens, 80000);
+    assert_eq!(transcript.compaction_events[0].duration_ms, 1500);
+    assert_eq!(transcript.compaction_events[1].sequence, 1);
+    assert_eq!(transcript.compaction_events[1].trigger, CompactionTrigger::Manual);
+}
