@@ -1057,4 +1057,35 @@ mod tests {
             "cache_hit_ratio must round-trip through JSON output as exactly 66.7, got:\n{output}"
         );
     }
+
+    #[test]
+    fn cmd_ingest_persists_a_real_compact_boundary_event_end_to_end() {
+        // CRIT-LUMEN-185: no fixture anywhere carried a real compact_boundary event, so the full
+        // adapter-parse -> build_compaction_fact_records -> CompactionRepository::insert path had
+        // zero end-to-end coverage through the real cmd_ingest entry point (as opposed to the
+        // adapter-level or repository-level unit tests, which each exercise only one hop).
+        let sample = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":null,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":\"turn-0\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10}}}\n",
+            "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":100000,\"postTokens\":20000,\"cumulativeDroppedTokens\":80000,\"durationMs\":1500}}\n",
+        );
+        let file = write_temp_file(sample);
+
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        cmd_ingest(file.path(), &db_path, true).expect("cmd_ingest must succeed on a real compact_boundary sample");
+
+        let store = SqliteStore::open(&db_path).expect("reopen store");
+        let conn = store.connection().unwrap();
+        let trend_repo = TrendRepository::new(&conn);
+        let points =
+            trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: true }).unwrap();
+        assert_eq!(points.len(), 1);
+        let compaction = points[0].compaction.as_ref().expect("session must have a compaction summary");
+        assert_eq!(compaction.event_count, 1, "the real compact_boundary event must have been persisted");
+        assert_eq!(compaction.tokens_dropped_total, 80000);
+        assert_eq!(compaction.auto_count, 1);
+        assert_eq!(compaction.manual_count, 0);
+    }
 }
