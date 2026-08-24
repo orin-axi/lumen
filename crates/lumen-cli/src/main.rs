@@ -1079,8 +1079,9 @@ mod tests {
         let store = SqliteStore::open(&db_path).expect("reopen store");
         let conn = store.connection().unwrap();
         let trend_repo = TrendRepository::new(&conn);
-        let points =
-            trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: true }).unwrap();
+        let points = trend_repo
+            .list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: true })
+            .unwrap();
         assert_eq!(points.len(), 1);
         let compaction = points[0].compaction.as_ref().expect("session must have a compaction summary");
         assert_eq!(compaction.event_count, 1, "the real compact_boundary event must have been persisted");
