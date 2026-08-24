@@ -61,6 +61,15 @@ impl ClaudeCodeAdapter {
         let mut parse_failures: SmallVec<[ParseFailureRecord; 2]> = SmallVec::new();
         let mut otel_conversation_id: Option<CompactString> = None;
 
+        // CRIT-LUMEN-182: carries a Skill invocation's attribution forward across subsequent
+        // assistant turns, since Claude Code gives no structural signal for "this turn happened
+        // because of that earlier skill" -- see attribution_from_tool_calls's own doc comment.
+        // Reset on the next real user turn (a new top-level request), which is the one point
+        // where Claude Code does give a real signal that context has shifted; carried through
+        // ToolResult turns unchanged, since those are tool output being returned, not a new
+        // request. Overwritten (not reset) by a newer Skill invocation.
+        let mut current_attribution: Option<AttributionSource> = None;
+
         // costUSD is Claude Code's own reported cost, wired through TokenEconomics::calculate's
         // provided_cost_usd twin-field (CRIT-LUMEN-160) for drift detection against the
         // independently-computed total_cost_usd. It's unclear whether costUSD is a per-message
@@ -285,7 +294,13 @@ impl ClaudeCodeAdapter {
 
                     // Only push if turn has substantive content, tools, or usage
                     if turn_usage.is_some() || !tool_calls.is_empty() || turn_text.is_some() {
-                        let attribution = attribution_from_tool_calls(&tool_calls);
+                        // A fresh Skill invocation in this turn takes over the carried context;
+                        // otherwise this turn inherits whatever skill (if any) is currently
+                        // active from an earlier turn.
+                        if let Some(skill) = attribution_from_tool_calls(&tool_calls) {
+                            current_attribution = Some(skill);
+                        }
+                        let attribution = current_attribution.clone();
                         turns.push(CanonicalTurn {
                             attribution,
                             turn_index: turns.len(),
@@ -346,6 +361,9 @@ impl ClaudeCodeAdapter {
                         usage: None,
                     });
                 } else if let Some(text) = user_text {
+                    // A new real user turn is the one real signal Claude Code gives that
+                    // context has shifted -- ends any carried skill attribution from before it.
+                    current_attribution = None;
                     turns.push(CanonicalTurn {
                         attribution: None,
                         turn_index: turns.len(),
@@ -427,15 +445,12 @@ impl ClaudeCodeAdapter {
     }
 }
 
-/// Attributes a turn to the skill (and, when the name is plugin-namespaced, plugin) it invoked
-/// -- CRIT-LUMEN-178. Scoped deliberately narrow: only the turn containing the `Skill` tool_use
-/// block itself gets an attribution. Claude Code doesn't scope a skill's effect to a
-/// sub-transcript the way subagents do (no sibling JSONL, no boundary) -- it just injects the
-/// skill's instructions into the same ongoing thread -- so there is no structural signal for
-/// "this later turn happened because of that earlier skill invocation." Attributing that
-/// downstream cascade would require a heuristic (e.g. "everything until the next Skill
-/// invocation or an unrelated topic shift") that no other part of this codebase uses; deferred
-/// as a real, separate decision rather than silently guessed at here.
+/// Detects a fresh skill invocation in this turn's own tool_calls (and, when the name is
+/// plugin-namespaced, its plugin) -- CRIT-LUMEN-178. Returns `None` for a turn that doesn't
+/// itself invoke a `Skill` tool -- this function only ever looks at THIS turn; carrying that
+/// attribution forward across later turns (CRIT-LUMEN-182, since Claude Code gives no
+/// structural signal for "this later turn happened because of that earlier skill invocation")
+/// is `parse_stream`'s `current_attribution` state, not this function's concern.
 fn attribution_from_tool_calls(tool_calls: &[CanonicalToolCall]) -> Option<AttributionSource> {
     let skill_call = tool_calls.iter().find(|c| c.tool_name == "Skill")?;
     let raw_name = skill_call.raw_arguments.get("skill").and_then(|v| v.as_str())?;

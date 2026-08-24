@@ -359,19 +359,63 @@ fn test_claude_code_adapter_attributes_turn_to_unnamespaced_builtin_skill_with_n
 }
 
 #[test]
-fn test_claude_code_adapter_non_skill_turns_have_no_attribution() {
-    // The invocation turn itself gets attribution; a later turn produced as a result of the
-    // skill's loaded instructions does not -- Claude Code carries no structural signal linking
-    // it back, so this codebase does not guess.
+fn test_claude_code_adapter_carries_skill_attribution_forward_until_a_new_user_turn() {
+    // CRIT-LUMEN-182: a turn after a Skill invocation, with no real user turn in between,
+    // inherits that skill's attribution -- Claude Code gives no structural signal for exactly
+    // where the skill's effect ends, so a new user turn (the one real signal available) is the
+    // chosen boundary, not "the very next turn" (which would silently under-attribute).
     let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"canon:architect"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
 {"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"following the skill's instructions"}],"usage":{"input_tokens":50,"output_tokens":5}}}
+{"type":"user","message":{"role":"user","content":"a brand new request"}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"handling the new request"}],"usage":{"input_tokens":50,"output_tokens":5}}}
 "#;
 
     let adapter = ClaudeCodeAdapter;
     let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
 
-    assert!(transcript.turns[0].attribution.is_some());
-    assert_eq!(transcript.turns[1].attribution, None);
+    let expected = AttributionSource::Skill { name: "architect".into(), plugin: Some("canon".into()) };
+    assert_eq!(transcript.turns[0].attribution, Some(expected.clone()), "invocation turn itself");
+    assert_eq!(transcript.turns[1].attribution, Some(expected), "carried forward, no user turn in between");
+    assert_eq!(transcript.turns[2].attribution, None, "the user turn itself never carries attribution");
+    assert_eq!(transcript.turns[3].attribution, None, "reset by the new user turn before it");
+}
+
+#[test]
+fn test_claude_code_adapter_a_second_skill_invocation_overwrites_the_carried_attribution() {
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"canon:architect"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_2","name":"Skill","input":{"skill":"artifact-design"}}],"usage":{"input_tokens":50,"output_tokens":5}}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"still under the second skill"}],"usage":{"input_tokens":50,"output_tokens":5}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    assert_eq!(
+        transcript.turns[0].attribution,
+        Some(AttributionSource::Skill { name: "architect".into(), plugin: Some("canon".into()) })
+    );
+    let second = Some(AttributionSource::Skill { name: "artifact-design".into(), plugin: None });
+    assert_eq!(transcript.turns[1].attribution, second.clone());
+    assert_eq!(transcript.turns[2].attribution, second, "carried forward from the second invocation, not the first");
+}
+
+#[test]
+fn test_claude_code_adapter_tool_result_turns_carry_attribution_forward_without_resetting_it() {
+    // A ToolResult turn is tool output being returned, not a new user request -- it must not
+    // reset the carried skill context, even though it never carries attribution itself.
+    let sample = r#"{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Skill","input":{"skill":"canon:architect"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"tool_use","id":"tool_2","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":50,"output_tokens":5}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_2","content":"file.txt"}]}}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","role":"assistant","content":[{"type":"text","text":"still under the skill"}],"usage":{"input_tokens":50,"output_tokens":5}}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("Failed to parse Claude Code session");
+
+    let expected = Some(AttributionSource::Skill { name: "architect".into(), plugin: Some("canon".into()) });
+    assert_eq!(transcript.turns[2].role, TurnRole::ToolResult);
+    assert_eq!(transcript.turns[2].attribution, None, "a ToolResult turn never carries attribution itself");
+    assert_eq!(transcript.turns[3].attribution, expected, "but it must not reset the carried context either");
 }
 
 #[test]
