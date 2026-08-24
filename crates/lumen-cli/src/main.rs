@@ -559,7 +559,7 @@ fn cmd_trends(
     provider: Option<String>,
     limit: usize,
     compaction: bool,
-    _json_mode: bool,
+    json_mode: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<()> {
     let store = SqliteStore::open(db_path).into_diagnostic()?;
@@ -588,6 +588,12 @@ fn cmd_trends(
 
     let anomalous = points.iter().filter(|p| p.has_anomalies).count();
     let anomaly_rate = format!("{:.1}", (anomalous as f64 / points.len() as f64) * 100.0).parse::<f64>().unwrap();
+    if json_mode {
+        let json_out = serde_json::json!({ "sessions": points, "anomaly_rate": anomaly_rate });
+        writeln!(writer, "{}", serde_json::to_string_pretty(&json_out).into_diagnostic()?).into_diagnostic()?;
+        return Ok(());
+    }
+
     writeln!(writer, "\n {} session(s), anomaly rate: {:.1}%\n", points.len(), anomaly_rate).into_diagnostic()?;
 
     let mut table = Table::new();
@@ -887,5 +893,116 @@ mod tests {
             err.to_string().contains("Claude Code session"),
             "expected error to mention 'Claude Code session', got: {err}"
         );
+    }
+
+    #[test]
+    fn cmd_trends_json_mode_emits_sessions_and_anomaly_rate_object_envelope() {
+        // CRIT-LUMEN-186/191/184: JSON-mode rendering -- an explicit {sessions, anomaly_rate}
+        // object root (never a bare array), no derived statistical field on any session, and a
+        // "compaction" key present (with the correct event_count) only for the Claude Code
+        // session that actually has persisted compaction events.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "compacted-session".to_string(),
+            compaction_events: vec![
+                lumen_store::CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 0,
+                    trigger: "auto".to_string(),
+                    pre_tokens: 100,
+                    post_tokens: 20,
+                    cumulative_dropped_tokens: 80,
+                    duration_ms: 5,
+                },
+                lumen_store::CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 1,
+                    trigger: "manual".to_string(),
+                    pre_tokens: 90,
+                    post_tokens: 10,
+                    cumulative_dropped_tokens: 160,
+                    duration_ms: 9,
+                },
+            ],
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "plain-session".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        drop(conn);
+        drop(store);
+
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, true, true, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+
+        let value: serde_json::Value = serde_json::from_str(&output).expect("output must be valid JSON");
+        let obj = value.as_object().expect("top-level JSON must be an object, not a bare array");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["anomaly_rate", "sessions"],
+            "top-level object must have exactly the sessions and anomaly_rate keys, got:\n{output}"
+        );
+
+        let anomaly_rate = obj["anomaly_rate"].as_f64().expect("anomaly_rate must be a plain JSON number");
+        assert!(
+            (0.0..=100.0).contains(&anomaly_rate),
+            "anomaly_rate must be a [0.0, 100.0] percentage, got {anomaly_rate}"
+        );
+
+        let sessions = obj["sessions"].as_array().expect("sessions must be a JSON array");
+        assert_eq!(sessions.len(), 2);
+
+        let allowed_keys = [
+            "provider",
+            "session_id",
+            "started_at",
+            "cost",
+            "cache_hit_ratio",
+            "turn_count",
+            "has_anomalies",
+            "compaction",
+        ];
+        for session in sessions {
+            let session_obj = session.as_object().expect("each session entry must be a JSON object");
+            for key in session_obj.keys() {
+                assert!(
+                    allowed_keys.contains(&key.as_str()),
+                    "unexpected key {key:?} in session object -- no derived statistical field \
+                     (trend_direction/cusum/classification/etc.) is allowed, got:\n{output}"
+                );
+            }
+            let cost_obj = session_obj["cost"].as_object().expect("cost must be a JSON object");
+            let mut cost_keys: Vec<&str> = cost_obj.keys().map(String::as_str).collect();
+            cost_keys.sort_unstable();
+            assert_eq!(cost_keys, vec!["priced", "usd"], "cost object must have exactly usd and priced keys");
+        }
+
+        let compacted = sessions
+            .iter()
+            .find(|s| s["session_id"] == "compacted-session")
+            .expect("compacted-session must be present in sessions");
+        assert_eq!(compacted["compaction"]["event_count"], 2);
+
+        let plain = sessions
+            .iter()
+            .find(|s| s["session_id"] == "plain-session")
+            .expect("plain-session must be present in sessions");
+        assert_eq!(plain["compaction"]["event_count"], 0, "a Claude Code session with zero events must be Some(zeros), not absent");
     }
 }
