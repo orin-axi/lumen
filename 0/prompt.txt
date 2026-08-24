@@ -1,0 +1,9 @@
+Doesn't sonnet 5 have a 1M context window? Also consider compaction that happens automatically at times. Currious to see if we can detect pattern changes over time too right? The important bits are what happens over time. What can those changes be attributed to? New plugins? New MCPs, new models, combinations? Prompts causing more output, less caching, etc, etc, etc
+
+---
+
+I have the need for such information. I want to track my sessions over time and understand how they are changing
+
+---
+
+Yes, plan and implementation
