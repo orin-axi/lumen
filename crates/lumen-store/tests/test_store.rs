@@ -1571,8 +1571,7 @@ fn test_compaction_events_table_exists_with_expected_columns() {
     let store = SqliteStore::open(&db_path).unwrap();
     let conn = store.connection().unwrap();
     let mut stmt = conn.prepare("PRAGMA table_info(compaction_events)").unwrap();
-    let cols: Vec<String> =
-        stmt.query_map([], |row| row.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect();
+    let cols: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect();
     assert_eq!(
         cols,
         vec![
@@ -1711,7 +1710,11 @@ fn test_list_session_trend_orders_oldest_to_newest_and_applies_limit_tiebreak() 
     }
     let trend_repo = TrendRepository::new(&conn);
     let points = trend_repo
-        .list_session_trend(&TrendFilter { provider: Some("claude-code".to_string()), limit: 3, require_compaction: false })
+        .list_session_trend(&TrendFilter {
+            provider: Some("claude-code".to_string()),
+            limit: 3,
+            require_compaction: false,
+        })
         .unwrap();
     assert_eq!(points.len(), 3);
     let ids: Vec<&str> = points.iter().map(|p| p.session_id.as_str()).collect();

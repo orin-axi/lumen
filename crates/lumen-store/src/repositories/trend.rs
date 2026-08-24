@@ -53,8 +53,11 @@ impl<'a> TrendRepository<'a> {
                 // CRIT-LUMEN-183: cache_hit_ratio is already a [0.0, 100.0] percentage in the
                 // sessions table -- round half-to-even to one decimal place, never rescale.
                 let rounded_cache_hit = format!("{cache_hit_ratio:.1}").parse::<f32>().unwrap();
-                let cost =
-                    if is_fully_priced != 0 { lumen_model::Cost::Priced(total_cost_usd) } else { lumen_model::Cost::Unpriced };
+                let cost = if is_fully_priced != 0 {
+                    lumen_model::Cost::Priced(total_cost_usd)
+                } else {
+                    lumen_model::Cost::Unpriced
+                };
                 Ok((
                     id,
                     SessionTrendPoint {

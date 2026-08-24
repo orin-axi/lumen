@@ -1003,6 +1003,9 @@ mod tests {
             .iter()
             .find(|s| s["session_id"] == "plain-session")
             .expect("plain-session must be present in sessions");
-        assert_eq!(plain["compaction"]["event_count"], 0, "a Claude Code session with zero events must be Some(zeros), not absent");
+        assert_eq!(
+            plain["compaction"]["event_count"], 0,
+            "a Claude Code session with zero events must be Some(zeros), not absent"
+        );
     }
 }
