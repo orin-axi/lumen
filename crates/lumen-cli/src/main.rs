@@ -7,9 +7,11 @@ use lumen_analysis::detect_trajectory_anomalies;
 use lumen_model::*;
 use lumen_session::*;
 use lumen_store::{
-    SessionFactRecord, SessionFilter, SessionRepository, SqliteStore, ToolCallFactRecord, TrendFilter, TrendRepository,
+    SessionFactRecord, SessionFilter, SessionRepository, SessionTrendPoint, SqliteStore, ToolCallFactRecord,
+    TrendFilter, TrendRepository,
 };
 use miette::{miette, IntoDiagnostic, Result};
+use serde::Serialize;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -589,7 +591,12 @@ fn cmd_trends(
     let anomalous = points.iter().filter(|p| p.has_anomalies).count();
     let anomaly_rate = format!("{:.1}", (anomalous as f64 / points.len() as f64) * 100.0).parse::<f64>().unwrap();
     if json_mode {
-        let json_out = serde_json::json!({ "sessions": points, "anomaly_rate": anomaly_rate });
+        #[derive(Serialize)]
+        struct TrendsJsonOutput<'a> {
+            sessions: &'a [SessionTrendPoint],
+            anomaly_rate: f64,
+        }
+        let json_out = TrendsJsonOutput { sessions: &points, anomaly_rate };
         writeln!(writer, "{}", serde_json::to_string_pretty(&json_out).into_diagnostic()?).into_diagnostic()?;
         return Ok(());
     }
@@ -1006,6 +1013,48 @@ mod tests {
         assert_eq!(
             plain["compaction"]["event_count"], 0,
             "a Claude Code session with zero events must be Some(zeros), not absent"
+        );
+    }
+
+    #[test]
+    fn cmd_trends_json_mode_preserves_f32_cache_hit_ratio_precision() {
+        // CRIT-LUMEN-186: routing SessionTrendPoint through serde_json::json!/Value widens its
+        // f32 cache_hit_ratio to f64, reintroducing the exact binary-precision garbage the
+        // rounding at trend.rs:55 was meant to prevent -- e.g. 66.7_f32 renders as
+        // "66.69999694824219" once passed through serde_json::Value's f64-only Number type,
+        // instead of the correct shortest-round-trip "66.7" that serializing the typed
+        // SessionTrendPoint struct directly would produce.
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "s1".to_string(),
+            economics: lumen_model::TokenEconomics { cache_hit_ratio: 66.666, ..Default::default() },
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "s2".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        drop(conn);
+        drop(store);
+
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, false, true, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+
+        assert!(
+            output.contains("66.7") && !output.contains("66.69999") && !output.contains("66.7000001"),
+            "cache_hit_ratio must round-trip through JSON output as exactly 66.7, got:\n{output}"
         );
     }
 }
