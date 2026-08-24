@@ -1722,6 +1722,45 @@ fn test_list_session_trend_orders_oldest_to_newest_and_applies_limit_tiebreak() 
     assert!(points.windows(2).all(|w| w[0].started_at <= w[1].started_at));
 }
 
+/// CRIT-LUMEN-190: the existing tie-break test uses limit:3 over 4 rows where the whole 2-member
+/// tie group already fits inside the limit, so the LIMIT cut never actually lands inside a tied
+/// group and the ASC vs. DESC tie-break choice is unobservable. Here the limit cuts a 2-member
+/// tie group down to 1, so the correct (alphabetically-first-by-provider_session_id) survivor is
+/// distinguishable from the wrong one.
+#[test]
+fn test_list_session_trend_tiebreak_cuts_inside_a_tie_group() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_tiebreak_cut_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    for (id, offset_secs) in [("s-x", 20), ("s-b", 10), ("s-c", 10)] {
+        session_repo
+            .upsert_session(&SessionFactRecord {
+                provider: "claude-code".to_string(),
+                provider_session_id: id.to_string(),
+                started_at: base + chrono::Duration::seconds(offset_secs),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let trend_repo = TrendRepository::new(&conn);
+    let points = trend_repo
+        .list_session_trend(&TrendFilter {
+            provider: Some("claude-code".to_string()),
+            limit: 2,
+            require_compaction: false,
+        })
+        .unwrap();
+    let ids: Vec<&str> = points.iter().map(|p| p.session_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["s-b", "s-x"],
+        "limit:2 must keep the alphabetically-first (\"s-b\") of the tied pair, dropping \"s-c\""
+    );
+}
+
 #[test]
 fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() {
     let dir = tempfile::tempdir().unwrap();
