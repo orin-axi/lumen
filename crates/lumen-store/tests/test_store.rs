@@ -356,6 +356,36 @@ fn test_session_repository_is_fully_priced_round_trips_through_store() {
     assert!(priced_detail.economics.is_fully_priced);
 }
 
+/// has_anomalies has been written by upsert_session since CRIT-LUMEN-174, but list_recent and
+/// get_session never selected the column back out at all -- SessionSummaryReadModel didn't even
+/// carry the field until now, so `lumen sessions`/`lumen session` could never display it
+/// regardless of what CRIT-LUMEN-179's real anomaly detection found.
+#[test]
+fn test_session_repository_has_anomalies_round_trips_through_store() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("has_anomalies_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let repo = SessionRepository::new(&conn);
+
+    let mut record = make_test_session_record("sess-anomalous-1");
+    record.has_anomalies = true;
+    repo.upsert_session(&record).expect("upsert failed");
+
+    let list = repo.list_recent(&SessionFilter { provider: None, limit: 10 }).expect("list_recent failed");
+    assert!(list[0].has_anomalies, "list_recent must report the real has_anomalies value");
+
+    let detail =
+        repo.get_session("claude", "sess-anomalous-1").expect("get_session failed").expect("session not found");
+    assert!(detail.summary.has_anomalies, "get_session must report the real has_anomalies value");
+
+    // Sanity: a normal session with no detected anomalies still round-trips as false.
+    repo.upsert_session(&make_test_session_record("sess-clean-1")).expect("upsert failed");
+    let clean_detail =
+        repo.get_session("claude", "sess-clean-1").expect("get_session failed").expect("session not found");
+    assert!(!clean_detail.summary.has_anomalies);
+}
+
 #[test]
 fn test_findings_repository_insert_and_query() {
     let dir = tempdir().unwrap();

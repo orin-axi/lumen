@@ -468,6 +468,7 @@ fn cmd_sessions(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, j
         "Turns",
         "Cache Hit %",
         "Cost USD",
+        "Anomalies",
     ]));
     for s in &sessions {
         table.add_row(Row::from(vec![
@@ -480,6 +481,9 @@ fn cmd_sessions(db_path: &Utf8PathBuf, provider: Option<String>, limit: usize, j
             // directly with no is_fully_priced check at all, so an unpriced session (an
             // unrecognized model) displayed as an indistinguishable-from-real "$0.0000" here.
             Cell::new(s.cost().format_usd("unknown")),
+            // CRIT-LUMEN-179's detected_anomalies was persisted but never read back out until
+            // now -- this column was previously impossible to show at all.
+            if s.has_anomalies { Cell::new("yes").fg(Color::Yellow) } else { Cell::new("-") },
         ]));
     }
     println!("{table}");
@@ -501,7 +505,12 @@ fn cmd_session(db_path: &Utf8PathBuf, provider: &str, id: &str, json_mode: bool)
     }
 
     println!("\n Session: {} ({})", detail.summary.session_id, detail.summary.provider);
-    println!(" Model: {} | Turns: {}\n", detail.summary.model_family, detail.summary.turn_count);
+    println!(
+        " Model: {} | Turns: {} | Anomalies: {}\n",
+        detail.summary.model_family,
+        detail.summary.turn_count,
+        if detail.summary.has_anomalies { "yes" } else { "none" }
+    );
     print_economics_table(&detail.economics);
     Ok(())
 }

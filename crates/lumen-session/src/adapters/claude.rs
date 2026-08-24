@@ -6,6 +6,7 @@ use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
 use crate::fingerprint::detect_orchestrator;
+use crate::jsonl::{jsonl_lines, JsonlLine};
 
 pub struct ClaudeCodeAdapter;
 
@@ -67,48 +68,25 @@ impl ClaudeCodeAdapter {
         // accumulated_cost (commit c87e801) and Codex's token_count.
         let mut last_cost_usd: Option<f64> = None;
 
-        let mut byte_offset: usize = 0;
-
-        'lines: for (idx, line_res) in reader.lines().enumerate() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(e) => {
-                    // CRIT-LUMEN-025: `BufRead::lines()` surfaces a non-UTF8 (or otherwise
-                    // unreadable) line as an `io::Error`, not a serde_json parse error -- but
-                    // the criterion treats "corrupted, truncated, or non-UTF8 lines" the same
-                    // way regardless of which stage rejected them: skip the line, record a
-                    // parse-failure entry, keep parsing. There is no way to distinguish "this
-                    // one line had bad bytes" from "the whole underlying reader is broken" at
-                    // this type level -- `lines()` yields the same `io::Error` shape for both --
-                    // so every line-read error is treated as a skippable bad line, matching the
-                    // criterion's literal wording.
-                    //
-                    // The line's true byte length is unknown (it never became a `String`), so
-                    // `byte_offset` is deliberately NOT advanced for this iteration -- the next
-                    // successfully-read line's reported offset will undercount by this line's
-                    // real length. This is a documented limitation of an already-approximate
-                    // diagnostic field (see the LF-based `+1` approximation below), not a
-                    // byte-exact guarantee.
+        'lines: for jsonl_line in jsonl_lines(reader) {
+            let (line_number, line_start_offset, raw_text) = match jsonl_line {
+                JsonlLine::Unreadable { line_number, byte_offset, error } => {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset,
-                        error: CompactString::new(e.to_string()),
+                        error: CompactString::new(error),
                     });
                     continue;
                 }
+                JsonlLine::Line { line_number, byte_offset, text } => (line_number, byte_offset, text),
             };
 
-            // Offset at the START of the line currently being processed. `reader.lines()`
-            // strips newlines and discards byte-position info, so we track it manually: this
-            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
-            // line for CRLF-terminated input -- an acceptable known limitation for a
-            // diagnostic field, not a byte-exact file-seek requirement.
-            let line_start_offset = byte_offset;
-            byte_offset += line.len() + 1;
-
-            let trimmed = line.trim();
-            let clean_line = trimmed.strip_prefix('\u{FEFF}').unwrap_or(trimmed).trim();
+            // ClaudeCodeAdapter-specific: a real UTF-8 BOM has been observed prefixing a line in
+            // practice, unlike CodexAdapter/AgyAdapter's real data -- stripped here rather than
+            // in the shared jsonl_lines helper, which every other adapter would then pay for
+            // without needing it.
+            let clean_line = raw_text.strip_prefix('\u{FEFF}').unwrap_or(&raw_text).trim();
             if clean_line.is_empty() {
                 continue;
             }
@@ -120,7 +98,7 @@ impl ClaudeCodeAdapter {
                     // failure so it survives the parse_stream call (CRIT-LUMEN-025).
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset: line_start_offset,
                         error: CompactString::new(e.to_string()),
                     });
@@ -139,7 +117,7 @@ impl ClaudeCodeAdapter {
                 if val.get(field).map(|v| v.is_null()).unwrap_or(false) {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset: line_start_offset,
                         error: CompactString::new(format!("explicit null on field '{field}'")),
                     });
@@ -156,7 +134,7 @@ impl ClaudeCodeAdapter {
                 if message.get("model").map(|v| v.is_null()).unwrap_or(false) {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset: line_start_offset,
                         error: CompactString::new("explicit null on field 'message.model'"),
                     });
@@ -168,7 +146,7 @@ impl ClaudeCodeAdapter {
                         if usage.get(field).map(|v| v.is_null()).unwrap_or(false) {
                             parse_failures.push(ParseFailureRecord {
                                 session_id: session_id.clone(),
-                                line_number: idx + 1,
+                                line_number,
                                 byte_offset: line_start_offset,
                                 error: CompactString::new(format!("explicit null on field 'message.usage.{field}'")),
                             });

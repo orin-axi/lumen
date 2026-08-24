@@ -79,6 +79,11 @@ pub struct SessionSummaryReadModel {
     /// indistinguishable-from-real `$0.0000` everywhere the store's read models were used.
     pub is_fully_priced: bool,
     pub created_at: DateTime<Utc>,
+    /// Whether `detect_trajectory_anomalies` found a `CircularLoop`/`GateStall` in this session
+    /// (CRIT-LUMEN-179) or any subagent transitively -- persisted since 2026-08-23 via
+    /// `upsert_session`, but never read back out until now: `list_recent`/`get_session`
+    /// previously never selected this column at all.
+    pub has_anomalies: bool,
 }
 
 impl SessionSummaryReadModel {

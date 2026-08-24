@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod adapters;
 pub mod fingerprint;
+pub mod jsonl;
 pub mod snapshot;
 
 pub use adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};

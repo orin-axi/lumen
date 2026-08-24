@@ -102,7 +102,7 @@ impl<'a> SessionRepository<'a> {
             .prepare(
                 "SELECT id, provider, provider_session_id, model_family, turn_count,
                         wall_duration_ms, cache_hit_ratio, total_cost_usd, net_savings_usd, created_at,
-                        is_fully_priced
+                        is_fully_priced, has_anomalies
                  FROM sessions
                  WHERE (?1 IS NULL OR provider = ?1)
                  ORDER BY started_at DESC
@@ -115,6 +115,7 @@ impl<'a> SessionRepository<'a> {
                 let wall_ms: i64 = row.get(5)?;
                 let turns: i64 = row.get(4)?;
                 let is_fully_priced: i64 = row.get(10)?;
+                let has_anomalies: i64 = row.get(11)?;
                 Ok(SessionSummaryReadModel {
                     id: row.get(0)?,
                     provider: row.get(1)?,
@@ -127,6 +128,7 @@ impl<'a> SessionRepository<'a> {
                     net_savings_usd: row.get(8)?,
                     created_at: row.get(9)?,
                     is_fully_priced: is_fully_priced != 0,
+                    has_anomalies: has_anomalies != 0,
                 })
             })
             .map_err(StoreError::Sqlite)?;
@@ -144,7 +146,7 @@ impl<'a> SessionRepository<'a> {
             .prepare(
                 "SELECT id, provider, provider_session_id, model_family, turn_count,
                         wall_duration_ms, cache_hit_ratio, total_cost_usd, net_savings_usd, baseline_cost_usd,
-                        efficiency_multiplier, created_at, is_fully_priced
+                        efficiency_multiplier, created_at, is_fully_priced, has_anomalies
                  FROM sessions
                  WHERE provider = ?1 AND provider_session_id = ?2",
             )
@@ -166,6 +168,8 @@ impl<'a> SessionRepository<'a> {
                 let created_at = row.get(11)?;
                 let is_fully_priced: i64 = row.get(12)?;
                 let is_fully_priced = is_fully_priced != 0;
+                let has_anomalies: i64 = row.get(13)?;
+                let has_anomalies = has_anomalies != 0;
 
                 Ok((
                     id,
@@ -182,6 +186,7 @@ impl<'a> SessionRepository<'a> {
                             net_savings_usd: savings_usd,
                             is_fully_priced,
                             created_at,
+                            has_anomalies,
                         },
                         economics: TokenEconomics {
                             input_tokens: 0,

@@ -6,6 +6,7 @@ use std::io::BufRead;
 
 use crate::adapter::{AdapterCapabilities, IngestionError, SessionAdapter, SessionSource};
 use crate::fingerprint::detect_orchestrator;
+use crate::jsonl::{jsonl_lines, JsonlLine};
 
 pub struct CodexAdapter;
 
@@ -71,46 +72,30 @@ impl CodexAdapter {
         let mut cache_read_tokens = 0u64;
         let mut cache_creation_tokens = 0u64;
 
-        let mut byte_offset: usize = 0;
-
-        for (idx, line_res) in reader.lines().enumerate() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(e) => {
+        for jsonl_line in jsonl_lines(reader) {
+            let (line_number, line_start_offset, trimmed) = match jsonl_line {
+                JsonlLine::Unreadable { line_number, byte_offset, error } => {
                     // CRIT-LUMEN-025: a non-UTF8 (or otherwise unreadable) line surfaces as an
                     // io::Error from BufRead::lines(), not a serde_json parse error -- treated
                     // the same as a corrupted-JSON line: skip + record, keep parsing. Same
                     // interpretation and byte_offset-non-advancement rationale as claude.rs.
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset,
-                        error: CompactString::new(e.to_string()),
+                        error: CompactString::new(error),
                     });
                     continue;
                 }
+                JsonlLine::Line { line_number, byte_offset, text } => (line_number, byte_offset, text),
             };
 
-            // Offset at the START of the line currently being processed. `reader.lines()`
-            // strips newlines and discards byte-position info, so we track it manually: this
-            // is an LF-based approximation (`+1` per line) and will undercount by 1 byte per
-            // line for CRLF-terminated input -- an acceptable known limitation for a
-            // diagnostic field, not a byte-exact file-seek requirement. Same pattern as
-            // claude.rs (commit 78f91cf).
-            let line_start_offset = byte_offset;
-            byte_offset += line.len() + 1;
-
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            let val: serde_json::Value = match serde_json::from_str(trimmed) {
+            let val: serde_json::Value = match serde_json::from_str(&trimmed) {
                 Ok(v) => v,
                 Err(e) => {
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset: line_start_offset,
                         error: CompactString::new(e.to_string()),
                     });
@@ -143,7 +128,7 @@ impl CodexAdapter {
                     // turns must not look like a clean, successful empty parse.
                     parse_failures.push(ParseFailureRecord {
                         session_id: session_id.clone(),
-                        line_number: idx + 1,
+                        line_number,
                         byte_offset: line_start_offset,
                         error: CompactString::new(
                             "response_item envelope recognized by fingerprint but not yet implemented by CodexAdapter::parse_stream",
