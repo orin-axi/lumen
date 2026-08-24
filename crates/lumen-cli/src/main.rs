@@ -1016,6 +1016,67 @@ mod tests {
         );
     }
 
+    /// Exit-gate blocker (2026-08-24): the `allowed_keys` assertion above permits a "compaction"
+    /// key but never asserts its ABSENCE, and its fixture is two Claude Code sessions that both
+    /// legitimately carry a value -- so deleting SessionTrendPoint.compaction's
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` (which would emit `"compaction":
+    /// null` in exactly the two shapes CRIT-LUMEN-186 forbids) left the full suite green. This
+    /// test seeds a mixed claude-code + codex store and directly asserts key absence, not just
+    /// value shape, in both forbidden cases: (a) --compaction unset, for every row; (b)
+    /// --compaction set, for a non-Claude-Code row specifically.
+    #[test]
+    fn cmd_trends_json_mode_omits_compaction_key_never_emits_it_as_null() {
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "cc-session".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+        repo.upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-session".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        drop(conn);
+        drop(store);
+
+        // (a) --compaction unset: no session, of any provider, may carry a "compaction" key.
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, false, true, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+        let value: serde_json::Value = serde_json::from_str(&output).expect("output must be valid JSON");
+        for session in value["sessions"].as_array().expect("sessions must be an array") {
+            assert!(
+                !session.as_object().unwrap().contains_key("compaction"),
+                "compaction key must be absent when --compaction is not set, got:\n{output}"
+            );
+        }
+
+        // (b) --compaction set, no --provider filter: the codex row must omit the key entirely
+        // (never `"compaction": null`) even though the claude-code row legitimately carries one.
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, true, true, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+        let value: serde_json::Value = serde_json::from_str(&output).expect("output must be valid JSON");
+        let sessions = value["sessions"].as_array().expect("sessions must be an array");
+        let cc = sessions.iter().find(|s| s["session_id"] == "cc-session").expect("cc-session must be present");
+        assert!(cc.as_object().unwrap().contains_key("compaction"), "claude-code row must carry compaction");
+        let cx = sessions.iter().find(|s| s["session_id"] == "cx-session").expect("cx-session must be present");
+        assert!(
+            !cx.as_object().unwrap().contains_key("compaction"),
+            "non-Claude-Code row must omit the compaction key entirely, never emit it as null, got:\n{output}"
+        );
+    }
+
     #[test]
     fn cmd_trends_json_mode_preserves_f32_cache_hit_ratio_precision() {
         // CRIT-LUMEN-186: routing SessionTrendPoint through serde_json::json!/Value widens its

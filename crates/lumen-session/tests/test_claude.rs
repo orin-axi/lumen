@@ -524,3 +524,43 @@ fn test_claude_code_adapter_skips_compact_boundary_with_unrecognized_trigger_val
         transcript.parse_failures[0].error
     );
 }
+
+/// Exit-gate blocker (2026-08-24): `.as_u64()` on a numeric compactMetadata field already
+/// rejects out-of-range values via `serde_json`'s own type check, but nothing asserted that
+/// behavior -- a mutation to `.as_i64().map(|v| v as u64)` (which wraps a negative value into
+/// a huge u64 instead of rejecting it) left the full suite green. This covers both a negative
+/// integer and a non-integer (float) numeric field, each skipped with a recorded parse failure
+/// and correct sequence-number continuity across the surrounding valid events.
+#[test]
+fn test_claude_code_adapter_skips_compact_boundary_with_negative_or_non_integer_fields() {
+    let sample = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000,"postTokens":20000,"cumulativeDroppedTokens":80000,"durationMs":1500}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":-5,"postTokens":20000,"cumulativeDroppedTokens":80000,"durationMs":1500}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":1.5,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("parse failed");
+
+    assert_eq!(
+        transcript.compaction_events.len(),
+        2,
+        "the negative-preTokens and non-integer-preTokens lines must both be skipped"
+    );
+    assert_eq!(transcript.compaction_events[0].sequence, 0);
+    assert_eq!(transcript.compaction_events[1].sequence, 3);
+
+    assert_eq!(transcript.parse_failures.len(), 2);
+    assert_eq!(transcript.parse_failures[0].line_number, 2);
+    assert!(
+        transcript.parse_failures[0].error.contains("preTokens"),
+        "expected a parse failure naming preTokens for the negative value, got: {}",
+        transcript.parse_failures[0].error
+    );
+    assert_eq!(transcript.parse_failures[1].line_number, 3);
+    assert!(
+        transcript.parse_failures[1].error.contains("preTokens"),
+        "expected a parse failure naming preTokens for the non-integer value, got: {}",
+        transcript.parse_failures[1].error
+    );
+}

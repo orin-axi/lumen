@@ -1802,6 +1802,50 @@ fn test_list_session_trend_tiebreak_cuts_inside_a_tie_group() {
     );
 }
 
+/// Exit-gate blocker (2026-08-24): every existing `list_session_trend` test that passes a
+/// `provider` filter seeds a store containing ONLY that provider, so the `WHERE (?1 IS NULL OR
+/// provider = ?1)` predicate has nothing to exclude -- neutering it entirely (always-true) left
+/// the full suite green. This seeds a mixed claude-code + codex store and asserts the filter
+/// actually excludes the non-matching provider.
+#[test]
+fn test_list_session_trend_provider_filter_excludes_other_providers() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_provider_filter_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "cc-1".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-1".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-2".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    let points = trend_repo
+        .list_session_trend(&TrendFilter { provider: Some("codex".to_string()), limit: 50, require_compaction: false })
+        .unwrap();
+    let ids: Vec<&str> = points.iter().map(|p| p.session_id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "expected only the 2 codex sessions, got: {ids:?}");
+    assert!(ids.contains(&"cx-1"));
+    assert!(ids.contains(&"cx-2"));
+    assert!(!ids.contains(&"cc-1"), "the claude-code session must be excluded by the provider filter, got: {ids:?}");
+}
+
 #[test]
 fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() {
     let dir = tempfile::tempdir().unwrap();
