@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use compact_str::CompactString;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 
 use crate::pricing::{PricingTable, TokenRateKind};
@@ -31,6 +32,26 @@ impl Cost {
             Cost::Priced(v) => format!("${v:.4}"),
             Cost::Unpriced => unpriced_label.to_string(),
         }
+    }
+}
+
+impl Serialize for Cost {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Cost", 2)?;
+        match self {
+            Cost::Priced(v) => {
+                state.serialize_field("usd", v)?;
+                state.serialize_field("priced", &true)?;
+            }
+            Cost::Unpriced => {
+                state.serialize_field("usd", &Option::<f64>::None)?;
+                state.serialize_field("priced", &false)?;
+            }
+        }
+        state.end()
     }
 }
 
