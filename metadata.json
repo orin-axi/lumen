@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.3-nightly.202608220610.6bf587d66",
+  "checkpoint_id": "01M0S332W5YK9W4BZ0MAREVYJK",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/lumen-session/src/adapters/claude.rs",
+    "crates/lumen-session/tests/test_claude.rs",
+    "specs/SPEC-LUMEN-002-SESSION.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 24722,
+    "cache_read_tokens": 13062237,
+    "output_tokens": 15528,
+    "api_call_count": 23
+  }
+}
