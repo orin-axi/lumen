@@ -1689,3 +1689,32 @@ fn test_count_sessions_is_store_wide_and_ignores_limit() {
     assert_eq!(trend_repo.count_sessions("codex").unwrap(), 1);
     assert_eq!(trend_repo.count_sessions("antigravity").unwrap(), 0);
 }
+
+#[test]
+fn test_list_session_trend_orders_oldest_to_newest_and_applies_limit_tiebreak() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("t.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    for (i, (id, offset_secs)) in [("s-a", 0), ("s-b", 10), ("s-c", 10), ("s-d", 20)].into_iter().enumerate() {
+        session_repo
+            .upsert_session(&SessionFactRecord {
+                provider: "claude-code".to_string(),
+                provider_session_id: id.to_string(),
+                started_at: base + chrono::Duration::seconds(offset_secs),
+                turn_count: i + 1,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let trend_repo = TrendRepository::new(&conn);
+    let points = trend_repo
+        .list_session_trend(&TrendFilter { provider: Some("claude-code".to_string()), limit: 3, require_compaction: false })
+        .unwrap();
+    assert_eq!(points.len(), 3);
+    let ids: Vec<&str> = points.iter().map(|p| p.session_id.as_str()).collect();
+    assert_eq!(ids, vec!["s-b", "s-c", "s-d"]);
+    assert!(points.windows(2).all(|w| w[0].started_at <= w[1].started_at));
+}

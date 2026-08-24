@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use compact_str::CompactString;
-use lumen_model::{OrchestratorKind, TokenEconomics};
+use lumen_model::{Cost, OrchestratorKind, TokenEconomics};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -169,6 +169,34 @@ pub struct CompactionFactRecord {
     pub post_tokens: u64,
     pub cumulative_dropped_tokens: u64,
     pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrendFilter {
+    pub provider: Option<String>,
+    pub limit: usize,
+    pub require_compaction: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionTrendPoint {
+    pub provider: String,
+    pub session_id: String,
+    pub started_at: DateTime<Utc>,
+    pub cost: Cost,
+    pub cache_hit_ratio: f32,
+    pub turn_count: usize,
+    pub has_anomalies: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionSummary {
+    pub event_count: usize,
+    pub tokens_dropped_total: u64,
+    pub auto_count: usize,
+    pub manual_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
