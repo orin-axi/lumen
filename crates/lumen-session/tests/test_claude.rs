@@ -468,3 +468,59 @@ fn test_claude_code_adapter_skips_malformed_compact_boundary_and_records_parse_f
     assert_eq!(transcript.parse_failures[0].line_number, 2);
     assert!(transcript.parse_failures[0].error.contains("cumulativeDroppedTokens"));
 }
+
+/// CRIT-LUMEN-192: compactMetadata missing ENTIRELY is a distinct malformation from a single
+/// missing field within it (the case above) -- both must be skipped, recorded as a parse
+/// failure, and must not stop parsing of subsequent lines.
+#[test]
+fn test_claude_code_adapter_skips_compact_boundary_missing_compact_metadata_entirely() {
+    let sample = r#"{"type":"system","subtype":"compact_boundary"}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("parse failed");
+
+    assert_eq!(
+        transcript.compaction_events.len(),
+        1,
+        "the malformed line must be skipped, not persisted as a CompactionEvent"
+    );
+    assert_eq!(transcript.compaction_events[0].sequence, 1);
+    assert_eq!(transcript.compaction_events[0].trigger, CompactionTrigger::Manual);
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].line_number, 1);
+    assert!(
+        transcript.parse_failures[0].error.contains("compactMetadata"),
+        "expected a parse failure naming the missing compactMetadata, got: {}",
+        transcript.parse_failures[0].error
+    );
+}
+
+/// CRIT-LUMEN-192: a `trigger` value other than "auto"/"manual" is invalid, not silently
+/// coerced -- must be skipped and recorded as a parse failure, and must not stop parsing of
+/// subsequent lines.
+#[test]
+fn test_claude_code_adapter_skips_compact_boundary_with_unrecognized_trigger_value() {
+    let sample = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"unknown_trigger","preTokens":100000,"postTokens":20000,"cumulativeDroppedTokens":80000,"durationMs":1500}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("parse failed");
+
+    assert_eq!(
+        transcript.compaction_events.len(),
+        1,
+        "the line with an unrecognized trigger value must be skipped, not persisted as a CompactionEvent"
+    );
+    assert_eq!(transcript.compaction_events[0].sequence, 1);
+    assert_eq!(transcript.compaction_events[0].trigger, CompactionTrigger::Manual);
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].line_number, 1);
+    assert!(
+        transcript.parse_failures[0].error.contains("trigger"),
+        "expected a parse failure naming the invalid trigger, got: {}",
+        transcript.parse_failures[0].error
+    );
+}
