@@ -450,3 +450,21 @@ fn test_claude_code_adapter_parses_compact_boundary_events_with_encounter_sequen
     assert_eq!(transcript.compaction_events[1].sequence, 1);
     assert_eq!(transcript.compaction_events[1].trigger, CompactionTrigger::Manual);
 }
+
+#[test]
+fn test_claude_code_adapter_skips_malformed_compact_boundary_and_records_parse_failure() {
+    let sample = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000,"postTokens":20000,"cumulativeDroppedTokens":80000,"durationMs":1500}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":90000,"postTokens":30000,"durationMs":800}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":10000,"cumulativeDroppedTokens":120000,"durationMs":900}}
+"#;
+
+    let adapter = ClaudeCodeAdapter;
+    let transcript = adapter.parse_stream(Box::new(Cursor::new(sample))).expect("parse failed");
+
+    assert_eq!(transcript.compaction_events.len(), 2);
+    assert_eq!(transcript.compaction_events[0].sequence, 0);
+    assert_eq!(transcript.compaction_events[1].sequence, 2);
+    assert_eq!(transcript.parse_failures.len(), 1);
+    assert_eq!(transcript.parse_failures[0].line_number, 2);
+    assert!(transcript.parse_failures[0].error.contains("cumulativeDroppedTokens"));
+}

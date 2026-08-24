@@ -383,22 +383,43 @@ impl ClaudeCodeAdapter {
                 if subtype == "compact_boundary" {
                     let seq = compaction_sequence;
                     compaction_sequence += 1;
-                    if let Some(meta) = val.get("compactMetadata").and_then(|m| m.as_object()) {
-                        if let (Some(trigger_str), Some(pre), Some(post), Some(dropped), Some(dur)) = (
-                            meta.get("trigger").and_then(|v| v.as_str()),
-                            meta.get("preTokens").and_then(|v| v.as_u64()),
-                            meta.get("postTokens").and_then(|v| v.as_u64()),
-                            meta.get("cumulativeDroppedTokens").and_then(|v| v.as_u64()),
-                            meta.get("durationMs").and_then(|v| v.as_u64()),
-                        ) {
-                            let trigger = if trigger_str == "auto" {
-                                Some(CompactionTrigger::Auto)
-                            } else if trigger_str == "manual" {
-                                Some(CompactionTrigger::Manual)
-                            } else {
-                                None
+                    match val.get("compactMetadata").and_then(|m| m.as_object()) {
+                        None => {
+                            parse_failures.push(ParseFailureRecord {
+                                session_id: session_id.clone(),
+                                line_number,
+                                byte_offset: line_start_offset,
+                                error: CompactString::new(format!(
+                                    "compact_boundary event (sequence {seq}): missing compactMetadata"
+                                )),
+                            });
+                        }
+                        Some(meta) => {
+                            let trigger_str = meta.get("trigger").and_then(|v| v.as_str());
+                            let pre = meta.get("preTokens").and_then(|v| v.as_u64());
+                            let post = meta.get("postTokens").and_then(|v| v.as_u64());
+                            let dropped = meta.get("cumulativeDroppedTokens").and_then(|v| v.as_u64());
+                            let dur = meta.get("durationMs").and_then(|v| v.as_u64());
+                            let trigger = match trigger_str {
+                                Some("auto") => Some(CompactionTrigger::Auto),
+                                Some("manual") => Some(CompactionTrigger::Manual),
+                                _ => None,
                             };
-                            if let Some(trigger) = trigger {
+                            let missing: Vec<&str> = [
+                                ("trigger", trigger.is_some()),
+                                ("preTokens", pre.is_some()),
+                                ("postTokens", post.is_some()),
+                                ("cumulativeDroppedTokens", dropped.is_some()),
+                                ("durationMs", dur.is_some()),
+                            ]
+                            .into_iter()
+                            .filter(|(_, ok)| !ok)
+                            .map(|(name, _)| name)
+                            .collect();
+
+                            if let (Some(trigger), Some(pre), Some(post), Some(dropped), Some(dur)) =
+                                (trigger, pre, post, dropped, dur)
+                            {
                                 compaction_events.push(CompactionEvent {
                                     sequence: seq,
                                     trigger,
@@ -406,6 +427,16 @@ impl ClaudeCodeAdapter {
                                     post_tokens: post,
                                     cumulative_dropped_tokens: dropped,
                                     duration_ms: dur,
+                                });
+                            } else {
+                                parse_failures.push(ParseFailureRecord {
+                                    session_id: session_id.clone(),
+                                    line_number,
+                                    byte_offset: line_start_offset,
+                                    error: CompactString::new(format!(
+                                        "compact_boundary event (sequence {seq}): invalid or missing field(s): {}",
+                                        missing.join(", ")
+                                    )),
                                 });
                             }
                         }
