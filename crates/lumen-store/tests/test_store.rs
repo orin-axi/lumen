@@ -1880,3 +1880,40 @@ fn test_list_session_trend_has_anomalies_flag() {
     assert!(points.iter().find(|p| p.session_id == "anomalous").unwrap().has_anomalies);
     assert!(!points.iter().find(|p| p.session_id == "clean").unwrap().has_anomalies);
 }
+
+/// CRIT-LUMEN-183/186: `list_session_trend` must itself round `cache_hit_ratio` to one decimal
+/// place -- a raw unrounded f32 percentage carries binary-precision garbage past the seventh
+/// decimal digit (e.g. 66.666_f32 stored/read back is not exactly 66.7). This asserts the
+/// repository's own rounding step, distinct from any rendering-layer `format!()` call in the CLI
+/// that would mask a regression here.
+#[test]
+fn test_list_session_trend_rounds_cache_hit_ratio_to_one_decimal() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_rounding_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "s1".to_string(),
+            economics: TokenEconomics { cache_hit_ratio: 66.666, ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    session_repo
+        .upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "s2".to_string(),
+            economics: TokenEconomics { cache_hit_ratio: 12.25, ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    let trend_repo = TrendRepository::new(&conn);
+    let points =
+        trend_repo.list_session_trend(&TrendFilter { provider: None, limit: 50, require_compaction: false }).unwrap();
+    let s1 = points.iter().find(|p| p.session_id == "s1").unwrap();
+    let s2 = points.iter().find(|p| p.session_id == "s2").unwrap();
+    assert_eq!(s1.cache_hit_ratio, 66.7, "66.666 must round to exactly 66.7");
+    assert_eq!(s2.cache_hit_ratio, 12.2, "12.25 must round-half-to-even to exactly 12.2");
+}
