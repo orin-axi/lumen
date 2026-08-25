@@ -645,6 +645,7 @@ fn cmd_trends(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_store::CompactionFactRecord;
     use std::io::Write;
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
@@ -782,6 +783,40 @@ mod tests {
         );
     }
 
+    /// Exit-gate blocker (2026-08-24, round 4): CRIT-LUMEN-187's own concrete example --
+    /// `lumen trends --limit 1` against 10 matching sessions SHALL also error -- was untested.
+    /// The only prior below-minimum test seeds exactly 1 session with limit 50, which cannot
+    /// distinguish "minimum evaluated after --limit caps the set" (correct, per CRIT-LUMEN-190's
+    /// required ordering) from "minimum evaluated before the cap" (a regression that would let
+    /// `--limit 1` against a large matching set render a degenerate 1-row table instead of
+    /// erroring).
+    #[test]
+    fn cmd_trends_limit_cutting_a_larger_matching_set_below_2_still_errors() {
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+        for i in 0..3 {
+            repo.upsert_session(&SessionFactRecord {
+                provider: "claude-code".to_string(),
+                provider_session_id: format!("s{i}"),
+                ..Default::default()
+            })
+            .expect("upsert_session must succeed");
+        }
+        drop(conn);
+        drop(store);
+
+        let err = cmd_trends(&db_path, None, 1, false, false, &mut Vec::new())
+            .expect_err("expected an error when --limit 1 cuts 3 matching sessions down to 1");
+        assert!(
+            err.to_string().contains("at least 2 sessions"),
+            "expected error to mention 'at least 2 sessions', got: {err}"
+        );
+    }
+
     #[test]
     fn cmd_trends_compaction_with_incompatible_provider_errors_naming_it() {
         // CRIT-LUMEN-189: --compaction with --provider set to something other than
@@ -899,6 +934,88 @@ mod tests {
         assert!(
             err.to_string().contains("Claude Code session"),
             "expected error to mention 'Claude Code session', got: {err}"
+        );
+    }
+
+    /// Exit-gate blocker (2026-08-24, round 4): CRIT-LUMEN-184's table-mode compaction
+    /// rendering -- including the normative "n/a" marker for a non-Claude-Code row -- had zero
+    /// test coverage; every existing --compaction=true test either errors before rendering or
+    /// runs in JSON mode. This seeds a claude-code session with real compaction events and a
+    /// codex session with none, renders in table mode, and asserts both the real figures and
+    /// the literal "n/a" marker (not merely that the codex row is non-zero).
+    #[test]
+    fn cmd_trends_table_mode_renders_compaction_figures_and_na_marker() {
+        let db_dir = tempfile::tempdir().expect("create temp db dir");
+        let db_path = Utf8PathBuf::from_path_buf(db_dir.path().join("lumen_test.db")).unwrap();
+
+        let store = SqliteStore::open(&db_path).expect("open store");
+        let conn = store.connection().unwrap();
+        let repo = SessionRepository::new(&conn);
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "claude-code".to_string(),
+            provider_session_id: "cc-with-events".to_string(),
+            compaction_events: vec![
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 0,
+                    trigger: "auto".to_string(),
+                    pre_tokens: 100_000,
+                    post_tokens: 20_000,
+                    cumulative_dropped_tokens: 80_000,
+                    duration_ms: 1500,
+                },
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 1,
+                    trigger: "manual".to_string(),
+                    pre_tokens: 50_000,
+                    post_tokens: 10_000,
+                    cumulative_dropped_tokens: 120_000,
+                    duration_ms: 900,
+                },
+            ],
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        repo.upsert_session(&SessionFactRecord {
+            provider: "codex".to_string(),
+            provider_session_id: "cx-no-events".to_string(),
+            ..Default::default()
+        })
+        .expect("upsert_session must succeed");
+
+        drop(conn);
+        drop(store);
+
+        let mut buf = Vec::new();
+        cmd_trends(&db_path, None, 50, true, false, &mut buf).expect("cmd_trends must succeed with 2 sessions");
+        let output = String::from_utf8(buf).expect("output must be valid utf8");
+
+        for header in ["Compaction Count", "Tokens Dropped", "Auto/Manual"] {
+            assert!(output.contains(header), "expected header {header:?} in output, got:\n{output}");
+        }
+
+        let lines: Vec<&str> = output.lines().collect();
+        let cc_line = lines
+            .iter()
+            .find(|l| l.contains("cc-with-events"))
+            .unwrap_or_else(|| panic!("expected a row for cc-with-events, got:\n{output}"));
+        assert!(cc_line.contains('2'), "claude-code row must show event_count 2, got: {cc_line}");
+        assert!(cc_line.contains("120000"), "claude-code row must show tokens_dropped_total 120000, got: {cc_line}");
+        assert!(cc_line.contains("1/1"), "claude-code row must show auto/manual counts 1/1, got: {cc_line}");
+
+        let cx_line = lines
+            .iter()
+            .find(|l| l.contains("cx-no-events"))
+            .unwrap_or_else(|| panic!("expected a row for cx-no-events, got:\n{output}"));
+        let cx_cells: Vec<&str> = cx_line.split(['│', '┆']).map(str::trim).filter(|c| !c.is_empty()).collect();
+        let compaction_cells = &cx_cells[cx_cells.len() - 3..];
+        assert_eq!(
+            compaction_cells,
+            &["n/a", "n/a", "n/a"],
+            "non-Claude-Code row's three compaction columns must each render the literal 'n/a' marker, never a zero-valued figure, got: {cx_line}"
         );
     }
 

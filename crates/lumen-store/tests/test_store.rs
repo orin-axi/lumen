@@ -1857,16 +1857,11 @@ fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() 
         .upsert_session(&SessionFactRecord {
             provider: "claude-code".to_string(),
             provider_session_id: "cc-with-events".to_string(),
+            // Exit-gate blocker (2026-08-24, round 4): inserted out of sequence order on
+            // purpose -- sequence 2 (cumulative 160) precedes sequence 0 (cumulative 80) here --
+            // so this test only passes if compaction_summary_for_session's `ORDER BY sequence
+            // ASC` is doing real work, not just happening to match row-insertion (rowid) order.
             compaction_events: vec![
-                CompactionFactRecord {
-                    session_id: 0,
-                    sequence: 0,
-                    trigger: "auto".to_string(),
-                    pre_tokens: 100,
-                    post_tokens: 20,
-                    cumulative_dropped_tokens: 80,
-                    duration_ms: 5,
-                },
                 CompactionFactRecord {
                     session_id: 0,
                     sequence: 2,
@@ -1875,6 +1870,15 @@ fn test_list_session_trend_compaction_summary_last_by_sequence_and_zero_vs_na() 
                     post_tokens: 10,
                     cumulative_dropped_tokens: 160,
                     duration_ms: 9,
+                },
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 0,
+                    trigger: "auto".to_string(),
+                    pre_tokens: 100,
+                    post_tokens: 20,
+                    cumulative_dropped_tokens: 80,
+                    duration_ms: 5,
                 },
             ],
             ..Default::default()
