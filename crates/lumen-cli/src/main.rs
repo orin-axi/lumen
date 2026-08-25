@@ -1287,11 +1287,19 @@ mod tests {
         // than exposing them individually. A middle malformed event (per CRIT-LUMEN-192) proves
         // the sequence gap survives the CLI hop, and distinct, non-transposable pre/post/duration
         // values on the two real events prove they round-trip un-swapped.
+        // Exit-gate blocker (2026-08-25, round 7): the CompactionTrigger -> trigger-string
+        // mapping in build_compaction_fact_records was uncovered -- a total Auto/Manual
+        // inversion left the full suite green, since the prior fixture was a symmetric 1
+        // auto/1 manual pair and its only trigger-related assertions were the aggregate
+        // auto_count/manual_count, both invariant under a swap. Now 2 auto + 1 manual (an
+        // asymmetric split) with explicit per-event trigger assertions read back through
+        // list_for_session.
         let sample = concat!(
             "{\"type\":\"user\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":null,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
             "{\"type\":\"assistant\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":\"turn-0\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10}}}\n",
             "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":100000,\"postTokens\":20000,\"cumulativeDroppedTokens\":80000,\"durationMs\":1500}}\n",
             "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":90000,\"postTokens\":30000,\"durationMs\":800}}\n",
+            "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":85000,\"postTokens\":15000,\"cumulativeDroppedTokens\":95000,\"durationMs\":700}}\n",
             "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"manual\",\"preTokens\":55000,\"postTokens\":11000,\"cumulativeDroppedTokens\":120000,\"durationMs\":900}}\n",
         );
         let file = write_temp_file(sample);
@@ -1310,11 +1318,11 @@ mod tests {
         assert_eq!(points.len(), 1);
         let compaction = points[0].compaction.as_ref().expect("session must have a compaction summary");
         assert_eq!(
-            compaction.event_count, 2,
-            "the malformed middle event must be skipped; only the 2 well-formed events persisted"
+            compaction.event_count, 3,
+            "the malformed second event must be skipped; only the 3 well-formed events persisted"
         );
         assert_eq!(compaction.tokens_dropped_total, 120000, "must be the LAST event's cumulative total, not summed");
-        assert_eq!(compaction.auto_count, 1);
+        assert_eq!(compaction.auto_count, 2);
         assert_eq!(compaction.manual_count, 1);
 
         let internal_id: i64 = conn
@@ -1322,17 +1330,23 @@ mod tests {
             .expect("session row must exist");
         let events =
             lumen_store::CompactionRepository::new(&conn).list_for_session(internal_id).expect("query must succeed");
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert_eq!(
             events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
-            vec![0, 2],
-            "sequence 1 (the malformed event) must be skipped, leaving a gap -- never collapsed to 0/1"
+            vec![0, 2, 3],
+            "sequence 1 (the malformed event) must be skipped, leaving a gap -- never collapsed to 0/1/2"
         );
+        assert_eq!(events[0].trigger, "auto", "first event's trigger must round-trip un-inverted");
         assert_eq!(events[0].pre_tokens, 100_000, "first event's pre_tokens must round-trip un-swapped");
         assert_eq!(events[0].post_tokens, 20_000, "first event's post_tokens must round-trip un-swapped");
         assert_eq!(events[0].duration_ms, 1500);
-        assert_eq!(events[1].pre_tokens, 55_000, "second event's pre_tokens must round-trip un-swapped");
-        assert_eq!(events[1].post_tokens, 11_000, "second event's post_tokens must round-trip un-swapped");
-        assert_eq!(events[1].duration_ms, 900);
+        assert_eq!(events[1].trigger, "auto", "second event's trigger must round-trip un-inverted");
+        assert_eq!(events[1].pre_tokens, 85_000, "second event's pre_tokens must round-trip un-swapped");
+        assert_eq!(events[1].post_tokens, 15_000, "second event's post_tokens must round-trip un-swapped");
+        assert_eq!(events[1].duration_ms, 700);
+        assert_eq!(events[2].trigger, "manual", "third event's trigger must round-trip un-inverted");
+        assert_eq!(events[2].pre_tokens, 55_000, "third event's pre_tokens must round-trip un-swapped");
+        assert_eq!(events[2].post_tokens, 11_000, "third event's post_tokens must round-trip un-swapped");
+        assert_eq!(events[2].duration_ms, 900);
     }
 }
