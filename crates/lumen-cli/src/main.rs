@@ -906,6 +906,24 @@ mod tests {
             output.contains("50.0%"),
             "anomaly rate summary (1 of 2 sessions has anomalies) must render as 50.0%, got:\n{output}"
         );
+
+        // Exit-gate blocker B4 (2026-08-25, round 6): CRIT-LUMEN-183 names turn_count as one of
+        // the table's per-session figures, but nothing asserted its rendered value -- a mutation
+        // hardcoding the Turns cell to "0" left the full suite green. Columns here are Provider,
+        // Session ID, Started At, Cost USD, Cache Hit %, Turns, Anomalies -- Turns is index 5.
+        let lines: Vec<&str> = output.lines().collect();
+        // "priced-session" is itself a substring of "unpriced-session", so match on the exact
+        // Session ID cell, not a raw substring of the whole row.
+        let turns_cell = |session_id: &str| {
+            let line = lines
+                .iter()
+                .find(|l| l.split(['│', '┆']).map(str::trim).any(|c| c == session_id))
+                .unwrap_or_else(|| panic!("expected a row with Session ID {session_id:?}, got:\n{output}"));
+            let cells: Vec<&str> = line.split(['│', '┆']).map(str::trim).filter(|c| !c.is_empty()).collect();
+            cells[5].to_string()
+        };
+        assert_eq!(turns_cell("unpriced-session"), "3", "unpriced-session's Turns cell must render turn_count 3");
+        assert_eq!(turns_cell("priced-session"), "5", "priced-session's Turns cell must render turn_count 5");
     }
 
     #[test]
@@ -1261,10 +1279,20 @@ mod tests {
         // adapter-parse -> build_compaction_fact_records -> CompactionRepository::insert path had
         // zero end-to-end coverage through the real cmd_ingest entry point (as opposed to the
         // adapter-level or repository-level unit tests, which each exercise only one hop).
+        //
+        // Exit-gate blockers B1/B2 (2026-08-25, round 6): the CLI's build_compaction_fact_records
+        // maps CompactionEvent -> CompactionFactRecord (main.rs), and neither `sequence` nor a
+        // pre_tokens/post_tokens swap in that mapping was caught by anything -- the only
+        // assertions here read the trend-level summary, which aggregates over those fields rather
+        // than exposing them individually. A middle malformed event (per CRIT-LUMEN-192) proves
+        // the sequence gap survives the CLI hop, and distinct, non-transposable pre/post/duration
+        // values on the two real events prove they round-trip un-swapped.
         let sample = concat!(
             "{\"type\":\"user\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":null,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
             "{\"type\":\"assistant\",\"sessionId\":\"e2e-compact-1\",\"parentUuid\":\"turn-0\",\"message\":{\"model\":\"claude-3-5-sonnet-20241022\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10}}}\n",
             "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":100000,\"postTokens\":20000,\"cumulativeDroppedTokens\":80000,\"durationMs\":1500}}\n",
+            "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":90000,\"postTokens\":30000,\"durationMs\":800}}\n",
+            "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"trigger\":\"manual\",\"preTokens\":55000,\"postTokens\":11000,\"cumulativeDroppedTokens\":120000,\"durationMs\":900}}\n",
         );
         let file = write_temp_file(sample);
 
@@ -1281,9 +1309,30 @@ mod tests {
             .unwrap();
         assert_eq!(points.len(), 1);
         let compaction = points[0].compaction.as_ref().expect("session must have a compaction summary");
-        assert_eq!(compaction.event_count, 1, "the real compact_boundary event must have been persisted");
-        assert_eq!(compaction.tokens_dropped_total, 80000);
+        assert_eq!(
+            compaction.event_count, 2,
+            "the malformed middle event must be skipped; only the 2 well-formed events persisted"
+        );
+        assert_eq!(compaction.tokens_dropped_total, 120000, "must be the LAST event's cumulative total, not summed");
         assert_eq!(compaction.auto_count, 1);
-        assert_eq!(compaction.manual_count, 0);
+        assert_eq!(compaction.manual_count, 1);
+
+        let internal_id: i64 = conn
+            .query_row("SELECT id FROM sessions WHERE provider_session_id = ?1", ["e2e-compact-1"], |r| r.get(0))
+            .expect("session row must exist");
+        let events =
+            lumen_store::CompactionRepository::new(&conn).list_for_session(internal_id).expect("query must succeed");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            vec![0, 2],
+            "sequence 1 (the malformed event) must be skipped, leaving a gap -- never collapsed to 0/1"
+        );
+        assert_eq!(events[0].pre_tokens, 100_000, "first event's pre_tokens must round-trip un-swapped");
+        assert_eq!(events[0].post_tokens, 20_000, "first event's post_tokens must round-trip un-swapped");
+        assert_eq!(events[0].duration_ms, 1500);
+        assert_eq!(events[1].pre_tokens, 55_000, "second event's pre_tokens must round-trip un-swapped");
+        assert_eq!(events[1].post_tokens, 11_000, "second event's post_tokens must round-trip un-swapped");
+        assert_eq!(events[1].duration_ms, 900);
     }
 }

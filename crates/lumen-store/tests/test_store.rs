@@ -1646,13 +1646,14 @@ fn test_compaction_repository_insert_round_trips_all_fields() {
     }];
     repo.insert_compaction_facts(1, &events).unwrap();
 
-    let (pre, post, dropped, dur): (i64, i64, i64, i64) = conn
+    let (seq, pre, post, dropped, dur): (u32, i64, i64, i64, i64) = conn
         .query_row(
-            "SELECT pre_tokens, post_tokens, cumulative_dropped_tokens, duration_ms FROM compaction_events WHERE session_id = 1",
+            "SELECT sequence, pre_tokens, post_tokens, cumulative_dropped_tokens, duration_ms FROM compaction_events WHERE session_id = 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .unwrap();
+    assert_eq!(seq, 7, "sequence must round-trip exactly as inserted, not collapse to a default");
     assert_eq!(pre, 123_456, "pre_tokens must round-trip, not be swapped with post_tokens");
     assert_eq!(post, 7_890, "post_tokens must round-trip, not be swapped with pre_tokens");
     assert_eq!(dropped, 654_321);
@@ -1844,6 +1845,55 @@ fn test_list_session_trend_provider_filter_excludes_other_providers() {
     assert!(ids.contains(&"cx-1"));
     assert!(ids.contains(&"cx-2"));
     assert!(!ids.contains(&"cc-1"), "the claude-code session must be excluded by the provider filter, got: {ids:?}");
+}
+
+/// Exit-gate blocker B3 (2026-08-25, round 6): CRIT-LUMEN-190 requires --provider applied
+/// BEFORE --limit caps the result to the N most recent matching sessions -- but every existing
+/// limit/tie-break test seeds a single-provider store (so the filter excludes nothing) and every
+/// existing provider-filter test uses a limit far above the matching count (so the cap never
+/// bites). Neither alone can distinguish filter-then-cap from cap-then-filter. Here the
+/// non-target provider (codex) holds the 3 MOST RECENT sessions store-wide, so a cap-then-filter
+/// implementation would apply LIMIT 3 to the globally-recent set (all codex), filter to
+/// claude-code, and return nothing -- while the correct filter-then-cap order returns both
+/// claude-code sessions.
+#[test]
+fn test_list_session_trend_filters_before_applying_the_limit_cap() {
+    let dir = tempdir().unwrap();
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("trend_filter_before_limit_test.db")).unwrap();
+    let store = SqliteStore::open(&db_path).unwrap();
+    let conn = store.connection().unwrap();
+    let session_repo = SessionRepository::new(&conn);
+    let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    for (id, provider, offset_secs) in [
+        ("cc-1", "claude-code", 10),
+        ("cc-2", "claude-code", 20),
+        ("cx-1", "codex", 30),
+        ("cx-2", "codex", 40),
+        ("cx-3", "codex", 50),
+    ] {
+        session_repo
+            .upsert_session(&SessionFactRecord {
+                provider: provider.to_string(),
+                provider_session_id: id.to_string(),
+                started_at: base + chrono::Duration::seconds(offset_secs),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let trend_repo = TrendRepository::new(&conn);
+    let points = trend_repo
+        .list_session_trend(&TrendFilter {
+            provider: Some("claude-code".to_string()),
+            limit: 3,
+            require_compaction: false,
+        })
+        .unwrap();
+    let ids: Vec<&str> = points.iter().map(|p| p.session_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["cc-1", "cc-2"],
+        "--provider claude-code --limit 3 must return both claude-code sessions even though codex holds the 3 globally most recent, got: {ids:?}"
+    );
 }
 
 #[test]
