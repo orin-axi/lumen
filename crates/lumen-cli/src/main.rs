@@ -955,6 +955,12 @@ mod tests {
         repo.upsert_session(&SessionFactRecord {
             provider: "claude-code".to_string(),
             provider_session_id: "cc-with-events".to_string(),
+            // Round-5 exit-gate blocker: an event_count of 2 with a symmetric 1/1 auto/manual
+            // split let the Compaction Count and Auto/Manual assertions below pass against
+            // several wrong implementations (e.g. swapped columns, wrong field) because the
+            // fixture couldn't distinguish them. 3 events split 2 auto/1 manual, with a
+            // cumulative_dropped_tokens value sharing no digits with "3" or "2/1", makes every
+            // compaction column assertion below load-bearing.
             compaction_events: vec![
                 CompactionFactRecord {
                     session_id: 0,
@@ -968,10 +974,19 @@ mod tests {
                 CompactionFactRecord {
                     session_id: 0,
                     sequence: 1,
+                    trigger: "auto".to_string(),
+                    pre_tokens: 90_000,
+                    post_tokens: 15_000,
+                    cumulative_dropped_tokens: 95_000,
+                    duration_ms: 800,
+                },
+                CompactionFactRecord {
+                    session_id: 0,
+                    sequence: 2,
                     trigger: "manual".to_string(),
                     pre_tokens: 50_000,
                     post_tokens: 10_000,
-                    cumulative_dropped_tokens: 120_000,
+                    cumulative_dropped_tokens: 98_500,
                     duration_ms: 900,
                 },
             ],
@@ -1002,9 +1017,13 @@ mod tests {
             .iter()
             .find(|l| l.contains("cc-with-events"))
             .unwrap_or_else(|| panic!("expected a row for cc-with-events, got:\n{output}"));
-        assert!(cc_line.contains('2'), "claude-code row must show event_count 2, got: {cc_line}");
-        assert!(cc_line.contains("120000"), "claude-code row must show tokens_dropped_total 120000, got: {cc_line}");
-        assert!(cc_line.contains("1/1"), "claude-code row must show auto/manual counts 1/1, got: {cc_line}");
+        let cc_cells: Vec<&str> = cc_line.split(['│', '┆']).map(str::trim).filter(|c| !c.is_empty()).collect();
+        let cc_compaction_cells = &cc_cells[cc_cells.len() - 3..];
+        assert_eq!(
+            cc_compaction_cells,
+            &["3", "98500", "2/1"],
+            "claude-code row's three compaction columns must show event_count 3, tokens_dropped_total 98500, and auto/manual 2/1, got: {cc_line}"
+        );
 
         let cx_line = lines
             .iter()
