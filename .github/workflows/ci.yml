@@ -22,13 +22,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain & cache (matches rust-toolchain.toml's stable pin)
+        uses: orin-dx/actions/setup-rust@v1.1
         with:
-          components: clippy, rustfmt
-
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+          components: clippy,rustfmt
 
       - name: Setup moon toolchain
         uses: moonrepo/setup-toolchain@v0
