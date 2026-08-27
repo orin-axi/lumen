@@ -1,3 +1,4 @@
+rust = "1"
 moon = "2"
 
 [plugins]
