@@ -41,5 +41,15 @@ jobs:
         with:
           tool: cargo-deny
 
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Run CI pipeline
         run: just ci
