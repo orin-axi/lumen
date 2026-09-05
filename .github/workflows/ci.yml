@@ -10,23 +10,43 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          fetch-depth: 0
 
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust toolchain & cache (matches rust-toolchain.toml's stable pin)
+        uses: orin-dx/actions/setup-rust@v1.1
+        with:
+          components: clippy,rustfmt
 
-      - name: Setup moon toolchain (moon, just, cargo-deny via .prototools)
+      - name: Setup moon toolchain
         uses: moonrepo/setup-toolchain@v0
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
 
       - name: Run CI pipeline
         run: just ci
