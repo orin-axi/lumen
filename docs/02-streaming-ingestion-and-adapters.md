@@ -21,6 +21,12 @@ pub trait SessionAdapter: Send + Sync {
 3. **`CodexAdapter`**: Parses OpenAI assistant thread runs and CLI streams.
 4. **`OpenCodeAdapter`**: Parses OpenHands event streams.
 
+### Non-Transcript Ingestion
+
+| Source | Shape | Defined in |
+| :--- | :--- | :--- |
+| **Wisp / Monokl telemetry** | Sanitized `tracing` events annotating a session another adapter produced, correlated by session id — not a transcript, so not a `SessionAdapter` | [`11-wisp-and-monokl-telemetry.md`](./11-wisp-and-monokl-telemetry.md) |
+
 ---
 
 ## 2. PreCompact Snapshot Merging Algorithm
