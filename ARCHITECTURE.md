@@ -99,3 +99,16 @@ $$\eta = \frac{\text{Baseline Cost (No Cache)}}{\text{Actual Cost With Prompt Ca
 ## 4. Tarjan SCC Cycle Detection
 
 Tool transitions are represented as directed graph $G = (V, E)$. Tarjan's Strongly Connected Components algorithm identifies non-trivial components with cycle depth $\ge 3$ where all nodes share identical target symbols and zero state mutations, flagging anomalous circular exploration loops.
+
+---
+
+## 5. Upstream Producers and Downstream Consumers
+
+Orchestrator transcripts are Lumen's only implemented input today. Two further integrations are specified:
+
+| Direction | Counterpart | Relationship |
+| :--- | :--- | :--- |
+| **Upstream producer** | **Wisp** (context compiler) and **Monokl** (code intelligence) | Emit sanitized `tracing` events — cache hit/miss with the input digest that moved, briefing truncation records, `BudgetReport` and `OpOutcome` per Monokl batch, freshness classes per artifact link, git subprocess and rev-walk counts. Never raw file contents, artifact bodies, or secrets. Ingested by a dedicated adapter that depends on `wisp-contracts` (permissive, value types only), never on `wisp-model` or `monokl-core`, so the Layer 1.5 licensing boundary in `AGENTS.md` §1 holds. See [`docs/11-wisp-and-monokl-telemetry.md`](./docs/11-wisp-and-monokl-telemetry.md). |
+| **Downstream consumer** | **Prism** (evaluation engine) | Imports `lumen-model`, `lumen-session`, `lumen-analysis`, and `lumen-pattern` directly rather than reimplementing pricing, parsing, or cycle detection. Lumen supplies behavior and cost; Prism supplies the quality verdict. |
+
+The split is the boundary Lumen does not cross: Lumen observes what an agent did and what it cost, and never judges whether the context it was given was correct.

@@ -334,6 +334,26 @@ Measured with `cargo bench` (criterion) on Apple M3 Pro. Reproduce with `cargo b
 
 ---
 
+## Architecture Documents
+
+Docs 01-06 describe the implemented system. Docs 07-11 are marked Vision / Roadmap in their own headers and take second place wherever the two conflict.
+
+| Document | Covers | Status |
+| :--- | :--- | :--- |
+| [`docs/01-canonical-model-and-economics.md`](./docs/01-canonical-model-and-economics.md) | Canonical IR, memory layout, 4-tier token pricing | Implemented |
+| [`docs/02-streaming-ingestion-and-adapters.md`](./docs/02-streaming-ingestion-and-adapters.md) | `SessionAdapter`, orchestrator fingerprinting, PreCompact merge | Implemented |
+| [`docs/03-22-accumulators-and-analytics.md`](./docs/03-22-accumulators-and-analytics.md) | Accumulator lifecycle and the full inventory | Implemented |
+| [`docs/04-trajectory-dag-and-loop-detection.md`](./docs/04-trajectory-dag-and-loop-detection.md) | Petgraph DAG, Tarjan SCC, the 6 trajectory metrics | Implemented |
+| [`docs/05-lumen-cli-and-tui.md`](./docs/05-lumen-cli-and-tui.md) | Observability CLI surface (no TUI exists yet) | Implemented |
+| [`docs/06-sqlite-store-and-daemon-architecture.md`](./docs/06-sqlite-store-and-daemon-architecture.md) | SQLite WAL, single-writer daemon, hook latency budgets | Implemented |
+| [`docs/07-data-presentation-and-ui-design-standard.md`](./docs/07-data-presentation-and-ui-design-standard.md) | Data presentation and UI/CLI design standard | Roadmap |
+| [`docs/08-lumen-mac-swift-native-app-blueprint.md`](./docs/08-lumen-mac-swift-native-app-blueprint.md) | Native Swift and SwiftUI architecture for Lumen for Mac | Roadmap |
+| [`docs/09-enterprise-adoption-and-commercial-strategy.md`](./docs/09-enterprise-adoption-and-commercial-strategy.md) | Enterprise adoption, privacy, commercial licensing | Roadmap |
+| [`docs/10-the-six-generational-leaps.md`](./docs/10-the-six-generational-leaps.md) | The six generational leaps in session intelligence | Roadmap |
+| [`docs/11-wisp-and-monokl-telemetry.md`](./docs/11-wisp-and-monokl-telemetry.md) | Wisp and Monokl `tracing` events, what Lumen measures from them, and the Prism boundary | Roadmap |
+
+---
+
 ## Specifications
 
 Specifications and acceptance criteria are written in `spec@1` format:
